@@ -44,7 +44,7 @@ Garmin's official Health/Activity API is not available to individuals and the un
 - [x] `ING-4`: RED+GREEN: test-first FIT parsing with `fitdecode` on a sample FIT file fixture: per-second streams and swim lengths extracted and stored (§5.2).
 - [x] `ING-5`: RED+GREEN: test-first idempotent sync orchestration: re-running the same date range creates no duplicate activities/streams/wellness rows (§12.2 acceptance), Intervals-side load metrics (if stored) are flagged non-authoritative cross-check values only (§5.1).
 - [x] `ING-6`: Implement raw FIT storage (object storage or local volume per §5.2) behind a small storage interface so the engine can be re-run later; store the path on the `activity` row.
-- [ ] `ING-7`: Implement the backfill command for N days (§12.2) with logging of counts per endpoint and clear failure reporting on partial syncs.
+- [x] `ING-7`: Implement the backfill command for N days (§12.2) with logging of counts per endpoint and clear failure reporting on partial syncs.
 - [ ] `ING-8`: Add a Celery task entry point for the sync (used by the scheduler in Feature 10) and exercise it in the Compose worker locally.
 - [ ] `ING-9`: Document Intervals.icu endpoint verification results and rate-limit behavior in a short ADR or docs note under `docs/adr/` (§6 layout).
 
@@ -74,5 +74,8 @@ In progress (Feature 2/11) on branch `feat/intervals-ingestion`.
 - ING-6: raw FIT storage RED→GREEN (12 storage tests + 2 sync integration tests): RawFileStorage protocol, LocalVolumeStorage (flat `<activity_id>.fit`, atomic temp+replace, traversal rejection), NullStorage; `activity.raw_file_path` persisted; compose `fit-data` volume at `/data/fit` for api+worker with a Dockerfile pre-owned directory for the non-root user. Full suite 67 passed, mypy strict clean, compose config valid.
 
 Known follow-up: a re-sync whose FIT download fails resets `raw_file_path` to NULL (full-row upsert semantics); preserving the prior path needs a partial-update repository path (deferred).
+- ING-7: N-day backfill RED→GREEN (13 tests: window computation across month/year boundaries, one sync per window, count aggregation, per-window logging, continue-after-failure, CLI exit codes 0/1/2). Full suite 80 passed, mypy strict clean.
+
+Known design tradeoff: backfill uses per-day windows (~2 API calls/day, ~360 for the 180-day §12.2 run; ~36s of pacing at 10 req/s) to keep failure granularity and cheap idempotent retries. A chunked-window option is a possible future improvement.
 
 Commits: 9e3d114, 3b94069, 443527f, 12882b9, d362ae0, d362ae0, 20fd547
