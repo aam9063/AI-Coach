@@ -13,7 +13,15 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     """Environment-driven configuration for the tri-coach backend."""
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        # A key present but empty (`ATHLETE_WEIGHT_KG=`) means "not configured":
+        # it is ignored and the field keeps its default. Without this, copying
+        # .env.example to .env as the README instructs raises a validation
+        # error for the optional numeric fields (developer-visible regression).
+        env_ignore_empty=True,
+    )
 
     # --- Application -------------------------------------------------------
     app_name: str = "tri-coach"
