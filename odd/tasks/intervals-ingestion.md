@@ -79,6 +79,8 @@ Not verified (stated limitation, not a pass): the live 180-day backfill and live
 
 Complete (Feature 2/11) on branch `feat/intervals-ingestion`.
 
+**Integration note (recorded 2026-10-02):** the owner merged PR #1 (`feat/project-scaffold` → `dev`, commit `ceebba0`). A local `git pull --tags origin dev` then merged `dev` into the feature branch (`d8de2a7`), and because the feature branch had been created with `git checkout -b <branch> origin/dev`, its upstream was `origin/dev` — so the subsequent push delivered these commits to `dev` instead of creating a `feat/intervals-ingestion` remote branch. **This feature therefore landed in `dev` without its own pull request.** Nothing was lost (all commits are in `dev`; merged-state suite: 86 passed, 0 conflicts, secret fix intact) and the local branch upstream has been unset to prevent a repeat. Process fix: feature branches must never track `origin/dev`; push them explicitly with `git push -u origin <branch>:<branch>` and confirm with `git ls-remote --heads origin`.
+
 - ING-1/2: client RED→GREEN (13 tests), commit `9e3d114` — endpoints verified against the official cookbook (forum threads 80090/609); the original-file endpoint returns gzip and `fit-file` is the always-FIT alternative.
 - ING-3: models/migration/upserts RED→GREEN, commits `3b94069` (postgres loopback port for local tests), `443527f` — migration `daa3ba6946b9` verified upgrade/downgrade/upgrade; DB tests run against compose Postgres (skip if unreachable), never SQLite.
 - ING-4: FIT parsing RED→GREEN (20 tests; real MIT-licensed bike fixture, swim lengths via pure stub functions), commit `12882b9`.
