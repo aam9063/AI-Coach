@@ -38,6 +38,10 @@ class Settings(BaseSettings):
     intervals_max_retries: int = 3
     # Exponential backoff: sleep = factor * 2**attempt seconds.
     intervals_backoff_factor: float = 0.5
+    # Minimum interval between client calls during sync orchestration
+    # (ING-5 pacing: 0.1s => at most 10 requests/second, well inside the
+    # cookbook limits of 30/s burst and 132 per 10s). 0 disables pacing.
+    intervals_min_request_interval_s: float = 0.1
 
     # WhatsApp via Twilio (§5.1).
     twilio_account_sid: str = ""

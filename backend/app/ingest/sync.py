@@ -1,0 +1,316 @@
+"""Idempotent sync orchestration (ODD task ING-5, PROJECT_BRIEF §5.1/§12.2).
+
+``sync_date_range`` orchestrates the Intervals.icu client and the idempotent
+upsert repositories for one date range:
+
+- activities, streams and wellness land in PostgreSQL via
+  ``app.db.repository`` upserts keyed by the (source, source_id) /
+  (activity_id, stream_type) / (athlete_id, date) unique anchors, so
+  re-running the same sync creates no duplicates (§12.2 acceptance);
+- per-second FIT stream arrays are parsed with ``parse_fit_streams`` when
+  FIT bytes are available (preferred, highest-fidelity per-second data) and
+  fall back to the streams endpoint otherwise;
+- Intervals.icu's own load metric, when present in the activity payload, is
+  stored ONLY in the explicitly non-authoritative cross-check column
+  ``activity.intervals_icu_load`` (§5.1) — it is never engine truth;
+- a configurable minimum interval between client calls
+  (``Settings.intervals_min_request_interval_s``, default 0.1s => at most
+  10 requests/second) is enforced via an injected clock/sleep pair so the
+  pacing is testable without real delays.
+
+Failures are per-item: one failing activity (e.g. an HTTP 4xx on its
+streams/FIT download) is counted in the returned :class:`SyncResult` and
+does not abort the remaining items. Client failures surface as
+``streams_failed`` (per-activity item); DB-level failures as
+``activities_failed``/``wellness_failed``.
+
+The client is consumed through the duck-typed :class:`IntervalsClientProtocol`
+so tests can inject fakes; this module performs I/O and DB work only and
+never imports or calls anything from ``app.engine`` (§6).
+"""
+
+from __future__ import annotations
+
+import asyncio
+import time
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from typing import Any, Protocol, cast
+
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from app.core.settings import Settings, get_settings
+from app.db import repository
+from app.ingest.exceptions import IntervalsHTTPError
+from app.ingest.fit_parser import parse_fit_streams
+from app.ingest.models import Activity, Wellness
+
+Clock = Callable[[], float]
+Sleep = Callable[[float], Awaitable[None]]
+
+
+class IntervalsClientProtocol(Protocol):
+    """Duck-typed subset of ``IntervalsClient`` used by the orchestrator."""
+
+    def list_activities(self, oldest: str, newest: str) -> list[Activity]: ...
+
+    def get_streams(self, activity_id: int) -> list[Any]: ...
+
+    def get_wellness(self, oldest: str, newest: str) -> list[Wellness]: ...
+
+    def download_fit_file(self, activity_id: int) -> bytes: ...
+
+
+@dataclass
+class SyncResult:
+    """Per-endpoint/per-item counts for one sync run.
+
+    ``*_failed`` counts items whose fetch or persistence failed; the sync
+    itself raises nothing for per-item failures — callers inspect the counts
+    (partial-result summary; documented ING-5 choice).
+    """
+
+    activities_synced: int = 0
+    activities_failed: int = 0
+    streams_synced: int = 0
+    streams_skipped: int = 0
+    streams_failed: int = 0
+    wellness_synced: int = 0
+    wellness_failed: int = 0
+
+
+class Pacer:
+    """Enforce a minimum interval between successive client calls."""
+
+    def __init__(
+        self,
+        min_interval_s: float,
+        clock: Clock = time.monotonic,
+        sleep: Sleep = asyncio.sleep,
+    ) -> None:
+        self._min_interval_s = min_interval_s
+        self._clock = clock
+        self._sleep = sleep
+        self._last_call = clock()
+
+    async def before_call(self) -> None:
+        """Sleep out the remainder of the interval, then stamp this call."""
+        if self._min_interval_s <= 0:
+            return
+        elapsed = self._clock() - self._last_call
+        remaining = self._min_interval_s - elapsed
+        if remaining > 0:
+            await self._sleep(remaining)
+        self._last_call = self._clock()
+
+
+async def sync_date_range(
+    oldest: str,
+    newest: str,
+    session_factory: async_sessionmaker[AsyncSession],
+    client: IntervalsClientProtocol,
+    *,
+    settings: Settings | None = None,
+    clock: Clock = time.monotonic,
+    sleep: Sleep = asyncio.sleep,
+) -> SyncResult:
+    """Sync one date range idempotently; return per-item counts.
+
+    Sessions are opened lazily: with no items to persist, the database is
+    never touched (so pacing can be verified without one).
+    """
+    config = settings or get_settings()
+    pacer = Pacer(config.intervals_min_request_interval_s, clock=clock, sleep=sleep)
+    result = SyncResult()
+
+    # --- Activities ---------------------------------------------------------
+    await pacer.before_call()
+    activities = client.list_activities(oldest, newest)
+
+    # --- Wellness -----------------------------------------------------------
+    await pacer.before_call()
+    try:
+        wellness_records = client.get_wellness(oldest, newest)
+    except IntervalsHTTPError:
+        wellness_records = []
+        result.wellness_failed += 1
+    if wellness_records:
+        await _persist_wellness(session_factory, wellness_records, result)
+
+    # --- Per-activity streams -------------------------------------------------
+    for activity in activities:
+        await _sync_activity(session_factory, client, pacer, activity, result)
+
+    return result
+
+
+async def _sync_activity(
+    session_factory: async_sessionmaker[AsyncSession],
+    client: IntervalsClientProtocol,
+    pacer: Pacer,
+    activity: Activity,
+    result: SyncResult,
+) -> None:
+    """Fetch streams/FIT for one activity, then upsert everything.
+
+    Client calls happen before the session opens so client failures are
+    attributable to the item and leave no partial DB state behind.
+    """
+    activity_id = activity.id
+
+    # Preferred source: the per-second FIT file (ING-4 parser); fall back to
+    # the streams endpoint when no FIT bytes are available/parseable.
+    fit_streams: dict[str, list[float | None]] | None = None
+    endpoint_streams: list[Any] = []
+    try:
+        await pacer.before_call()
+        fit_bytes = client.download_fit_file(activity_id)
+        if fit_bytes:
+            fit_streams = parse_fit_streams(fit_bytes)
+    except (IntervalsHTTPError, ValueError):
+        fit_streams = None
+    if fit_streams is None:
+        try:
+            await pacer.before_call()
+            endpoint_streams = client.get_streams(activity_id)
+        except IntervalsHTTPError:
+            result.streams_failed += 1
+            return
+
+    try:
+        async with session_factory() as session:
+            row = await repository.upsert_activity(
+                session,
+                source_id=activity_id,
+                type=activity.type,
+                name=activity.name,
+                start_time=_start_time(activity),
+                start_time_local=activity.start_date_local or None,
+                distance_m=activity.distance,
+                duration_s=activity.moving_time,
+                elevation_m=_numeric_extra(activity, "total_elevation_gain"),
+                intervals_icu_load=_load_metric(activity),
+            )
+            if fit_streams is not None:
+                await _persist_fit_streams(session, row.id, fit_streams, result)
+            else:
+                await _persist_endpoint_streams(
+                    session, row.id, endpoint_streams, result
+                )
+            await session.commit()
+    except Exception:
+        result.activities_failed += 1
+        return
+    result.activities_synced += 1
+
+
+async def _persist_fit_streams(
+    session: AsyncSession,
+    activity_row_id: int,
+    fit_streams: dict[str, list[float | None]],
+    result: SyncResult,
+) -> None:
+    """Store parsed per-second FIT arrays, skipping all-None streams.
+
+    Mixed arrays keep ``None`` entries: the JSONB ``payload`` column is
+    ``list[Any]`` and per-second alignment must not be broken; the repository
+    ``list[float]`` hint is narrowed here with a documented cast.
+    """
+    for stream_type, values in fit_streams.items():
+        if not values or all(v is None for v in values):
+            result.streams_skipped += 1
+            continue
+        await repository.upsert_activity_stream(
+            session,
+            activity_id=activity_row_id,
+            stream_type=stream_type,
+            data=cast(list[float], values),
+        )
+        result.streams_synced += 1
+
+
+async def _persist_endpoint_streams(
+    session: AsyncSession,
+    activity_row_id: int,
+    streams: list[Any],
+    result: SyncResult,
+) -> None:
+    """Store streams-endpoint payloads keyed by the source's stream type."""
+    for stream in streams:
+        data = [float(v) for v in stream.data]
+        if not data:
+            result.streams_skipped += 1
+            continue
+        await repository.upsert_activity_stream(
+            session,
+            activity_id=activity_row_id,
+            stream_type=stream.type,
+            data=data,
+        )
+        result.streams_synced += 1
+
+
+async def _persist_wellness(
+    session_factory: async_sessionmaker[AsyncSession],
+    records: list[Wellness],
+    result: SyncResult,
+) -> None:
+    """Upsert one batch of daily wellness records in a single transaction."""
+    try:
+        async with session_factory() as session:
+            for record in records:
+                extras = record.model_extra or {}
+                await repository.upsert_wellness(
+                    session,
+                    date=datetime.strptime(record.id, "%Y-%m-%d").date(),
+                    hrv=record.hrv,
+                    ln_hrv=_numeric(extras.get("lnHrv")),
+                    resting_hr=record.resting_hr,
+                    sleep_minutes=record.sleep_minutes,
+                    sleep_score=_numeric(
+                        extras.get("sleepScore", extras.get("sleepScoreCalculated"))
+                    ),
+                    weight=record.weight,
+                )
+            await session.commit()
+    except Exception:
+        result.wellness_failed += len(records)
+        return
+    result.wellness_synced += len(records)
+
+
+def _start_time(activity: Activity) -> datetime:
+    """Resolve a timezone-aware start time from the activity payload."""
+    extras = activity.model_extra or {}
+    raw = extras.get("start_date") or activity.start_date_local or ""
+    if not raw:
+        raise ValueError(f"activity {activity.id} has no start time")
+    parsed = datetime.fromisoformat(str(raw))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed
+
+
+def _load_metric(activity: Activity) -> float | None:
+    """Extract Intervals.icu's own load metric as a NON-authoritative
+    cross-check value only (§5.1); stored solely in the dedicated column."""
+    for key in ("icu_training_load", "load"):
+        value = _numeric((activity.model_extra or {}).get(key))
+        if value is not None:
+            return value
+    return None
+
+
+def _numeric_extra(activity: Activity, key: str) -> float | None:
+    return _numeric((activity.model_extra or {}).get(key))
+
+
+def _numeric(value: object) -> float | None:
+    """Coerce a payload value to float, returning None for non-numeric values."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+__all__ = ["IntervalsClientProtocol", "Pacer", "SyncResult", "sync_date_range"]
