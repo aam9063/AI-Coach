@@ -16,7 +16,14 @@ upsert repositories for one date range:
 - a configurable minimum interval between client calls
   (``Settings.intervals_min_request_interval_s``, default 0.1s => at most
   10 requests/second) is enforced via an injected clock/sleep pair so the
-  pacing is testable without real delays.
+  pacing is testable without real delays;
+- raw FIT bytes are archived through the injected
+  :class:`app.ingest.storage.RawFileStorage` (ING-6, §5.2: raw files are
+  kept so the engine can be re-run when formulas change) and the relative
+  path is stored on ``activity.raw_file_path``. The default storage is
+  built from settings (``ingest_storage_enabled``/``ingest_storage_root``);
+  archived bytes are best-effort — an I/O failure degrades to no stored
+  path instead of failing the activity.
 
 Failures are per-item: one failing activity (e.g. an HTTP 4xx on its
 streams/FIT download) is counted in the returned :class:`SyncResult` and
@@ -45,6 +52,7 @@ from app.db import repository
 from app.ingest.exceptions import IntervalsHTTPError
 from app.ingest.fit_parser import parse_fit_streams
 from app.ingest.models import Activity, Wellness
+from app.ingest.storage import RawFileStorage, storage_from_settings
 
 Clock = Callable[[], float]
 Sleep = Callable[[float], Awaitable[None]]
@@ -112,6 +120,7 @@ async def sync_date_range(
     client: IntervalsClientProtocol,
     *,
     settings: Settings | None = None,
+    storage: RawFileStorage | None = None,
     clock: Clock = time.monotonic,
     sleep: Sleep = asyncio.sleep,
 ) -> SyncResult:
@@ -122,6 +131,7 @@ async def sync_date_range(
     """
     config = settings or get_settings()
     pacer = Pacer(config.intervals_min_request_interval_s, clock=clock, sleep=sleep)
+    file_storage = storage or storage_from_settings(config)
     result = SyncResult()
 
     # --- Activities ---------------------------------------------------------
@@ -140,7 +150,9 @@ async def sync_date_range(
 
     # --- Per-activity streams -------------------------------------------------
     for activity in activities:
-        await _sync_activity(session_factory, client, pacer, activity, result)
+        await _sync_activity(
+            session_factory, client, pacer, file_storage, activity, result
+        )
 
     return result
 
@@ -149,6 +161,7 @@ async def _sync_activity(
     session_factory: async_sessionmaker[AsyncSession],
     client: IntervalsClientProtocol,
     pacer: Pacer,
+    file_storage: RawFileStorage,
     activity: Activity,
     result: SyncResult,
 ) -> None:
@@ -163,13 +176,24 @@ async def _sync_activity(
     # the streams endpoint when no FIT bytes are available/parseable.
     fit_streams: dict[str, list[float | None]] | None = None
     endpoint_streams: list[Any] = []
+    raw_file_path: str | None = None
     try:
         await pacer.before_call()
         fit_bytes = client.download_fit_file(activity_id)
-        if fit_bytes:
+    except IntervalsHTTPError:
+        fit_bytes = b""
+    if fit_bytes:
+        try:
             fit_streams = parse_fit_streams(fit_bytes)
-    except (IntervalsHTTPError, ValueError):
-        fit_streams = None
+        except ValueError:
+            fit_streams = None
+        # §5.2: archive the raw bytes even when stream parsing fails so the
+        # engine can re-run on them later. Best-effort: an I/O failure only
+        # degrades to no stored path (ING-6 documented choice).
+        try:
+            raw_file_path = file_storage.save(activity_id, fit_bytes) or None
+        except OSError:
+            raw_file_path = None
     if fit_streams is None:
         try:
             await pacer.before_call()
@@ -190,6 +214,7 @@ async def _sync_activity(
                 distance_m=activity.distance,
                 duration_s=activity.moving_time,
                 elevation_m=_numeric_extra(activity, "total_elevation_gain"),
+                raw_file_path=raw_file_path,
                 intervals_icu_load=_load_metric(activity),
             )
             if fit_streams is not None:

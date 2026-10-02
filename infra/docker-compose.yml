@@ -18,6 +18,9 @@ x-backend-env: &backend-env
   # Inside the compose network postgres/redis are reachable by service name.
   DATABASE_URL: postgresql+asyncpg://tri_coach:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required - copy .env.example to .env and set it}@postgres:5432/tri_coach
   REDIS_URL: redis://redis:6379/0
+  # Raw FIT archive root (ING-6, brief §5.2) on the shared fit-data volume;
+  # mounted for api/worker below (beat never syncs, so it has no volume).
+  INGEST_STORAGE_ROOT: /data/fit
 
 x-backend: &backend
   build: ../backend
@@ -63,10 +66,16 @@ services:
     <<: *backend
     ports:
       - "8000:8000"
+    volumes:
+      # Raw FIT archive (ING-6, §5.2): shared with the worker.
+      - fit-data:/data/fit
 
   worker:
     <<: *backend
     command: celery -A app.scheduler.celery_app:celery_app worker --loglevel=INFO
+    volumes:
+      # Raw FIT archive (ING-6, §5.2): the sync downloads FIT bytes here.
+      - fit-data:/data/fit
 
   beat:
     <<: *backend
@@ -77,3 +86,5 @@ services:
 
 volumes:
   postgres-data:
+  # Raw FIT files archived by the ingest worker (ING-6, brief §5.2).
+  fit-data:

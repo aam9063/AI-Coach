@@ -43,6 +43,15 @@ class Settings(BaseSettings):
     # cookbook limits of 30/s burst and 132 per 10s). 0 disables pacing.
     intervals_min_request_interval_s: float = 0.1
 
+    # --- Raw FIT file storage (ING-6, §5.2) --------------------------------
+    # Root directory where downloaded raw FIT files are archived so the
+    # engine can be re-run when formulas change. Relative to the backend
+    # working directory unless an absolute path is given (Compose mounts
+    # the fit-data volume at /data/fit and sets INGEST_STORAGE_ROOT).
+    ingest_storage_root: str = "data/fit"
+    # Disable to skip raw FIT archiving; activities keep raw_file_path NULL.
+    ingest_storage_enabled: bool = True
+
     # WhatsApp via Twilio (§5.1).
     twilio_account_sid: str = ""
     twilio_auth_token: str = ""

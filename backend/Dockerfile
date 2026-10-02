@@ -35,6 +35,10 @@ COPY --from=builder --chown=app:app /app/app ./app
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONDONTWRITEBYTECODE=1
 
+# Raw FIT archive mount point (§5.2, ING-6): the Compose volume is created
+# root-owned, so the non-root app user needs a pre-owned directory to write to.
+RUN mkdir -p /data/fit && chown app:app /data/fit
+
 USER app
 
 EXPOSE 8000

@@ -40,6 +40,7 @@ from app.db.models import ActivityRow, ActivityStreamRow, WellnessRow
 from app.ingest.exceptions import IntervalsNotFoundError
 from app.ingest.fit_parser import parse_fit_streams
 from app.ingest.models import Activity, Stream, Wellness
+from app.ingest.storage import LocalVolumeStorage
 from app.ingest.sync import sync_date_range
 
 pytestmark = pytest.mark.anyio
@@ -373,6 +374,78 @@ async def test_failing_activity_does_not_abort_sync(db_engine: AsyncEngine) -> N
     assert counts[ActivityRow] == 2
     assert counts[ActivityStreamRow] == 2
     assert counts[WellnessRow] == 1
+
+
+# ---------------------------------------------------------------------------
+# Raw FIT storage (ING-6, brief §5.2)
+# ---------------------------------------------------------------------------
+
+
+async def test_sync_archives_raw_fit_and_sets_raw_file_path(
+    db_engine: AsyncEngine, tmp_path: Path
+) -> None:
+    """Downloaded FIT bytes are persisted via storage and the relative path
+    is stored on the activity row (§5.2: raw files must be re-runnable)."""
+    fit_bytes = FIXTURE_PATH.read_bytes()
+    client = FakeClient(
+        activities=[_activity(1), _activity(2)],
+        streams_by_id={
+            2: [Stream(type="power", data=[0.0, 100.0])],
+        },
+        fit_files={1: fit_bytes},
+    )
+    settings = Settings(ingest_storage_root=str(tmp_path))
+
+    await sync_date_range(
+        OLDEST, NEWEST, _session_factory(db_engine), client, settings=settings
+    )
+
+    storage = LocalVolumeStorage(tmp_path)
+    async with _session_factory(db_engine)() as session:
+        stored = (
+            await session.execute(
+                _fresh(select(ActivityRow).where(ActivityRow.source_id == 1))
+            )
+        ).scalar_one()
+        # Relative path recorded on the row and the bytes round-trip.
+        assert stored.raw_file_path is not None
+        assert storage.exists(stored.raw_file_path)
+        assert storage.load(stored.raw_file_path) == fit_bytes
+        assert (tmp_path / stored.raw_file_path).is_file()
+
+        # The endpoint-fallback activity has no raw file.
+        fallback = (
+            await session.execute(
+                _fresh(select(ActivityRow).where(ActivityRow.source_id == 2))
+            )
+        ).scalar_one()
+        assert fallback.raw_file_path is None
+
+    # Exactly one archived file: the FIT-bearing activity only.
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["1.fit"]
+
+
+async def test_sync_storage_disabled_keeps_raw_file_path_null(
+    db_engine: AsyncEngine, tmp_path: Path
+) -> None:
+    """Disabled storage mode writes nothing and leaves raw_file_path NULL."""
+    client = FakeClient(
+        activities=[_activity(1)],
+        fit_files={1: FIXTURE_PATH.read_bytes()},
+    )
+    settings = Settings(ingest_storage_root=str(tmp_path), ingest_storage_enabled=False)
+
+    result = await sync_date_range(
+        OLDEST, NEWEST, _session_factory(db_engine), client, settings=settings
+    )
+
+    assert result.activities_synced == 1
+    async with _session_factory(db_engine)() as session:
+        stored = (
+            await session.execute(_fresh(select(ActivityRow)))
+        ).scalar_one()
+        assert stored.raw_file_path is None
+    assert list(tmp_path.iterdir()) == []
 
 
 # ---------------------------------------------------------------------------
