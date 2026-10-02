@@ -10,6 +10,11 @@ from celery import Celery
 
 from app.core.settings import get_settings
 
+# Explicit include (ING-8): the Compose worker command loads this module
+# directly, so the task module is imported via `include` rather than
+# `autodiscover_tasks` — verifiable with `celery -A ... inspect registered`.
+TASK_MODULES = ["app.scheduler.tasks"]
+
 
 def create_celery_app() -> Celery:
     """Create the tri-coach Celery application wired to Redis."""
@@ -18,6 +23,7 @@ def create_celery_app() -> Celery:
         "tri-coach",
         broker=settings.redis_url,
         backend=settings.redis_url,
+        include=TASK_MODULES,
     )
 
 
