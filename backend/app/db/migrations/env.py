@@ -1,10 +1,8 @@
 """Alembic migration environment.
 
 Wired to the environment-driven ``Settings.database_url`` (§14) through an
-async SQLAlchemy engine (SQLAlchemy 2 async stack, §6). No product migrations
-exist yet (SC-6): ``target_metadata`` stays empty until models are added, and
-``uv run alembic revision --autogenerate`` becomes useful once models are
-registered here.
+async SQLAlchemy engine (SQLAlchemy 2 async stack, §6). ``target_metadata``
+points at the app DB models (app.db.models.Base) so autogenerate works.
 """
 
 import asyncio
@@ -21,8 +19,10 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-# No models yet; set to the declarative Base metadata when models arrive.
-target_metadata = None
+# DB models registered for autogenerate (ING-3).
+from app.db.models import Base
+
+target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:
