@@ -72,4 +72,4 @@ In progress (Feature 2/11) on branch `feat/intervals-ingestion`.
 - ING-4: FIT parsing RED→GREEN (20 tests; real bike fixture MIT-licensed, swim lengths via pure stub functions), full suite 47 passed, mypy strict clean.
 - ING-5: idempotent sync orchestration RED→GREEN (6 tests: idempotence re-run, load column isolation, partial failures, pacing ≤10 req/s with injected clock), full suite 53 passed, mypy strict clean. FIT-first streams with streams-endpoint fallback; per-item failures never abort the run.
 
-Commits: 9e3d114, 3b94069, 443527f, 12882b9, d362ae0, d362ae0, (ING-5 pending commit)
+Commits: 9e3d114, 3b94069, 443527f, 12882b9, d362ae0, d362ae0, 20fd547
