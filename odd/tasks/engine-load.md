@@ -42,7 +42,7 @@ The brief's core principle is "deterministic engine decides, LLM explains" (PROJ
 - [ ] `LOAD-2`: GREEN: implement bike power-based TSS functions in `backend/app/engine/load.py` (pure, typed, docstrings with formula and Coggan reference); tests green.
 - [ ] `LOAD-3`: RED+GREEN: run rTSS with documented grade-adjustment model (e.g. Minetti et al. 2002) tested on hand-computed examples (§7.1).
 - [ ] `LOAD-4`: RED+GREEN: swim sTSS tested against hand-computed values with configurable CSS input (§7.1).
-- [ ] `LOAD-5`: RED+GREEN: TRIMP/hrTSS with configurable male/female coefficients tested on hand-computed examples, plus strength sRPE with configurable TSS-equivalent scaling factor (§7.1).
+- [x] `LOAD-5`: RED+GREEN: TRIMP/hrTSS with configurable male/female coefficients tested on hand-computed examples, plus strength sRPE with configurable TSS-equivalent scaling factor (§7.1).
 - [ ] `LOAD-6`: RED+GREEN: method selection rule (power → pace/speed → HR → sRPE) with the chosen method returned/persisted (§7.1).
 - [ ] `LOAD-7`: RED+GREEN: CTL/ATL/TSB recursion tests (seed values, time-constant configurability, combined and per-sport, low-confidence flag before 90 days of history) (§7.2).
 - [ ] `LOAD-8`: RED+GREEN: EWMA ACWR computation tested on synthetic series; assert it is returned as context-only metadata, not a warning (§7.2).
@@ -72,4 +72,7 @@ In progress (Feature 3/11) on branch `feat/engine-load`, stacked on `fix/ingest-
 - LOAD-11 (first half, thresholds): done at commit `8451fb3` — `get_sport_settings()` / `get_athlete_profile()` live-verified models, pure `extract_athlete_thresholds()` per-sport mapping with explicit gap reporting (never silent defaults), seven `athlete_*` settings fields documented as owner configuration (§14) and non-authoritative (§5.1), and a print-only CLI (`python -m app.ingest.thresholds`). Owner values seeded into the gitignored `.env` files: FTP 180 W, LTHR 169 bpm, max HR 186 bpm, resting HR 65 bpm, swim CSS 0.8333 m/s. **Gaps the owner must fill in Intervals.icu: run threshold speed and body weight.**
 - Real data available for validation: the live 180-day backfill ingested 26 activities (2026-04-05..2026-10-02) and 128 stream rows; the owner has **no power meter**, so cycling load must come from HR (TRIMP/hrTSS) — hence LOAD-5 is implemented before the power-based LOAD-1/2.
 
-Commits: 8451fb3 (LOAD-11 first half)
+- LOAD-5 (HR-based load): done at commit `46e6964` — pure `app/engine/load.py` with ΔHRr, Banister TRIMP (male 0.64/1.92, female 0.86/1.67, overridable), the one-hour-at-LTHR reference, hrTSS and Foster sRPE (load = RPE × minutes × explicit TSS-equivalent factor). Out-of-range inputs raise `ValueError` rather than silently defaulting; an AST purity test asserts no `app.db`/`app.ingest`/`app.core` imports. Parent re-derived the reference values independently against the module: `dHRr@LTHR 0.8595041322`, `TRIMP 1h@LTHR 171.898768`, `TRIMP 60min@150bpm 103.925937`, `hrTSS 60.457639`, `sRPE 210 / 420` — exact match. This is the primary load path for the owner's data (no power meter).
+- Settings robustness: commit `5e55275` — `env_ignore_empty=True`, because the README's "copy .env.example to .env" flow leaves optional numeric keys empty and previously made `Settings` raise at import. Also fixed a non-hermetic settings test that read the developer's local `.env`.
+
+Commits: 8451fb3 (LOAD-11 first half), 5e55275, 46e6964 (LOAD-5)
