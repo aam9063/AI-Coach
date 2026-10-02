@@ -62,5 +62,10 @@ python_version = "3.12"
 # Resolve app/ packages unambiguously from the project root.
 explicit_package_bases = true
 
+[[tool.mypy.overrides]]
+# Celery ships no py.typed marker (as of 5.x); untyped for mypy.
+module = "celery.*"
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
