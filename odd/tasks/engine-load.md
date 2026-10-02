@@ -1,6 +1,6 @@
 # ODD Feature: engine-load
 
-Status: pending | Feature 3 of 11 (brief section 12) | Source: PROJECT_BRIEF.md
+Status: in progress | Feature 3 of 11 (brief section 12) | Source: PROJECT_BRIEF.md
 
 ## Objective
 
@@ -67,6 +67,9 @@ To be filled when the feature is implemented (commits, test runs, cross-checks).
 
 ## Progress
 
-Not started.
+In progress (Feature 3/11) on branch `feat/engine-load`, stacked on `fix/ingest-activity-id` (an Alembic migration in each branch would otherwise create multiple heads at merge time).
 
-Commits: (none yet)
+- LOAD-11 (first half, thresholds): done at commit `8451fb3` — `get_sport_settings()` / `get_athlete_profile()` live-verified models, pure `extract_athlete_thresholds()` per-sport mapping with explicit gap reporting (never silent defaults), seven `athlete_*` settings fields documented as owner configuration (§14) and non-authoritative (§5.1), and a print-only CLI (`python -m app.ingest.thresholds`). Owner values seeded into the gitignored `.env` files: FTP 180 W, LTHR 169 bpm, max HR 186 bpm, resting HR 65 bpm, swim CSS 0.8333 m/s. **Gaps the owner must fill in Intervals.icu: run threshold speed and body weight.**
+- Real data available for validation: the live 180-day backfill ingested 26 activities (2026-04-05..2026-10-02) and 128 stream rows; the owner has **no power meter**, so cycling load must come from HR (TRIMP/hrTSS) — hence LOAD-5 is implemented before the power-based LOAD-1/2.
+
+Commits: 8451fb3 (LOAD-11 first half)
