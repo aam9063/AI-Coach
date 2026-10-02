@@ -38,8 +38,8 @@ The brief's core principle is "deterministic engine decides, LLM explains" (PROJ
 
 ## Checklist
 
-- [ ] `LOAD-1`: RED: unit tests with hand-calculated reference values for bike NP/IF/TSS (§7.1), including the rolling 30 s fourth-power mean edge cases (missing samples, short files).
-- [ ] `LOAD-2`: GREEN: implement bike power-based TSS functions in `backend/app/engine/load.py` (pure, typed, docstrings with formula and Coggan reference); tests green.
+- [x] `LOAD-1`: RED: unit tests with hand-calculated reference values for bike NP/IF/TSS (§7.1), including the rolling 30 s fourth-power mean edge cases (missing samples, short files).
+- [x] `LOAD-2`: GREEN: implement bike power-based TSS functions in `backend/app/engine/load.py` (pure, typed, docstrings with formula and Coggan reference); tests green.
 - [ ] `LOAD-3`: RED+GREEN: run rTSS with documented grade-adjustment model (e.g. Minetti et al. 2002) tested on hand-computed examples (§7.1).
 - [ ] `LOAD-4`: RED+GREEN: swim sTSS tested against hand-computed values with configurable CSS input (§7.1).
 - [x] `LOAD-5`: RED+GREEN: TRIMP/hrTSS with configurable male/female coefficients tested on hand-computed examples, plus strength sRPE with configurable TSS-equivalent scaling factor (§7.1).
@@ -75,4 +75,6 @@ In progress (Feature 3/11) on branch `feat/engine-load`, stacked on `fix/ingest-
 - LOAD-5 (HR-based load): done at commit `46e6964` — pure `app/engine/load.py` with ΔHRr, Banister TRIMP (male 0.64/1.92, female 0.86/1.67, overridable), the one-hour-at-LTHR reference, hrTSS and Foster sRPE (load = RPE × minutes × explicit TSS-equivalent factor). Out-of-range inputs raise `ValueError` rather than silently defaulting; an AST purity test asserts no `app.db`/`app.ingest`/`app.core` imports. Parent re-derived the reference values independently against the module: `dHRr@LTHR 0.8595041322`, `TRIMP 1h@LTHR 171.898768`, `TRIMP 60min@150bpm 103.925937`, `hrTSS 60.457639`, `sRPE 210 / 420` — exact match. This is the primary load path for the owner's data (no power meter).
 - Settings robustness: commit `5e55275` — `env_ignore_empty=True`, because the README's "copy .env.example to .env" flow leaves optional numeric keys empty and previously made `Settings` raise at import. Also fixed a non-hermetic settings test that read the developer's local `.env`.
 
-Commits: 8451fb3 (LOAD-11 first half), 5e55275, 46e6964 (LOAD-5)
+- LOAD-1/2 (bike power load): done at commit `6b13cd7` — `normalized_power` (mean of the fourth power of 30 s rolling means), `intensity_factor`, `power_tss` and a typed `BikePowerLoad` result. Documented edge semantics: a window counts only when `valid_count/30 >= min_valid_fraction` (default 1.0), a file shorter than the window falls back to the mean of valid samples, and zero usable data raises `ValueError`. Parent re-derived independently, exact match: NP(constant 200 W)=200, NP(0/300 W step)=203.092828 (mean of fourth powers exactly 1,701,290,000), NP(gapped step)=204.764515, NP(short)=180, IF=1.1111111111, TSS(1 h @200 W, FTP 180)=123.456790, TSS(1 h @FTP)=100, TSS(30 min @FTP)=50. Currently unused for the owner's data (no power meter), required by the checklist.
+
+Commits: 8451fb3 (LOAD-11 first half), 5e55275, 46e6964 (LOAD-5), 6b13cd7 (LOAD-1/2)
