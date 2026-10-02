@@ -35,6 +35,9 @@ services:
   postgres:
     # PostgreSQL 16 WITH the pgvector extension (§6; evidence store, §8).
     image: pgvector/pgvector:pg16
+    # Host access on loopback only: local `uv run` tests/alembic need it.
+    ports:
+      - "127.0.0.1:5432:5432"
     environment:
       POSTGRES_USER: tri_coach
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required - copy .env.example to .env and set it}
