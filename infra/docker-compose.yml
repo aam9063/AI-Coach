@@ -4,9 +4,11 @@
 #   docker compose -f infra/docker-compose.yml up -d --build
 #   docker compose -f infra/docker-compose.yml down -v
 #
-# Secrets (§14): copy .env.example to .env at the REPO ROOT. The root .env is
-# loaded into api/worker/beat via `env_file` (optional: a bare `up` without a
-# .env still works using the inert defaults in app/core/settings.py). The
+# Secrets (§14): POSTGRES_PASSWORD is REQUIRED for variable interpolation —
+# there is deliberately no committed default (GitHub push protection / §14).
+# Copy .env.example to .env at the REPO ROOT and set POSTGRES_PASSWORD there,
+# then start Compose with `--env-file .env` (the Makefile does this for you).
+# The root .env is also loaded into api/worker/beat via `env_file`. The
 # service-to-service URLs below always point at the compose network hosts,
 # overriding whatever a developer's root .env says about localhost.
 
@@ -14,7 +16,7 @@ name: tri-coach
 
 x-backend-env: &backend-env
   # Inside the compose network postgres/redis are reachable by service name.
-  DATABASE_URL: postgresql+asyncpg://tri_coach:${POSTGRES_PASSWORD:-tri_coach}@postgres:5432/tri_coach
+  DATABASE_URL: postgresql+asyncpg://tri_coach:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required - copy .env.example to .env and set it}@postgres:5432/tri_coach
   REDIS_URL: redis://redis:6379/0
 
 x-backend: &backend
@@ -35,7 +37,7 @@ services:
     image: pgvector/pgvector:pg16
     environment:
       POSTGRES_USER: tri_coach
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-tri_coach}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required - copy .env.example to .env and set it}
       POSTGRES_DB: tri_coach
     volumes:
       - postgres-data:/var/lib/postgresql/data

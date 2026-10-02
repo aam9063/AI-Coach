@@ -34,6 +34,9 @@ jobs:
         run: uv run pytest
 
       - name: Validate Docker Compose file
+        env:
+          # Interpolation dummy so `compose config` passes without real secrets.
+          POSTGRES_PASSWORD: dummy-ci-only
         run: |
           if ! command -v docker >/dev/null 2>&1; then
             echo "::error::docker binary not found on runner; cannot validate compose file"

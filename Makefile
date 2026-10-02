@@ -5,11 +5,11 @@
 
 ## Start all services (api, worker, beat, postgres+pgvector, redis)
 up:
-	docker compose -f infra/docker-compose.yml up -d --build
+	docker compose -f infra/docker-compose.yml --env-file .env up -d --build
 
 ## Stop and remove all services
 down:
-	docker compose -f infra/docker-compose.yml down
+	docker compose -f infra/docker-compose.yml --env-file .env down
 
 ## Run backend tests
 test:

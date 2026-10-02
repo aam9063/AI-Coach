@@ -14,7 +14,7 @@ See [docs/PROJECT_BRIEF.md](docs/PROJECT_BRIEF.md) for the full specification.
 ## Quickstart
 
 ```bash
-cp .env.example .env   # fill in secrets; never commit .env
+cp .env.example .env   # fill in secrets; POSTGRES_PASSWORD is required (never commit .env)
 uv sync --directory backend
 make up                # api, worker, beat, postgres (pgvector), redis
 curl http://localhost:8000/health
