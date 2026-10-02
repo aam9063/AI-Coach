@@ -29,7 +29,15 @@ class Settings(BaseSettings):
     # --- Secrets (empty by default; provided via environment only) ---------
     # §5.1: Intervals.icu is the sole ingestion source.
     intervals_api_key: str = ""
-    intervals_athlete_id: str = ""
+    # Athlete id 0 means the key's owner (verified: official API cookbook).
+    intervals_athlete_id: str = "0"
+    # Base URL of the Intervals.icu API v1 (verified: official API cookbook).
+    intervals_base_url: str = "https://intervals.icu/api/v1"
+    # Retries after the initial attempt for 429/5xx (cookbook: 30/s burst,
+    # 132/10s; the client targets well below that).
+    intervals_max_retries: int = 3
+    # Exponential backoff: sleep = factor * 2**attempt seconds.
+    intervals_backoff_factor: float = 0.5
 
     # WhatsApp via Twilio (§5.1).
     twilio_account_sid: str = ""
