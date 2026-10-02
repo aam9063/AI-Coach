@@ -52,6 +52,30 @@ class Settings(BaseSettings):
     # Disable to skip raw FIT archiving; activities keep raw_file_path NULL.
     ingest_storage_enabled: bool = True
 
+    # --- Athlete thresholds (owner-supplied configuration; §14, §5.1) -------
+    # Editable configuration for the deterministic load engine (§7.1).
+    # Source: Intervals.icu is the EDITING SURFACE — fetch current values with
+    # `python -m app.ingest.thresholds`, which prints ready-to-paste lines.
+    # These are NEVER authoritative computed metrics (§5.1): Intervals values
+    # are cross-check only, and a missing value stays None (no silent default).
+    # Intervals.icu live-verified shapes, 2026-10-02.
+    # Functional threshold power in watts (sport-settings "Ride" entry ftp).
+    athlete_ftp_w: float | None = None
+    # Lactate threshold heart rate in bpm (sport-settings lthr).
+    athlete_lthr_bpm: float | None = None
+    # Maximum heart rate in bpm (sport-settings max_hr).
+    athlete_hr_max_bpm: float | None = None
+    # Resting heart rate in bpm (athlete profile icu_resting_hr).
+    athlete_hr_rest_bpm: float | None = None
+    # Swim critical-swim-speed (CSS) in m/s (sport-settings "Swim" entry
+    # threshold_pace; live-verified 0.8333333 m/s on 2026-10-02).
+    athlete_css_speed_mps: float | None = None
+    # Run threshold speed in m/s (sport-settings "Run" entry threshold_pace;
+    # null for this owner — a known, explicitly reported gap).
+    athlete_threshold_run_speed_mps: float | None = None
+    # Body weight in kg (athlete profile weight; null for this owner).
+    athlete_weight_kg: float | None = None
+
     # WhatsApp via Twilio (§5.1).
     twilio_account_sid: str = ""
     twilio_auth_token: str = ""
