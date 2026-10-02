@@ -73,7 +73,7 @@ Independently verified by `gentle-ai-verify` (read-only) on HEAD `d4bf33f`, 2026
 - §5.1: Intervals.icu load is stored only in the non-authoritative `activity.intervals_icu_load` column and read by no engine code.
 - §6 purity: no `app.engine` imports under `app/ingest/` and no ingest/db/http imports under `app/engine/` (engine itself is Feature 3 scope).
 
-Not verified (stated limitation, not a pass): the live 180-day backfill and live Intervals.icu API behaviour (rate limits, gzip FIT responses) require the owner's personal API key at runtime; the endpoint contract is recorded in `docs/adr/0001-intervals-icu-api-verification.md` and covered by mocked tests only. Run `cd backend && uv run python -m app.ingest.backfill --days 180` with `INTERVALS_API_KEY` set to complete that acceptance item.
+**Live acceptance closed (2026-10-02, owner's API key):** after the string-id fix (`e79bcd9` on `fix/ingest-activity-id`), the real `--days 180` backfill completed with `180/180 windows ok; activities=26 (failed=0) streams=128 (skipped=54, failed=0) wellness=175 (failed=0)`. The same command re-run left the row counts byte-identical (activity 26, activity_stream 131, wellness 175), proving the §12.2 no-duplicates criterion against live data rather than mocks. Real-data shape: 26 activities 2026-04-05..2026-10-02 (Ride 17, WeightTraining 5, Walk 4), streams mostly heart-rate only (no power meter), `/activity/{id}/file` returned an uncompressed FIT.
 
 ## Progress
 
