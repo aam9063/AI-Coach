@@ -80,6 +80,6 @@ Known design tradeoff: backfill uses per-day windows (~2 API calls/day, ~360 for
 - ING-8: Celery `sync_intervals` task RED→GREEN (6 eager-mode tests), commit `ce4708a`: owns the async lifecycle, returns a JSON summary, window failures stay in the summary while unexpected exceptions fail the task; registration via `include=["app.scheduler.tasks"]`, proven in the Compose worker with `celery inspect registered`.
 - ING-9: ADR `docs/adr/0001-intervals-icu-api-verification.md` (endpoints, auth, gzip caveat, `athlete/0` convention, rate limits, <=10 req/s pacing policy, verification date and sources).
 
-Commits (ING-8/9): ce4708a, (ING-9 pending commit)
+Commits (ING-8/9): ce4708a, 8d00300
 
 Commits: 9e3d114, 3b94069, 443527f, 12882b9, d362ae0, d362ae0, 20fd547
