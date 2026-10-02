@@ -43,7 +43,7 @@ The brief's core principle is "deterministic engine decides, LLM explains" (PROJ
 - [x] `LOAD-3`: RED+GREEN: run rTSS with documented grade-adjustment model (e.g. Minetti et al. 2002) tested on hand-computed examples (§7.1).
 - [x] `LOAD-4`: RED+GREEN: swim sTSS tested against hand-computed values with configurable CSS input (§7.1).
 - [x] `LOAD-5`: RED+GREEN: TRIMP/hrTSS with configurable male/female coefficients tested on hand-computed examples, plus strength sRPE with configurable TSS-equivalent scaling factor (§7.1).
-- [ ] `LOAD-6`: RED+GREEN: method selection rule (power → pace/speed → HR → sRPE) with the chosen method returned/persisted (§7.1).
+- [x] `LOAD-6`: RED+GREEN: method selection rule (power → pace/speed → HR → sRPE) with the chosen method returned/persisted (§7.1).
 - [ ] `LOAD-7`: RED+GREEN: CTL/ATL/TSB recursion tests (seed values, time-constant configurability, combined and per-sport, low-confidence flag before 90 days of history) (§7.2).
 - [ ] `LOAD-8`: RED+GREEN: EWMA ACWR computation tested on synthetic series; assert it is returned as context-only metadata, not a warning (§7.2).
 - [ ] `LOAD-9`: RED+GREEN: Banister model evaluation and `scipy.optimize` fit gated on performance-marker availability, with fit-quality reporting and a guard that unfitted models are marked non-personalized (§7.2).
@@ -79,4 +79,7 @@ In progress (Feature 3/11) on branch `feat/engine-load`, stacked on `fix/ingest-
 
 - LOAD-3/4 (pace/speed load): done at commit `cde4877` — Minetti et al. 2002 grade model, flat-equivalent speed, normalized graded speed (grade unavailable → 0, the neutral element of Cr), rTSS = duration_h × IF² × 100; swim normalized speed excludes rest/zero-speed samples and sTSS = duration_h × IF³ × 100. Validation precedes any division. Parent re-derived independently, exact match: Cr(+0.10)=5.9682140000, v_flat(+10%)=4.9735116667, NGS(uphill)=4.4801337500, rTSS(uphill 1 h)=163.84978300, NGS(downhill)=2.4662024609, NGS(altitude gap)=3.9867558333, NSS=1.0500000000, sTSS(IF 1.5)=337.5, sTSS(at CSS)=16.666667. **Blocked for real runs: the owner still has no run threshold pace in Intervals.icu.**
 
-Commits: 8451fb3 (LOAD-11 first half), 5e55275, 46e6964 (LOAD-5), 6b13cd7 (LOAD-1/2), cde4877 (LOAD-3/4)
+- LOAD-6 (method selection): done at commit `2193f4a` — `select_load_method` applies the fixed order power → pace/speed → HR → sRPE over a typed `ActivityLoadInput`/`ThresholdBundle`, returning the chosen `method` key, the TSS-equivalent value, the method detail and one skip reason per rejected method. Parent verified: power Ride 123.457; the owner's real case (Ride without power) → `hr` 60.458, bit-identical to the direct LOAD-5 computation; Run without a configured threshold → `hr` with `pace_speed` skipped; Run/Swim at threshold → 100; strength → `srpe`; nothing applicable raises `ValueError` listing all four reasons.
+- **Open item for LOAD-11**: the sRPE TSS-equivalent factor is still an uncalibrated caller knob — with 1.0 it returns raw Foster AU (~420 for a 1 h RPE-7 session), which is not comparable to TSS. It needs a documented, sourced value.
+
+Commits: 8451fb3 (LOAD-11 first half), 5e55275, 46e6964 (LOAD-5), 6b13cd7 (LOAD-1/2), cde4877 (LOAD-3/4), 2193f4a (LOAD-6)
