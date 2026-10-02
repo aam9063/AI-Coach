@@ -1,6 +1,6 @@
 # ODD Feature: intervals-ingestion
 
-Status: pending | Feature 2 of 11 (brief section 12) | Source: PROJECT_BRIEF.md
+Status: complete | Feature 2 of 11 (brief section 12) | Source: PROJECT_BRIEF.md
 
 ## Objective
 
@@ -61,25 +61,36 @@ Directly implied conditions:
 
 ## Verification evidence
 
-To be filled when the feature is implemented (commits, test runs, cross-checks).
+Independently verified by `gentle-ai-verify` (read-only) on HEAD `d4bf33f`, 2026-10-02 — 11/11 items PASS, no blockers:
+
+- Quality gates: `uv run ruff check .` clean; `uv run mypy app tests` strict clean (46 source files); `uv run pytest -q` 86 passed, 0 failed, 0 skipped (DB-touching tests ran against compose Postgres 16).
+- Idempotence §12.2: `test_sync_is_idempotent_on_rerun` re-runs the same range and asserts identical counts and the same physical rows (activities/streams/wellness).
+- Migration from a clean scratch database: `alembic upgrade head` applied `daa3ba6946b9` with no errors; `activity`, `activity_stream`, `wellness`, `alembic_version` created; scratch DB dropped afterwards.
+- Compose: api/worker/beat/postgres/redis all up; `/health` returned 200 with `{"status":"ok",...}`; `celery inspect registered` in the running worker listed `app.scheduler.tasks.sync_intervals`.
+- Raw FIT storage: inside the worker container as the non-root user `app`, `save`/`load` round-tripped a payload through `storage_from_settings()` at the mounted `/data/fit` volume.
+- §5.1/§5.3: no `garth` / `garminconnect` / `python-garminconnect` / Strava in `backend/pyproject.toml`, `backend/uv.lock`, or any `backend/app` import.
+- §14: `.env` files untracked (only `.env.example` templates are tracked, with `POSTGRES_PASSWORD=CHANGE_ME` and empty key fields); compose requires `POSTGRES_PASSWORD` with no default.
+- §5.1: Intervals.icu load is stored only in the non-authoritative `activity.intervals_icu_load` column and read by no engine code.
+- §6 purity: no `app.engine` imports under `app/ingest/` and no ingest/db/http imports under `app/engine/` (engine itself is Feature 3 scope).
+
+Not verified (stated limitation, not a pass): the live 180-day backfill and live Intervals.icu API behaviour (rate limits, gzip FIT responses) require the owner's personal API key at runtime; the endpoint contract is recorded in `docs/adr/0001-intervals-icu-api-verification.md` and covered by mocked tests only. Run `cd backend && uv run python -m app.ingest.backfill --days 180` with `INTERVALS_API_KEY` set to complete that acceptance item.
 
 ## Progress
 
-In progress (Feature 2/11) on branch `feat/intervals-ingestion`.
+Complete (Feature 2/11) on branch `feat/intervals-ingestion`.
 
-- ING-1/2: client RED→GREEN (13 tests), commit `9e3d114` — endpoints verified against official cookbook (forum threads 80090/609); original file endpoint returns gzip, `fit-file` is the always-FIT alternative.
-- ING-3: models/migration/upserts RED→GREEN, commits `3b94069` (postgres loopback port for local tests), `443527f` — migration daa3ba6946b9 upgrade/downgrade/upgrade verified; DB tests run against compose Postgres (skip if unreachable), never SQLite.
-- ING-4: FIT parsing RED→GREEN (20 tests; real bike fixture MIT-licensed, swim lengths via pure stub functions), full suite 47 passed, mypy strict clean.
-- ING-5: idempotent sync orchestration RED→GREEN (6 tests: idempotence re-run, load column isolation, partial failures, pacing ≤10 req/s with injected clock), full suite 53 passed, mypy strict clean. FIT-first streams with streams-endpoint fallback; per-item failures never abort the run.
-- ING-6: raw FIT storage RED→GREEN (12 storage tests + 2 sync integration tests): RawFileStorage protocol, LocalVolumeStorage (flat `<activity_id>.fit`, atomic temp+replace, traversal rejection), NullStorage; `activity.raw_file_path` persisted; compose `fit-data` volume at `/data/fit` for api+worker with a Dockerfile pre-owned directory for the non-root user. Full suite 67 passed, mypy strict clean, compose config valid.
+- ING-1/2: client RED→GREEN (13 tests), commit `9e3d114` — endpoints verified against the official cookbook (forum threads 80090/609); the original-file endpoint returns gzip and `fit-file` is the always-FIT alternative.
+- ING-3: models/migration/upserts RED→GREEN, commits `3b94069` (postgres loopback port for local tests), `443527f` — migration `daa3ba6946b9` verified upgrade/downgrade/upgrade; DB tests run against compose Postgres (skip if unreachable), never SQLite.
+- ING-4: FIT parsing RED→GREEN (20 tests; real MIT-licensed bike fixture, swim lengths via pure stub functions), commit `12882b9`.
+- ING-5: idempotent sync orchestration RED→GREEN (6 tests: idempotence re-run, load-column isolation, partial failures, pacing ≤10 req/s with injected clock), commit `20fd547`. FIT-first streams with streams-endpoint fallback; per-item failures never abort the run.
+- ING-6: raw FIT storage RED→GREEN (12 storage tests + 2 sync integration tests), commit `c2db5e1`: `RawFileStorage` protocol, `LocalVolumeStorage` (flat `<activity_id>.fit`, atomic temp+replace, traversal rejection), `NullStorage`; `activity.raw_file_path` persisted; compose `fit-data` volume at `/data/fit` for api+worker, pre-owned by the non-root user in the Dockerfile.
+- ING-7: N-day backfill RED→GREEN (13 tests), commit `d2db60a`: exact N-day windows across month/year boundaries, per-window counts and logging, continue-after-failure, CLI exit codes 0/1/2.
+- ING-8: Celery `sync_intervals` task RED→GREEN (6 eager-mode tests), commit `ce4708a`: owns the async lifecycle, returns a JSON summary; window failures stay in the summary while unexpected exceptions fail the task; registration proven in the Compose worker.
+- ING-9: ADR `docs/adr/0001-intervals-icu-api-verification.md`, commit `8d00300`.
 
-Known follow-up: a re-sync whose FIT download fails resets `raw_file_path` to NULL (full-row upsert semantics); preserving the prior path needs a partial-update repository path (deferred).
-- ING-7: N-day backfill RED→GREEN (13 tests: window computation across month/year boundaries, one sync per window, count aggregation, per-window logging, continue-after-failure, CLI exit codes 0/1/2). Full suite 80 passed, mypy strict clean.
+Known follow-ups (not blockers):
 
-Known design tradeoff: backfill uses per-day windows (~2 API calls/day, ~360 for the 180-day §12.2 run; ~36s of pacing at 10 req/s) to keep failure granularity and cheap idempotent retries. A chunked-window option is a possible future improvement.
-- ING-8: Celery `sync_intervals` task RED→GREEN (6 eager-mode tests), commit `ce4708a`: owns the async lifecycle, returns a JSON summary, window failures stay in the summary while unexpected exceptions fail the task; registration via `include=["app.scheduler.tasks"]`, proven in the Compose worker with `celery inspect registered`.
-- ING-9: ADR `docs/adr/0001-intervals-icu-api-verification.md` (endpoints, auth, gzip caveat, `athlete/0` convention, rate limits, <=10 req/s pacing policy, verification date and sources).
+- A re-sync whose FIT download fails resets `raw_file_path` to NULL (full-row upsert semantics); preserving the prior path needs a partial-update repository path.
+- Backfill uses per-day windows (~2 API calls/day, ~360 for the 180-day run, ~36s of pacing at 10 req/s) for failure granularity and cheap retries; a chunked-window option is a possible later improvement.
 
-Commits (ING-8/9): ce4708a, 8d00300
-
-Commits: 9e3d114, 3b94069, 443527f, 12882b9, d362ae0, 20fd547, c2db5e1, 4658d45, d2db60a, 7cd8158, ce4708a, 8d00300, a2d4ed8
+Commits: 9e3d114, 3b94069, 443527f, 12882b9, d362ae0, 20fd547, c2db5e1, 4658d45, d2db60a, 7cd8158, ce4708a, 8d00300, a2d4ed8, d4bf33f
