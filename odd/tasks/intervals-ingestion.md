@@ -71,4 +71,4 @@ In progress (Feature 2/11) on branch `feat/intervals-ingestion`.
 - ING-3: models/migration/upserts RED→GREEN, commits `3b94069` (postgres loopback port for local tests), `443527f` — migration daa3ba6946b9 upgrade/downgrade/upgrade verified; DB tests run against compose Postgres (skip if unreachable), never SQLite.
 - ING-4: FIT parsing RED→GREEN (20 tests; real bike fixture MIT-licensed, swim lengths via pure stub functions), full suite 47 passed, mypy strict clean.
 
-Commits: 9e3d114, 3b94069, 443527f, (ING-4 pending commit)
+Commits: 9e3d114, 3b94069, 443527f, 12882b9
