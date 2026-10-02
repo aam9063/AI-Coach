@@ -1,4 +1,4 @@
-"""Heart-rate-based load: Banister TRIMP, hrTSS, and strength sRPE.
+"""Training-load primitives: TRIMP/hrTSS, sRPE, bike power TSS, run rTSS, swim sTSS.
 
 This module is part of the pure-function science engine (``app/engine/``):
 no I/O, no DB, no network, no imports of ``app.db`` / ``app.ingest`` /
@@ -67,6 +67,58 @@ semantics (see :func:`normalized_power` for details):
   qualifying window at the given ``min_valid_fraction``, raise
   ``ValueError`` instead of returning a silently degraded NP.
 
+Run pace-based load (rTSS, Coggan-style normalisation to threshold run
+speed, with the Minetti et al. 2002 grade-adjustment model):
+
+    Cr(i)  = 155.4 i^5 - 30.4 i^4 - 43.3 i^3 + 46.3 i^2 + 19.5 i + 3.6
+             (energy cost of running, J kg^-1 m^-1, at grade i =
+             elevation gain / horizontal distance; Minetti et al. 2002,
+             "Energy cost of walking and running at extreme uphill and
+             downhill slopes", J Appl Physiol 93(3):1039-1046)
+    NGS    = mean over valid speed samples of v * Cr(i) / Cr(0),
+             with Cr(0) = 3.6 (normalized graded speed, m/s)
+    IF     = NGS / threshold_run_speed
+    rTSS   = duration_h * IF^2 * 100
+
+Documented semantics (see :func:`normalized_graded_speed` for details):
+
+- The grade of sample k is ``(alt[k] - alt[k-1]) / (dist[k] - dist[k-1])``
+  from the per-second altitude (m) and cumulative distance (m) streams.
+- Where the grade is unavailable it is treated as 0 (flat): sample k = 0,
+  a missing altitude/distance sample, a non-positive distance delta (GPS
+  noise), or an altitude/distance stream that is absent entirely. Grade
+  0 is the neutral element of the Minetti model (``Cr(0) = 3.6``, so the
+  adjusted speed equals the measured speed), never an assumption that the
+  terrain was flat.
+- Missing speed samples (``None``, the parser's stream-gap marker) are
+  excluded from the mean, mirroring the power-stream gap semantics.
+- The Minetti polynomial is fitted for grades in about [-0.20, +0.40];
+  grades outside that domain are extrapolations and are NOT clamped (no
+  silent correction of sensor data).
+- ``threshold_run_speed`` is a required parameter: the owner currently
+  has no run threshold pace configured (documented gap in the ODD task),
+  and a non-positive threshold raises ``ValueError`` rather than ever
+  defaulting silently.
+
+Swim pace-based load (sTSS, Coggan-style normalisation to critical swim
+speed):
+
+    NSS  = mean over valid, strictly positive speed samples (m/s)
+    IF   = NSS / css
+    sTSS = duration_h * IF^3 * 100
+
+Documented semantics (see :func:`normalized_swim_speed` for details):
+
+- Normalized swim speed is the arithmetic mean of valid, strictly
+  positive speed samples. Rest intervals (zero speed), negative glitch
+  values and missing samples are excluded from the mean: rest time is
+  recovery, not locomotion, and its load contribution is already carried
+  by the wall-clock duration term. Excluding rests keeps the intensity
+  factor representative of the actual swimming while the duration term
+  still accrues load for the full session.
+- ``css`` (critical swim speed, m/s) is a required explicit parameter;
+  a non-positive CSS raises ``ValueError`` rather than defaulting.
+
 All functions are pure and fully typed; validation errors raise
 ``ValueError`` rather than clamping or silently defaulting, except the
 documented clamping of ``dHRr`` to [0, 1].
@@ -78,14 +130,24 @@ from dataclasses import dataclass
 
 __all__ = [
     "BikePowerLoad",
+    "RunPaceLoad",
+    "SwimPaceLoad",
     "TrimpCoefficients",
     "bike_power_load",
+    "grade_adjusted_speed",
     "hr_ratio",
     "hrtss",
     "intensity_factor",
+    "minetti_energy_cost",
+    "normalized_graded_speed",
     "normalized_power",
+    "normalized_swim_speed",
     "power_tss",
+    "run_pace_load",
+    "run_pace_tss",
     "srpe_load",
+    "swim_pace_load",
+    "swim_tss",
     "trimp",
     "trimp_at_lthr_reference",
 ]
@@ -363,4 +425,299 @@ def bike_power_load(
         normalized_power=np_value,
         intensity_factor=if_value,
         tss=power_tss(duration_s, np_value, ftp),
+    )
+
+
+MINETTI_CR_FLAT = 3.6
+"""Minetti et al. 2002 energy cost of flat running: Cr(0) = 3.6 J kg^-1 m^-1.
+
+Module-level constant so tests and callers can reference the normaliser of
+the grade adjustment. Module-level constant owned here (LOAD-11 may move it
+to settings with its source comment).
+"""
+
+
+def minetti_energy_cost(grade: float) -> float:
+    """Energy cost of running per unit distance at grade i (J kg^-1 m^-1).
+
+    Formula: Cr(i) = 155.4 i^5 - 30.4 i^4 - 43.3 i^3 + 46.3 i^2 + 19.5 i
+    + 3.6, with i = elevation change / horizontal distance (rise over run,
+    dimensionless; +0.1 = 10% uphill).
+
+    The polynomial is fitted for grades in about [-0.20, +0.40]; outside
+    that domain the value is an extrapolation and is deliberately NOT
+    clamped (no silent correction of sensor data).
+
+    Reference: Minetti, Ardigo & Capelli 2002, "Energy cost of walking and
+    running at extreme uphill and downhill slopes", J Appl Physiol
+    93(3):1039-1046.
+    """
+    return (
+        155.4 * grade**5
+        - 30.4 * grade**4
+        - 43.3 * grade**3
+        + 46.3 * grade**2
+        + 19.5 * grade
+        + 3.6
+    )
+
+
+def grade_adjusted_speed(speed_mps: float, grade: float) -> float:
+    """Flat-equivalent (grade-adjusted) speed: v_flat = v * Cr(i) / Cr(0).
+
+    Running at grade i costs Cr(i) J per metre instead of the flat cost
+    Cr(0) = 3.6 (:data:`MINETTI_CR_FLAT`), so the same physical speed is
+    rescaled to the speed that would cost the same energy on flat ground.
+    Uphill (i > 0) yields v_flat > v; downhill (i < 0) v_flat < v.
+
+    Reference: Minetti et al. 2002.
+    """
+    return speed_mps * minetti_energy_cost(grade) / MINETTI_CR_FLAT
+
+
+def _sample_grade(
+    index: int,
+    distance_samples: Sequence[float | None] | None,
+    altitude_samples: Sequence[float | None] | None,
+) -> float:
+    """Grade of sample k = (alt[k] - alt[k-1]) / (dist[k] - dist[k-1]).
+
+    Returns 0.0 where the grade is unavailable: k = 0 (no preceding
+    sample), a missing altitude/distance sample, a non-positive distance
+    delta (GPS noise), or an absent stream. See
+    :func:`normalized_graded_speed` for why 0 is the correct neutral value.
+    """
+    if distance_samples is None or altitude_samples is None or index == 0:
+        return 0.0
+    d_prev = distance_samples[index - 1]
+    d_curr = distance_samples[index]
+    a_prev = altitude_samples[index - 1]
+    a_curr = altitude_samples[index]
+    if d_prev is None or d_curr is None or a_prev is None or a_curr is None:
+        return 0.0
+    delta_d = d_curr - d_prev
+    if delta_d <= 0.0:
+        return 0.0
+    return (a_curr - a_prev) / delta_d
+
+
+def normalized_graded_speed(
+    speed_samples: Sequence[float | None],
+    *,
+    distance_samples: Sequence[float | None] | None = None,
+    altitude_samples: Sequence[float | None] | None = None,
+) -> float:
+    """Normalized graded speed (NGS): mean of per-sample grade-adjusted speeds.
+
+    Formula: NGS = mean over valid (non-``None``) speed samples of
+    ``v * Cr(grade) / Cr(0)`` (:func:`grade_adjusted_speed`), with the
+    per-sample grade from :func:`_sample_grade`. An arithmetic mean is used
+    (rather than Coggan's fourth-power smoothing): the pace-load curve
+    already applies the quadratic IF scaling, so no additional variability
+    weighting is applied — the choice is documented and deterministic.
+
+    Grade availability: the grade of sample k is
+    ``(alt[k] - alt[k-1]) / (dist[k] - dist[k-1])`` from the per-second
+    altitude (m) and cumulative distance (m) streams. Where it is
+    unavailable — k = 0, missing (``None``) samples, a non-positive
+    distance delta (GPS noise), or an altitude/distance stream that is
+    ``None`` entirely — the grade is treated as 0. ``Cr(0) = 3.6`` makes
+    grade 0 the neutral element (adjusted speed = measured speed), so this
+    is a documented absence semantics, never a claim that the terrain was
+    flat.
+
+    Missing speed samples (``None``) are excluded from the mean, mirroring
+    the power-stream gap semantics of :func:`normalized_power`. Streams of
+    different lengths raise ``ValueError`` (the ingest parser emits
+    aligned streams; misalignment is a bug, not a graceful-degradation
+    case). Zero valid samples raise ``ValueError`` ("no usable run speed
+    data").
+
+    Reference: Minetti et al. 2002; NGS/IF/rTSS convention per Coggan-style
+    pace normalisation (1 h at threshold run speed = 100 rTSS).
+    """
+    if distance_samples is not None and len(distance_samples) != len(speed_samples):
+        raise ValueError(
+            "speed and distance streams must have the same length: "
+            f"{len(speed_samples)} != {len(distance_samples)}"
+        )
+    if altitude_samples is not None and len(altitude_samples) != len(speed_samples):
+        raise ValueError(
+            "speed and altitude streams must have the same length: "
+            f"{len(speed_samples)} != {len(altitude_samples)}"
+        )
+    graded: list[float] = []
+    for index, speed in enumerate(speed_samples):
+        if speed is None:
+            continue  # stream gap: excluded from the mean
+        grade = _sample_grade(index, distance_samples, altitude_samples)
+        graded.append(grade_adjusted_speed(speed, grade))
+    if not graded:
+        raise ValueError(
+            "no usable run speed data: samples sequence is empty or all missing"
+        )
+    return math.fsum(graded) / len(graded)
+
+
+def run_pace_tss(
+    duration_s: float, ngs_mps: float, threshold_run_speed_mps: float
+) -> float:
+    """Run Training Stress Score: rTSS = duration_h * IF^2 * 100.
+
+    Formula: IF = NGS / threshold_run_speed; rTSS = (duration_s / 3600) *
+    IF^2 * 100, so one hour at NGS = threshold run speed scores exactly
+    100 rTSS.
+
+    ``threshold_run_speed`` is required and non-positive values raise
+    ``ValueError``: the owner has no run threshold pace configured yet
+    (documented gap), and a missing threshold must never silently default.
+    Non-positive duration or a negative NGS also raise ``ValueError``.
+
+    Reference: Coggan-style pace normalisation; grade model per Minetti
+    et al. 2002.
+    """
+    if duration_s <= 0.0:
+        raise ValueError(f"duration must be positive, got {duration_s!r} seconds")
+    if threshold_run_speed_mps <= 0.0:
+        raise ValueError(
+            "threshold_run_speed must be positive, got "
+            f"{threshold_run_speed_mps!r} m/s (owner has no run threshold "
+            "pace configured; supply an explicit positive value)"
+        )
+    if ngs_mps < 0.0:
+        raise ValueError(f"NGS must be non-negative, got {ngs_mps!r} m/s")
+    if_value = ngs_mps / threshold_run_speed_mps
+    return duration_s / 3600.0 * math.pow(if_value, 2) * 100.0
+
+
+@dataclass(frozen=True, slots=True)
+class RunPaceLoad:
+    """Run pace-based load results consumed by method selection (LOAD-6).
+
+    ``normalized_graded_speed`` in m/s, ``intensity_factor`` dimensionless,
+    ``tss`` on the rTSS scale (1 h at threshold run speed = 100).
+    """
+
+    normalized_graded_speed: float
+    intensity_factor: float
+    tss: float
+
+
+def run_pace_load(
+    speed_samples: Sequence[float | None],
+    *,
+    duration_s: float,
+    threshold_run_speed: float,
+    distance_samples: Sequence[float | None] | None = None,
+    altitude_samples: Sequence[float | None] | None = None,
+) -> RunPaceLoad:
+    """Convenience entry point: NGS, IF and rTSS for one run session.
+
+    Combines :func:`normalized_graded_speed` (grade-unavailability and
+    missing-sample semantics documented there) and :func:`run_pace_tss`.
+    ``duration_s`` is the session wall-clock duration in seconds (explicit,
+    because a gapped per-second stream has fewer valid samples than
+    seconds elapsed). Returns a :class:`RunPaceLoad` for downstream method
+    selection.
+
+    Reference: Minetti et al. 2002; Coggan-style pace normalisation.
+    """
+    ngs = normalized_graded_speed(
+        speed_samples,
+        distance_samples=distance_samples,
+        altitude_samples=altitude_samples,
+    )
+    # run_pace_tss validates the threshold (ValueError) before any division.
+    tss = run_pace_tss(duration_s, ngs, threshold_run_speed)
+    return RunPaceLoad(
+        normalized_graded_speed=ngs,
+        intensity_factor=ngs / threshold_run_speed,
+        tss=tss,
+    )
+
+
+def normalized_swim_speed(speed_samples: Sequence[float | None]) -> float:
+    """Normalized swim speed (NSS): mean of valid, strictly positive speeds.
+
+    Formula: NSS = mean over valid, strictly positive speed samples (m/s).
+
+    Rest (zero-speed), negative glitch values and missing (``None``)
+    samples are excluded from the mean. Rationale: rest time is recovery,
+    not locomotion, and its load contribution is already carried by the
+    wall-clock ``duration_s`` term of :func:`swim_tss`; excluding rests
+    keeps the intensity factor representative of the actual swimming
+    instead of deflating it with stoppage time. A series with no strictly
+    positive sample raises ``ValueError`` ("no usable swim speed data") —
+    an all-rest session is not silently scored.
+
+    Reference: Coggan-style pace normalisation to critical swim speed
+    (1 h at CSS = 100 sTSS).
+    """
+    valid = [s for s in speed_samples if s is not None and s > 0.0]
+    if not valid:
+        raise ValueError(
+            "no usable swim speed data: samples sequence is empty, all "
+            "missing, or contains no strictly positive (swimming) sample"
+        )
+    return math.fsum(valid) / len(valid)
+
+
+def swim_tss(duration_s: float, nss_mps: float, css_mps: float) -> float:
+    """Swim Training Stress Score: sTSS = duration_h * IF^3 * 100.
+
+    Formula: IF = NSS / CSS; sTSS = (duration_s / 3600) * IF^3 * 100, so
+    one hour at NSS = CSS scores exactly 100 sTSS. The cubic intensity
+    exponent reflects the extreme sensitivity of swim cost to velocity.
+
+    Non-positive CSS (misconfigured threshold), non-positive duration, or
+    a negative NSS raise ``ValueError``.
+
+    Reference: Coggan-style pace normalisation to critical swim speed.
+    """
+    if duration_s <= 0.0:
+        raise ValueError(f"duration must be positive, got {duration_s!r} seconds")
+    if css_mps <= 0.0:
+        raise ValueError(f"CSS must be positive, got {css_mps!r} m/s")
+    if nss_mps < 0.0:
+        raise ValueError(f"NSS must be non-negative, got {nss_mps!r} m/s")
+    if_value = nss_mps / css_mps
+    return duration_s / 3600.0 * math.pow(if_value, 3) * 100.0
+
+
+@dataclass(frozen=True, slots=True)
+class SwimPaceLoad:
+    """Swim pace-based load results consumed by method selection (LOAD-6).
+
+    ``normalized_swim_speed`` in m/s, ``intensity_factor`` dimensionless,
+    ``tss`` on the sTSS scale (1 h at CSS = 100).
+    """
+
+    normalized_swim_speed: float
+    intensity_factor: float
+    tss: float
+
+
+def swim_pace_load(
+    speed_samples: Sequence[float | None],
+    *,
+    duration_s: float,
+    css: float,
+) -> SwimPaceLoad:
+    """Convenience entry point: NSS, IF and sTSS for one swim session.
+
+    Combines :func:`normalized_swim_speed` (rest/missing-sample semantics
+    documented there) and :func:`swim_tss`. ``duration_s`` is the session
+    wall-clock duration in seconds (explicit, because rest intervals make
+    the valid-sample count smaller than the elapsed seconds). Returns a
+    :class:`SwimPaceLoad` for downstream method selection.
+
+    Reference: Coggan-style pace normalisation to critical swim speed.
+    """
+    nss = normalized_swim_speed(speed_samples)
+    # swim_tss validates the CSS (ValueError) before any division.
+    tss = swim_tss(duration_s, nss, css)
+    return SwimPaceLoad(
+        normalized_swim_speed=nss,
+        intensity_factor=nss / css,
+        tss=tss,
     )
