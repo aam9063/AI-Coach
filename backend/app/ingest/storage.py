@@ -35,7 +35,7 @@ from app.core.settings import Settings
 class RawFileStorage(Protocol):
     """Storage interface for archived raw FIT files (ING-6, §5.2)."""
 
-    def save(self, activity_id: int, fit_bytes: bytes) -> str:
+    def save(self, activity_id: str, fit_bytes: bytes) -> str:
         """Persist the bytes and return the storage-relative path."""
         ...
 
@@ -59,7 +59,7 @@ class LocalVolumeStorage:
     def __init__(self, root_dir: str | os.PathLike[str]) -> None:
         self._root = Path(root_dir)
 
-    def save(self, activity_id: int, fit_bytes: bytes) -> str:
+    def save(self, activity_id: str, fit_bytes: bytes) -> str:
         """Write the bytes atomically as ``<activity_id>.fit`` under the root."""
         self._root.mkdir(parents=True, exist_ok=True)
         relative = f"{activity_id}.fit"
@@ -95,7 +95,7 @@ class LocalVolumeStorage:
 class NullStorage:
     """No-op storage for the optional disabled mode and for tests."""
 
-    def save(self, activity_id: int, fit_bytes: bytes) -> str:
+    def save(self, activity_id: str, fit_bytes: bytes) -> str:
         return ""
 
     def load(self, path: str) -> bytes:

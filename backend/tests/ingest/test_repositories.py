@@ -36,7 +36,7 @@ class TestUpsertActivity:
     async def test_create_then_update_without_duplicate(self, db_session):  # type: ignore[no-untyped-def]
         created = await repository.upsert_activity(
             db_session,
-            source_id=42,
+            source_id="i163428838",
             type="Ride",
             name="Original",
             start_time=_T0,
@@ -51,7 +51,7 @@ class TestUpsertActivity:
 
         updated = await repository.upsert_activity(
             db_session,
-            source_id=42,
+            source_id="i163428838",
             type="Ride",
             name="Renamed",
             start_time=_T0,
@@ -63,7 +63,9 @@ class TestUpsertActivity:
         assert await _count(db_session, ActivityRow) == 1
         stored = (
             await db_session.execute(
-                _fresh(select(ActivityRow).where(ActivityRow.source_id == 42))
+                _fresh(
+                    select(ActivityRow).where(ActivityRow.source_id == "i163428838")
+                )
             )
         ).scalar_one()
         assert stored.name == "Renamed"
@@ -73,10 +75,10 @@ class TestUpsertActivity:
 
     async def test_different_source_ids_create_distinct_rows(self, db_session):  # type: ignore[no-untyped-def]
         await repository.upsert_activity(
-            db_session, source_id=1, type="Run", name="A", start_time=_T0
+            db_session, source_id="i163428840", type="Run", name="A", start_time=_T0
         )
         await repository.upsert_activity(
-            db_session, source_id=2, type="Run", name="B", start_time=_T0
+            db_session, source_id="i163428841", type="Run", name="B", start_time=_T0
         )
         assert await _count(db_session, ActivityRow) == 2
 
@@ -84,7 +86,11 @@ class TestUpsertActivity:
 class TestUpsertActivityStream:
     async def test_attach_then_replace_without_duplicate(self, db_session):  # type: ignore[no-untyped-def]
         activity = await repository.upsert_activity(
-            db_session, source_id=99, type="Ride", name="Ride", start_time=_T0
+            db_session,
+            source_id="i163419945",
+            type="Ride",
+            name="Ride",
+            start_time=_T0,
         )
 
         first = await repository.upsert_activity_stream(

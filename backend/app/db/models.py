@@ -39,7 +39,10 @@ class ActivityRow(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     source: Mapped[str] = mapped_column(String(32), default="intervals")
-    source_id: Mapped[int] = mapped_column(Integer)
+    # Real Intervals.icu activity ids are strings with an "i" prefix
+    # (live-verified, e.g. "i163428838"); the (source, source_id) unique key
+    # remains the idempotency anchor.
+    source_id: Mapped[str] = mapped_column(String(32))
 
     type: Mapped[str] = mapped_column(String(64), default="")
     name: Mapped[str] = mapped_column(String(255), default="")

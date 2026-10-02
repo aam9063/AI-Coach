@@ -104,10 +104,11 @@ class IntervalsClient:
         )
         return [Activity.model_validate(item) for item in response.json()]
 
-    def get_streams(self, activity_id: int) -> list[Stream]:
+    def get_streams(self, activity_id: str) -> list[Stream]:
         """Fetch per-second streams (power, HR, speed, cadence, altitude, distance, time).
 
-        ``GET /activity/{id}/streams`` (verified: official API cookbook).
+        ``GET /activity/{id}/streams`` where ``id`` is the string activity id
+        (live-verified form, e.g. ``i163428838``).
         """
         response = self._request("GET", f"/activity/{activity_id}/streams")
         return [Stream.model_validate(item) for item in response.json()]
@@ -125,17 +126,20 @@ class IntervalsClient:
         )
         return [Wellness.model_validate(item) for item in response.json()]
 
-    def download_original_file(self, activity_id: int) -> bytes:
+    def download_original_file(self, activity_id: str) -> bytes:
         """Download the original uploaded file for an activity as raw bytes.
 
-        ``GET /activity/{id}/file`` — the response body is GZIP-compressed
-        (verified: official API cookbook and forum threads 80090/609) and may
-        be fit/gpx/tcx bytes once decompressed; gzip is removed here.
+        ``GET /activity/{id}/file`` — the response body may be
+        GZIP-compressed or an uncompressed FIT file (live-verified: a
+        request returned an uncompressed FIT, ``b'.FIT'`` at offset 8), so
+        gzip is removed here only when the magic bytes say so; other bodies
+        pass through unchanged. Decompressed content may be fit/gpx/tcx
+        bytes.
         """
         response = self._request("GET", f"/activity/{activity_id}/file")
         return self._gunzip(response.content)
 
-    def download_fit_file(self, activity_id: int) -> bytes:
+    def download_fit_file(self, activity_id: str) -> bytes:
         """Download the generated always-FIT file for an activity as raw bytes.
 
         ``GET /activity/{id}/fit-file`` (verified: forum threads 80090/609).

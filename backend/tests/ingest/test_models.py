@@ -23,7 +23,7 @@ pytestmark = pytest.mark.anyio
 _T0 = datetime(2026, 2, 1, 8, 30, tzinfo=UTC)
 
 
-def _activity(source_id: int, name: str = "Morning ride") -> ActivityRow:
+def _activity(source_id: str, name: str = "Morning ride") -> ActivityRow:
     return ActivityRow(
         source="intervals",
         source_id=source_id,
@@ -40,11 +40,13 @@ def _activity(source_id: int, name: str = "Morning ride") -> ActivityRow:
 
 class TestActivity:
     async def test_roundtrip(self, db_session):  # type: ignore[no-untyped-def]
-        db_session.add(_activity(1001))
+        db_session.add(_activity("i163428838"))
         await db_session.flush()
 
         stored = (
-            await db_session.execute(select(ActivityRow).where(ActivityRow.source_id == 1001))
+            await db_session.execute(
+                select(ActivityRow).where(ActivityRow.source_id == "i163428838")
+            )
         ).scalar_one()
 
         assert stored.id is not None
@@ -63,9 +65,9 @@ class TestActivity:
         assert stored.intervals_icu_load == 142.5
 
     async def test_source_id_is_unique_for_idempotency(self, db_session):  # type: ignore[no-untyped-def]
-        db_session.add(_activity(7))
+        db_session.add(_activity("i163428838"))
         await db_session.flush()
-        db_session.add(_activity(7, name="Duplicate"))
+        db_session.add(_activity("i163428838", name="Duplicate"))
         with pytest.raises(IntegrityError):
             await db_session.flush()
         await db_session.rollback()
@@ -73,7 +75,7 @@ class TestActivity:
 
 class TestActivityStream:
     async def test_roundtrip_linked_to_activity(self, db_session):  # type: ignore[no-untyped-def]
-        activity = _activity(2002)
+        activity = _activity("i163419945")
         db_session.add(activity)
         await db_session.flush()
         db_session.add(
@@ -93,7 +95,7 @@ class TestActivityStream:
         assert stored.payload == [0.0, 100.0, 250.0]
 
     async def test_stream_type_unique_per_activity(self, db_session):  # type: ignore[no-untyped-def]
-        activity = _activity(2003)
+        activity = _activity("i163419946")
         db_session.add(activity)
         await db_session.flush()
         db_session.add(ActivityStreamRow(activity_id=activity.id, stream_type="hr", payload=[60]))

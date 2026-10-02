@@ -96,3 +96,12 @@ Known follow-ups (not blockers):
 - Backfill uses per-day windows (~2 API calls/day, ~360 for the 180-day run, ~36s of pacing at 10 req/s) for failure granularity and cheap retries; a chunked-window option is a possible later improvement.
 
 Commits: 9e3d114, 3b94069, 443527f, 12882b9, d362ae0, 20fd547, c2db5e1, 4658d45, d2db60a, 7cd8158, ce4708a, 8d00300, a2d4ed8, d4bf33f
+
+## Defects found against the live API (2026-10-02)
+
+Running the real 180-day backfill with the owner's API key exposed a contract bug that 86 mocked tests could not catch:
+
+- **Activity ids are strings** (`i163428838`, verified for all 26 activities in the window; the API's own docs use `GET /api/v1/activity/i55751783/file`). The model declared `id: int`, so **every** real activity failed validation and the backfill could not complete. Fixed on branch `fix/ingest-activity-id`: `Activity.id` is `str` with an int→str coercion validator, the string id is threaded through client/sync/repository/storage, and a migration alters `activity.source_id` from `Integer` to `String(32)` preserving the unique anchor. Verified live afterwards: 26/26 activities validate.
+- **The original file endpoint is not always gzipped**: `/activity/{id}/file` returned an uncompressed FIT (`b'.FIT'`, 35,828 bytes). The magic-byte gzip detection in the client already handled both cases — no change needed, and the assumption is now documented.
+
+Both findings are recorded in `docs/adr/0001-intervals-icu-api-verification.md` context: mocked tests alone are not sufficient evidence for an external API contract.

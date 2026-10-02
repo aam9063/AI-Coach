@@ -23,7 +23,8 @@ async def upsert_activity(
     session: AsyncSession,
     *,
     source: str = "intervals",
-    source_id: int,
+    # Real Intervals.icu ids are strings with an "i" prefix (live-verified).
+    source_id: str,
     type: str = "",
     name: str = "",
     start_time: datetime,
