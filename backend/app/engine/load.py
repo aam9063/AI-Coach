@@ -125,13 +125,17 @@ documented clamping of ``dHRr`` to [0, 1].
 """
 
 import math
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from typing import Final, Literal
 
 __all__ = [
+    "ActivityLoadInput",
     "BikePowerLoad",
+    "LoadSelection",
     "RunPaceLoad",
     "SwimPaceLoad",
+    "ThresholdBundle",
     "TrimpCoefficients",
     "bike_power_load",
     "grade_adjusted_speed",
@@ -145,6 +149,7 @@ __all__ = [
     "power_tss",
     "run_pace_load",
     "run_pace_tss",
+    "select_load_method",
     "srpe_load",
     "swim_pace_load",
     "swim_tss",
@@ -721,3 +726,307 @@ def swim_pace_load(
         intensity_factor=nss / css,
         tss=tss,
     )
+
+
+# ---------------------------------------------------------------------------
+# Method selection (PROJECT_BRIEF section 7.1): power -> pace/speed -> HR -> sRPE
+# ---------------------------------------------------------------------------
+
+
+LoadMethodKey = Literal["power", "pace_speed", "hr", "srpe"]
+"""Stable machine-readable keys of the load methods (PROJECT_BRIEF section 7.1).
+
+The selection order is fixed: power -> pace/speed -> HR -> sRPE. The chosen
+key is part of :class:`LoadSelection` so persistence (LOAD-10) can store
+which method produced a load value together with ``engine_version``.
+"""
+
+
+_CYCLING_SPORTS: Final[frozenset[str]] = frozenset(
+    {"ride", "virtualride", "gravelride", "mountainbikeride", "ebikeride"}
+)
+"""Activity types the bike power method applies to (no run-power method in the brief)."""
+
+_RUNNING_SPORTS: Final[frozenset[str]] = frozenset(
+    {"run", "trailrun", "treadmillrun", "virtualrun"}
+)
+"""Activity types the run pace method applies to (threshold run speed)."""
+
+_SWIMMING_SPORTS: Final[frozenset[str]] = frozenset({"swim"})
+"""Activity types the swim pace method applies to (CSS)."""
+
+_KNOWN_SPORTS: Final[frozenset[str]] = (
+    _CYCLING_SPORTS
+    | _RUNNING_SPORTS
+    | _SWIMMING_SPORTS
+    | frozenset({"weighttraining", "strengthworkout", "workout"})
+)
+"""Recognised activity types (matched case-insensitively). Unknown sports raise
+``ValueError`` rather than being silently guessed into a method bucket."""
+
+
+@dataclass(frozen=True, slots=True)
+class ActivityLoadInput:
+    """One activity, described for method selection (PROJECT_BRIEF section 7.1).
+
+    Streams are the per-second ingest-parser sequences (``None`` entries
+    mark stream gaps) or ``None`` when the stream is absent entirely.
+    ``sport`` is a Strava-style activity type, matched case-insensitively
+    against :data:`_KNOWN_SPORTS` (e.g. ``"Ride"``, ``"Run"``, ``"Swim"``,
+    ``"WeightTraining"``); unknown sports raise ``ValueError`` so a typo
+    can never silently change the selected method.
+    """
+
+    sport: str
+    duration_s: float
+    power_samples: Sequence[float | None] | None = None
+    speed_samples: Sequence[float | None] | None = None
+    distance_samples: Sequence[float | None] | None = None
+    altitude_samples: Sequence[float | None] | None = None
+    hr_avg_bpm: float | None = None
+    rpe: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ThresholdBundle:
+    """Athlete thresholds used by method selection.
+
+    Every field is an explicit owner configuration (loaded from settings by
+    the caller; LOAD-11 owns the wiring — nothing is read from settings
+    here). ``None`` means "not configured" and makes the corresponding
+    method inapplicable (reported as a skip reason), never silently
+    defaulted. ``srpe_tss_equivalent_factor`` defaults to 1.0 (the raw
+    Foster load); it is the single documented knob mapping Foster AU onto
+    the TSS scale (Foster et al. 2001; see :func:`srpe_load`).
+    """
+
+    ftp_watts: float | None = None
+    threshold_run_speed_mps: float | None = None
+    css_mps: float | None = None
+    lthr_bpm: float | None = None
+    hr_max_bpm: float | None = None
+    hr_rest_bpm: float | None = None
+    srpe_tss_equivalent_factor: float = 1.0
+
+
+@dataclass(frozen=True, slots=True)
+class LoadSelection:
+    """Outcome of the fixed method-selection rule (PROJECT_BRIEF section 7.1).
+
+    ``method`` is the stable machine-readable key of the chosen method
+    (:data:`LoadMethodKey`); ``tss`` the load value in TSS-equivalent units;
+    ``detail`` the method-specific detail — :class:`BikePowerLoad` for
+    ``"power"``, :class:`RunPaceLoad` / :class:`SwimPaceLoad` for
+    ``"pace_speed"``, the dHRr intensity fraction for ``"hr"`` and the raw
+    Foster load (RPE x minutes) for ``"srpe"``; ``skipped`` maps each
+    method evaluated *before* the chosen one (and therefore skipped) to a
+    short human-readable reason, so the choice is diagnosable and
+    persistable (LOAD-10 persists ``method`` with ``engine_version``).
+    """
+
+    method: LoadMethodKey
+    tss: float
+    detail: float | BikePowerLoad | RunPaceLoad | SwimPaceLoad
+    skipped: Mapping[str, str]
+
+
+def _normalize_sport(sport: str) -> str:
+    """Lower-case a sport string and reject unknown activity types."""
+    normalized = sport.strip().lower()
+    if normalized not in _KNOWN_SPORTS:
+        raise ValueError(
+            f"unknown sport {sport!r}: expected one of {sorted(_KNOWN_SPORTS)}"
+        )
+    return normalized
+
+
+def select_load_method(
+    activity: ActivityLoadInput,
+    thresholds: ThresholdBundle,
+    *,
+    coefficients: TrimpCoefficients,
+) -> LoadSelection:
+    """Select the best available load method in the fixed order (section 7.1).
+
+    Order: power -> pace/speed -> HR -> sRPE. The first applicable method
+    wins; every method evaluated before the chosen one is recorded in
+    ``skipped`` with a short reason. Per-sport applicability:
+
+    - ``power``: cycling sports only, requires usable (not all-``None``)
+      power samples AND a positive FTP. There is no bike speed-based TSS
+      in the brief, so a power-less ride can never use speed and falls
+      through to HR.
+    - ``pace_speed``: run requires usable speed samples AND a positive
+      threshold run speed; swim requires at least one strictly positive
+      speed sample AND a positive CSS. Missing thresholds are reported as
+      skips (the owner currently has no run threshold pace configured).
+    - ``hr``: requires an average HR AND the HR thresholds (LTHR, max,
+      rest, with ``HRmax > HRrest``).
+    - ``srpe``: requires a recorded RPE (and a positive duration).
+
+    Computation delegates entirely to the existing primitives
+    (:func:`bike_power_load`, :func:`run_pace_load`, :func:`swim_pace_load`,
+    :func:`trimp`/:func:`hrtss`, :func:`srpe_load`) — this function adds
+    selection and traceability, not new math. A ``ValueError`` raised by a
+    primitive despite apparently applicable inputs (e.g. power data too
+    gapped for a qualifying NP window at the strict default) is converted
+    into a skip reason and the chain falls through, so one degraded stream
+    never loses the session's load.
+
+    When no method is applicable the function raises ``ValueError`` listing
+    every skip reason — it never returns 0 or ``None`` silently.
+
+    Thresholds and coefficients are parameters; nothing is read from
+    settings here (LOAD-11 owns the wiring).
+
+    Reference: PROJECT_BRIEF section 7.1 (fixed selection order, persisted
+    method); per-method formulas and references in the respective
+    primitives' docstrings (Coggan / Allen & Coggan; Minetti et al. 2002;
+    Banister 1991; Foster et al. 2001).
+    """
+    if activity.duration_s <= 0.0:
+        raise ValueError(
+            f"duration must be positive, got {activity.duration_s!r} seconds"
+        )
+    sport = _normalize_sport(activity.sport)
+    skipped: dict[str, str] = {}
+
+    # --- 1. power ----------------------------------------------------------
+    if sport not in _CYCLING_SPORTS:
+        skipped["power"] = (
+            f"power-based load applies to cycling sports only, not {sport!r}"
+        )
+    elif activity.power_samples is None or not any(
+        s is not None for s in activity.power_samples
+    ):
+        skipped["power"] = (
+            "no usable power samples (stream absent, empty or all missing)"
+        )
+    elif thresholds.ftp_watts is None or thresholds.ftp_watts <= 0.0:
+        skipped["power"] = "no positive FTP configured"
+    else:
+        try:
+            power_load = bike_power_load(
+                activity.power_samples,
+                duration_s=activity.duration_s,
+                ftp=thresholds.ftp_watts,
+            )
+        except ValueError as exc:
+            skipped["power"] = f"power data unusable: {exc}"
+        else:
+            return LoadSelection("power", power_load.tss, power_load, skipped)
+
+    # --- 2. pace/speed -----------------------------------------------------
+    if sport in _CYCLING_SPORTS:
+        skipped["pace_speed"] = (
+            "speed is not a load method for cycling "
+            "(no bike speed-based TSS exists in the brief)"
+        )
+    elif sport in _RUNNING_SPORTS:
+        if thresholds.threshold_run_speed_mps is None:
+            skipped["pace_speed"] = (
+                "no run threshold speed configured "
+                "(owner has no run threshold pace yet)"
+            )
+        elif thresholds.threshold_run_speed_mps <= 0.0:
+            skipped["pace_speed"] = (
+                "run threshold speed must be positive, got "
+                f"{thresholds.threshold_run_speed_mps!r}"
+            )
+        elif activity.speed_samples is None or not any(
+            s is not None for s in activity.speed_samples
+        ):
+            skipped["pace_speed"] = (
+                "no usable speed samples (stream absent, empty or all missing)"
+            )
+        else:
+            try:
+                run_load = run_pace_load(
+                    activity.speed_samples,
+                    duration_s=activity.duration_s,
+                    threshold_run_speed=thresholds.threshold_run_speed_mps,
+                    distance_samples=activity.distance_samples,
+                    altitude_samples=activity.altitude_samples,
+                )
+            except ValueError as exc:
+                skipped["pace_speed"] = f"run speed data unusable: {exc}"
+            else:
+                return LoadSelection("pace_speed", run_load.tss, run_load, skipped)
+    elif sport in _SWIMMING_SPORTS:
+        if thresholds.css_mps is None:
+            skipped["pace_speed"] = "no CSS configured"
+        elif thresholds.css_mps <= 0.0:
+            skipped["pace_speed"] = f"CSS must be positive, got {thresholds.css_mps!r}"
+        elif activity.speed_samples is None or not any(
+            s is not None and s > 0.0 for s in activity.speed_samples
+        ):
+            skipped["pace_speed"] = (
+                "no usable swim speed data (no strictly positive swimming sample)"
+            )
+        else:
+            try:
+                swim_load = swim_pace_load(
+                    activity.speed_samples,
+                    duration_s=activity.duration_s,
+                    css=thresholds.css_mps,
+                )
+            except ValueError as exc:
+                skipped["pace_speed"] = f"swim speed data unusable: {exc}"
+            else:
+                return LoadSelection("pace_speed", swim_load.tss, swim_load, skipped)
+
+    # --- 3. HR -------------------------------------------------------------
+    if activity.hr_avg_bpm is None:
+        skipped["hr"] = "no average HR recorded"
+    elif (
+        thresholds.lthr_bpm is None
+        or thresholds.hr_max_bpm is None
+        or thresholds.hr_rest_bpm is None
+    ):
+        skipped["hr"] = "HR thresholds (LTHR, max, rest) not configured"
+    elif thresholds.hr_max_bpm <= thresholds.hr_rest_bpm:
+        skipped["hr"] = (
+            f"degenerate HR threshold range: HRmax {thresholds.hr_max_bpm!r} "
+            f"<= HRrest {thresholds.hr_rest_bpm!r}"
+        )
+    else:
+        try:
+            ratio = hr_ratio(
+                activity.hr_avg_bpm, thresholds.hr_rest_bpm, thresholds.hr_max_bpm
+            )
+            duration_min = activity.duration_s / 60.0
+            trimp_value = trimp(
+                duration_min,
+                activity.hr_avg_bpm,
+                thresholds.hr_rest_bpm,
+                thresholds.hr_max_bpm,
+                coefficients=coefficients,
+            )
+            reference = trimp_at_lthr_reference(
+                thresholds.hr_rest_bpm,
+                thresholds.hr_max_bpm,
+                thresholds.lthr_bpm,
+                coefficients=coefficients,
+            )
+            hr_tss = hrtss(trimp_value, reference)
+        except ValueError as exc:
+            skipped["hr"] = f"HR data unusable: {exc}"
+        else:
+            return LoadSelection("hr", hr_tss, ratio, skipped)
+
+    # --- 4. sRPE -----------------------------------------------------------
+    if activity.rpe is None:
+        skipped["srpe"] = "no RPE recorded"
+        reasons = "; ".join(f"{key}: {reason}" for key, reason in skipped.items())
+        raise ValueError(
+            f"no applicable load method for sport {activity.sport!r}: {reasons}"
+        )
+    duration_min = activity.duration_s / 60.0
+    foster_load = activity.rpe * duration_min
+    srpe_tss = srpe_load(
+        activity.rpe,
+        duration_min,
+        tss_equivalent_factor=thresholds.srpe_tss_equivalent_factor,
+    )
+    return LoadSelection("srpe", srpe_tss, foster_load, skipped)
+
