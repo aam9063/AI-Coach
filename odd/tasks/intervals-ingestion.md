@@ -46,7 +46,7 @@ Garmin's official Health/Activity API is not available to individuals and the un
 - [x] `ING-6`: Implement raw FIT storage (object storage or local volume per §5.2) behind a small storage interface so the engine can be re-run later; store the path on the `activity` row.
 - [x] `ING-7`: Implement the backfill command for N days (§12.2) with logging of counts per endpoint and clear failure reporting on partial syncs.
 - [ ] `ING-8`: Add a Celery task entry point for the sync (used by the scheduler in Feature 10) and exercise it in the Compose worker locally.
-- [ ] `ING-9`: Document Intervals.icu endpoint verification results and rate-limit behavior in a short ADR or docs note under `docs/adr/` (§6 layout).
+- [x] `ING-9`: Document Intervals.icu endpoint verification results and rate-limit behavior in a short ADR or docs note under `docs/adr/` (§6 layout).
 
 ## Acceptance criteria
 
@@ -77,5 +77,9 @@ Known follow-up: a re-sync whose FIT download fails resets `raw_file_path` to NU
 - ING-7: N-day backfill RED→GREEN (13 tests: window computation across month/year boundaries, one sync per window, count aggregation, per-window logging, continue-after-failure, CLI exit codes 0/1/2). Full suite 80 passed, mypy strict clean.
 
 Known design tradeoff: backfill uses per-day windows (~2 API calls/day, ~360 for the 180-day §12.2 run; ~36s of pacing at 10 req/s) to keep failure granularity and cheap idempotent retries. A chunked-window option is a possible future improvement.
+- ING-8: Celery `sync_intervals` task RED→GREEN (6 eager-mode tests), commit `ce4708a`: owns the async lifecycle, returns a JSON summary, window failures stay in the summary while unexpected exceptions fail the task; registration via `include=["app.scheduler.tasks"]`, proven in the Compose worker with `celery inspect registered`.
+- ING-9: ADR `docs/adr/0001-intervals-icu-api-verification.md` (endpoints, auth, gzip caveat, `athlete/0` convention, rate limits, <=10 req/s pacing policy, verification date and sources).
+
+Commits (ING-8/9): ce4708a, (ING-9 pending commit)
 
 Commits: 9e3d114, 3b94069, 443527f, 12882b9, d362ae0, d362ae0, 20fd547
