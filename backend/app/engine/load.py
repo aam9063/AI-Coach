@@ -43,18 +43,48 @@ The ``tss_equivalent_factor`` maps Foster arbitrary units (AU) onto the
 TSS scale; it is an explicit, caller-supplied parameter (engine constants
 are owned by LOAD-11), documented here as the single scaling knob.
 
+Bike power-based load (Coggan; Allen & Coggan, "Training and Racing with
+a Power Meter"):
+
+    NP  = (mean over rolling 30 s windows of (window mean power)^4)^(1/4)
+    IF  = NP / FTP
+    TSS = (duration_s * NP * IF) / (FTP * 3600) * 100
+
+The power stream is a per-second sample sequence (as produced by the
+ingest parser), so the rolling window is 30 consecutive samples with a
+1-sample step. Missing samples are ``None`` entries (the parser emits
+``None`` for stream gaps). Documented missing-sample and short-file
+semantics (see :func:`normalized_power` for details):
+
+- Each 30 s window is averaged over its valid (non-``None``) samples, and
+  a window qualifies only when ``valid_count / 30 >= min_valid_fraction``
+  (default 1.0: only fully complete windows count; owners may relax the
+  parameter explicitly for gap-heavy streams).
+- A series shorter than the 30 s window falls back to NP = average of the
+  valid samples (the smoothing window never fills, so NP degenerates to
+  average power for short files).
+- Zero valid samples, or a series of at least 30 samples with no
+  qualifying window at the given ``min_valid_fraction``, raise
+  ``ValueError`` instead of returning a silently degraded NP.
+
 All functions are pure and fully typed; validation errors raise
 ``ValueError`` rather than clamping or silently defaulting, except the
 documented clamping of ``dHRr`` to [0, 1].
 """
 
 import math
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 __all__ = [
+    "BikePowerLoad",
     "TrimpCoefficients",
+    "bike_power_load",
     "hr_ratio",
     "hrtss",
+    "intensity_factor",
+    "normalized_power",
+    "power_tss",
     "srpe_load",
     "trimp",
     "trimp_at_lthr_reference",
@@ -185,3 +215,152 @@ def srpe_load(rpe: float, duration_min: float, *, tss_equivalent_factor: float) 
             f"tss_equivalent_factor must be non-negative, got {tss_equivalent_factor!r}"
         )
     return rpe * duration * tss_equivalent_factor
+
+
+NP_WINDOW_SAMPLES = 30
+"""Rolling-window length for Normalized Power: 30 consecutive samples.
+
+The power stream is per-second (1 Hz), so 30 samples = 30 s, per Coggan's
+NP definition. Module-level constant so tests and callers can reference it.
+"""
+
+
+def _window_mean(window: Sequence[float | None]) -> float:
+    """Mean of the valid (non-``None``) samples in a rolling window."""
+    valid = [s for s in window if s is not None]
+    return math.fsum(valid) / len(valid)
+
+
+def normalized_power(
+    power_samples: Sequence[float | None],
+    *,
+    min_valid_fraction: float = 1.0,
+) -> float:
+    """Coggan Normalized Power of a per-second power stream.
+
+    Formula: NP = (mean over rolling 30 s windows of (window mean)^4)^(1/4),
+    where windows are 30 consecutive samples (:data:`NP_WINDOW_SAMPLES`,
+    1 Hz stream) advanced one sample at a time.
+
+    Missing samples: ``None`` entries mark stream gaps. Each window's mean
+    is computed over its valid (non-``None``) samples only; the window
+    contributes to NP only when ``valid_count / 30 >= min_valid_fraction``.
+    The default ``min_valid_fraction=1.0`` is strict (only fully complete
+    windows count); pass e.g. ``0.9`` for gap-heavy streams. Values outside
+    ``(0, 1]`` raise ``ValueError``.
+
+    Short files: fewer samples than the 30 s window means the smoothing
+    window never fills, so NP falls back to the average of the valid
+    samples (NP degenerates to average power for short files).
+
+    No silent nonsense: zero valid samples raises ``ValueError``
+    ("no usable power data"), and a series of at least 30 samples with no
+    qualifying window at the given ``min_valid_fraction`` raises
+    ``ValueError`` ("no qualifying rolling window") rather than returning
+    a degraded value — relax ``min_valid_fraction`` explicitly instead.
+
+    Reference: Allen & Coggan, "Training and Racing with a Power Meter".
+    """
+    if not 0.0 < min_valid_fraction <= 1.0:
+        raise ValueError(
+            f"min_valid_fraction must be within (0, 1], got {min_valid_fraction!r}"
+        )
+    samples = list(power_samples)
+    if not any(s is not None for s in samples):
+        raise ValueError(
+            "no usable power data: samples sequence is empty or all missing"
+        )
+    if len(samples) < NP_WINDOW_SAMPLES:
+        # Documented short-file fallback: NP -> average of valid samples.
+        return _window_mean(samples)
+    fourth_powers: list[float] = []
+    for start in range(len(samples) - NP_WINDOW_SAMPLES + 1):
+        window = samples[start : start + NP_WINDOW_SAMPLES]
+        valid_count = sum(1 for s in window if s is not None)
+        if valid_count / NP_WINDOW_SAMPLES < min_valid_fraction:
+            continue  # window lacks enough valid samples: skipped
+        fourth_powers.append(_window_mean(window) ** 4)
+    if not fourth_powers:
+        raise ValueError(
+            "no qualifying rolling window: every 30 s window has fewer valid "
+            f"samples than min_valid_fraction={min_valid_fraction!r} allows; "
+            "relax min_valid_fraction or provide more complete data"
+        )
+    mean_fourth = math.fsum(fourth_powers) / len(fourth_powers)
+    return math.pow(mean_fourth, 0.25)
+
+
+def intensity_factor(np_value: float, ftp: float) -> float:
+    """Coggan Intensity Factor IF = NP / FTP.
+
+    Non-positive FTP (misconfigured threshold) or negative NP raise
+    ``ValueError`` so a bad threshold can never silently produce infinite
+    or negative intensity.
+
+    Reference: Allen & Coggan, "Training and Racing with a Power Meter".
+    """
+    if ftp <= 0.0:
+        raise ValueError(f"FTP must be positive, got {ftp!r} watts")
+    if np_value < 0.0:
+        raise ValueError(f"NP must be non-negative, got {np_value!r} watts")
+    return np_value / ftp
+
+
+def power_tss(duration_s: float, np_value: float, ftp: float) -> float:
+    """Coggan Training Stress Score for a bike session.
+
+    Formula: TSS = (duration_s * NP * IF) / (FTP * 3600) * 100, with
+    IF = NP / FTP. Equivalently TSS = 100 * (NP / FTP)^2 * hours, so one
+    hour at NP = FTP scores exactly 100 TSS.
+
+    Non-positive duration, negative NP, or non-positive FTP raise
+    ``ValueError``.
+
+    Reference: Allen & Coggan, "Training and Racing with a Power Meter".
+    """
+    if duration_s <= 0.0:
+        raise ValueError(f"duration must be positive, got {duration_s!r} seconds")
+    intensity = intensity_factor(np_value, ftp)
+    return duration_s * np_value * intensity / (ftp * 3600.0) * 100.0
+
+
+@dataclass(frozen=True, slots=True)
+class BikePowerLoad:
+    """Bike power-based load results consumed by method selection (LOAD-6).
+
+    ``normalized_power`` in watts, ``intensity_factor`` dimensionless,
+    ``tss`` on the Coggan TSS scale (1 h at FTP = 100).
+    """
+
+    normalized_power: float
+    intensity_factor: float
+    tss: float
+
+
+def bike_power_load(
+    power_samples: Sequence[float | None],
+    *,
+    duration_s: float,
+    ftp: float,
+) -> BikePowerLoad:
+    """Convenience entry point: NP, IF and TSS for one bike session.
+
+    Combines :func:`normalized_power` (missing-sample and short-file
+    semantics documented there), :func:`intensity_factor` and
+    :func:`power_tss`. ``duration_s`` is the session wall-clock duration in
+    seconds (explicit, because a gapped per-second stream has fewer valid
+    samples than seconds elapsed); non-positive durations raise
+    ``ValueError``. Returns a :class:`BikePowerLoad` for downstream method
+    selection.
+
+    Reference: Allen & Coggan, "Training and Racing with a Power Meter".
+    """
+    if duration_s <= 0.0:
+        raise ValueError(f"duration must be positive, got {duration_s!r} seconds")
+    np_value = normalized_power(power_samples)
+    if_value = intensity_factor(np_value, ftp)
+    return BikePowerLoad(
+        normalized_power=np_value,
+        intensity_factor=if_value,
+        tss=power_tss(duration_s, np_value, ftp),
+    )
