@@ -266,16 +266,20 @@ def test_athlete_thresholds_gaps_default_empty() -> None:
 
 
 def test_settings_athlete_fields_default_to_none() -> None:
-    # model_validate({}) applies field defaults without reading ambient env
-    # or any .env file, so the test is hermetic.
-    settings = Settings.model_validate({})
-    assert settings.athlete_ftp_w is None
-    assert settings.athlete_lthr_bpm is None
-    assert settings.athlete_hr_max_bpm is None
-    assert settings.athlete_hr_rest_bpm is None
-    assert settings.athlete_css_speed_mps is None
-    assert settings.athlete_threshold_run_speed_mps is None
-    assert settings.athlete_weight_kg is None
+    # Assert the DECLARED field defaults instead of instantiating Settings:
+    # construction also reads the ambient environment and the developer's local
+    # .env, where the owner's real thresholds are seeded (gitignored), so an
+    # instance-based assertion would be neither hermetic nor about defaults.
+    for name in (
+        "athlete_ftp_w",
+        "athlete_lthr_bpm",
+        "athlete_hr_max_bpm",
+        "athlete_hr_rest_bpm",
+        "athlete_css_speed_mps",
+        "athlete_threshold_run_speed_mps",
+        "athlete_weight_kg",
+    ):
+        assert Settings.model_fields[name].default is None, name
 
 
 # --- CLI (in-process, injected fake client, no network, no file writes) ---------
