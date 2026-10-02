@@ -63,6 +63,11 @@ python_version = "3.12"
 explicit_package_bases = true
 
 [[tool.mypy.overrides]]
+# fitdecode ships no py.typed marker (as of 0.11); untyped for mypy.
+module = "fitdecode.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
 # Celery ships no py.typed marker (as of 5.x); untyped for mypy.
 module = "celery.*"
 ignore_missing_imports = true

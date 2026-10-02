@@ -38,10 +38,10 @@ Garmin's official Health/Activity API is not available to individuals and the un
 
 ## Checklist
 
-- [ ] `ING-1`: RED: write unit tests for the Intervals.icu client (auth header shape with `API_KEY` username, pagination/date-range params, rate-limit retry with exponential backoff, error mapping) against recorded/mocked HTTP responses; confirm they fail before implementation.
-- [ ] `ING-2`: GREEN: implement the `httpx`-based Intervals.icu client in `backend/app/ingest/` (§5.1) with activities, streams, wellness and FIT download methods, verifying exact endpoint paths against the official API cookbook and noting verification in docstrings.
-- [ ] `ING-3`: RED+GREEN: test-first DB models and Alembic migrations for `activity`, `activity_stream`, `wellness` per the §6 data model (including source ids used for idempotency and raw file path); upsert repository functions tested to create-then-update without duplicates.
-- [ ] `ING-4`: RED+GREEN: test-first FIT parsing with `fitdecode` on a sample FIT file fixture: per-second streams and swim lengths extracted and stored (§5.2).
+- [x] `ING-1`: RED: write unit tests for the Intervals.icu client (auth header shape with `API_KEY` username, pagination/date-range params, rate-limit retry with exponential backoff, error mapping) against recorded/mocked HTTP responses; confirm they fail before implementation.
+- [x] `ING-2`: GREEN: implement the `httpx`-based Intervals.icu client in `backend/app/ingest/` (§5.1) with activities, streams, wellness and FIT download methods, verifying exact endpoint paths against the official API cookbook and noting verification in docstrings.
+- [x] `ING-3`: RED+GREEN: test-first DB models and Alembic migrations for `activity`, `activity_stream`, `wellness` per the §6 data model (including source ids used for idempotency and raw file path); upsert repository functions tested to create-then-update without duplicates.
+- [x] `ING-4`: RED+GREEN: test-first FIT parsing with `fitdecode` on a sample FIT file fixture: per-second streams and swim lengths extracted and stored (§5.2).
 - [ ] `ING-5`: RED+GREEN: test-first idempotent sync orchestration: re-running the same date range creates no duplicate activities/streams/wellness rows (§12.2 acceptance), Intervals-side load metrics (if stored) are flagged non-authoritative cross-check values only (§5.1).
 - [ ] `ING-6`: Implement raw FIT storage (object storage or local volume per §5.2) behind a small storage interface so the engine can be re-run later; store the path on the `activity` row.
 - [ ] `ING-7`: Implement the backfill command for N days (§12.2) with logging of counts per endpoint and clear failure reporting on partial syncs.
@@ -65,6 +65,10 @@ To be filled when the feature is implemented (commits, test runs, cross-checks).
 
 ## Progress
 
-Not started.
+In progress (Feature 2/11) on branch `feat/intervals-ingestion`.
 
-Commits: (none yet)
+- ING-1/2: client RED→GREEN (13 tests), commit `9e3d114` — endpoints verified against official cookbook (forum threads 80090/609); original file endpoint returns gzip, `fit-file` is the always-FIT alternative.
+- ING-3: models/migration/upserts RED→GREEN, commits `3b94069` (postgres loopback port for local tests), `443527f` — migration daa3ba6946b9 upgrade/downgrade/upgrade verified; DB tests run against compose Postgres (skip if unreachable), never SQLite.
+- ING-4: FIT parsing RED→GREEN (20 tests; real bike fixture MIT-licensed, swim lengths via pure stub functions), full suite 47 passed, mypy strict clean.
+
+Commits: 9e3d114, 3b94069, 443527f, (ING-4 pending commit)
