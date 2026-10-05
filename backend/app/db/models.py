@@ -6,6 +6,15 @@ Tables (brief §6 data model minimum, ingest subset):
 - ``activity_stream``: per-second data arrays (JSONB payload) linked to the
   activity, unique per ``(activity_id, stream_type)``.
 - ``wellness``: one daily record per (athlete, date), unique.
+- ``daily_load``: one engine-computed load row per (athlete, date, sport),
+  plus a ``combined`` sport row per day (LOAD-10, brief §6); the unique key
+  makes the recomputation upserts idempotent.
+
+Owner-entered input (§5.1, LOAD-12): ``activity.rpe`` stores the athlete's
+own session RPE as entered in Intervals.icu (``icu_rpe``, scale 1-10). It is
+INPUT data the engine consumes (sRPE method for strength sports), unlike the
+non-authoritative Intervals cross-check columns, which our engine never
+reads as truth.
 
 Non-authoritative cross-checks (§5.1): ``activity.intervals_icu_load`` stores
 Intervals.icu's own load metric purely for cross-checking against our engine
@@ -39,7 +48,10 @@ class ActivityRow(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     source: Mapped[str] = mapped_column(String(32), default="intervals")
-    source_id: Mapped[int] = mapped_column(Integer)
+    # Real Intervals.icu activity ids are strings with an "i" prefix
+    # (live-verified, e.g. "i163428838"); the (source, source_id) unique key
+    # remains the idempotency anchor.
+    source_id: Mapped[str] = mapped_column(String(32))
 
     type: Mapped[str] = mapped_column(String(64), default="")
     name: Mapped[str] = mapped_column(String(255), default="")
@@ -55,6 +67,16 @@ class ActivityRow(Base):
 
     # Raw FIT file storage path; nullable until stored (ING-6).
     raw_file_path: Mapped[str | None] = mapped_column(String(512), default=None)
+
+    # OWNER-ENTERED INPUT DATA (LOAD-12, §5.1): the athlete's own RPE for
+    # the session, as entered in Intervals.icu (``icu_rpe``, integer scale
+    # 1-10; payload aliases ``session_rpe``/``perceived_exertion``). This
+    # is reported INPUT, like duration or distance — NOT a computed metric
+    # and NOT one of the non-authoritative Intervals cross-check values
+    # (§5.1): the engine CONSUMES it (sRPE method for strength sports).
+    # Nullable: NULL means "not entered", never a silent 0. Values outside
+    # 1-10 are rejected at ingest with a reportable reason, never stored.
+    rpe: Mapped[float | None] = mapped_column(Float, default=None)
 
     # NON-AUTHORITATIVE (§5.1): Intervals.icu's own load metric, kept only as
     # a cross-check value for tests/verification. Our engine computes the
@@ -98,3 +120,56 @@ class WellnessRow(Base):
     sleep_minutes: Mapped[int | None] = mapped_column(Integer, default=None)
     sleep_score: Mapped[float | None] = mapped_column(Float, default=None)
     weight: Mapped[float | None] = mapped_column(Float, default=None)  # kg
+    # NON-AUTHORITATIVE cross-check columns (§5.1, §12.3; LOAD-10): the PMC
+    # values (CTL/ATL) computed by Intervals.icu itself, stored ONLY to
+    # cross-check our engine's PMC (``app.engine.pmc``) for the same load
+    # inputs. Never consumed as authoritative training state; the column
+    # names the source explicitly so neither can be mistaken for truth.
+    intervals_icu_ctl: Mapped[float | None] = mapped_column(Float, default=None)
+    intervals_icu_atl: Mapped[float | None] = mapped_column(Float, default=None)
+
+
+class DailyLoadRow(Base):
+    """One day of engine-computed training load per sport (LOAD-10, brief §6).
+
+    Row shape decision: **per-sport rows plus one ``combined`` row per day**
+    (``sport = "combined"``) — the natural shape given the pure engine's
+    :func:`app.engine.pmc.compute_pmc_per_sport`, which produces exactly a
+    per-sport series and a combined series. The sport key is the engine's
+    normalized (lower-case) activity type, e.g. ``"ride"``/``"run"``/
+    ``"swim"``.
+
+    The unique key ``(athlete_id, date, sport)`` is the idempotency anchor:
+    recomputing a window upserts the existing rows instead of duplicating
+    them.
+
+    Every row carries ``engine_version`` (§6: every persisted engine output
+    carries the engine version) and ``computed_at`` (recomputation stamp).
+    ``methods`` maps the load method key (``power``/``pace_speed``/``hr``/
+    ``srpe``; §7.1 fixed selection order) to the number of activities that
+    day+sport used it — the persisted "which method was used" trace;
+    ``None`` on days with no contributing activity (rest days).
+    """
+
+    __tablename__ = "daily_load"
+    __table_args__ = (
+        UniqueConstraint("athlete_id", "date", "sport", name="uq_daily_load_athlete_date_sport"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # Plain integer matching wellness.athlete_id (no athlete_profile table yet).
+    athlete_id: Mapped[int] = mapped_column(Integer, default=1)
+    date: Mapped[date] = mapped_column(Date)
+    # Normalized engine sport key, or "combined" for the all-sports row.
+    sport: Mapped[str] = mapped_column(String(32))
+
+    tss: Mapped[float] = mapped_column(Float)
+    ctl: Mapped[float] = mapped_column(Float)
+    atl: Mapped[float] = mapped_column(Float)
+    tsb: Mapped[float] = mapped_column(Float)
+
+    # Load-method usage trace: {"power"/"pace_speed"/"hr"/"srpe": count}.
+    methods: Mapped[dict[str, int] | None] = mapped_column(JSONB, default=None)
+
+    engine_version: Mapped[str] = mapped_column(String(32))
+    computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

@@ -89,13 +89,13 @@ class DayWindowClient:
             for activity in self._by_day[day]
         ]
 
-    def get_streams(self, activity_id: int) -> list[Any]:
+    def get_streams(self, activity_id: str) -> list[Any]:
         return []
 
     def get_wellness(self, oldest: str, newest: str) -> list[Any]:
         return []
 
-    def download_fit_file(self, activity_id: int) -> bytes:
+    def download_fit_file(self, activity_id: str) -> bytes:
         return b""
 
 
@@ -105,17 +105,17 @@ class AlwaysFailingClient:
     def list_activities(self, oldest: str, newest: str) -> list[Activity]:
         raise IntervalsServerError(500, "outage")
 
-    def get_streams(self, activity_id: int) -> list[Any]:
+    def get_streams(self, activity_id: str) -> list[Any]:
         raise IntervalsServerError(500, "outage")
 
     def get_wellness(self, oldest: str, newest: str) -> list[Any]:
         raise IntervalsServerError(500, "outage")
 
-    def download_fit_file(self, activity_id: int) -> bytes:
+    def download_fit_file(self, activity_id: str) -> bytes:
         raise IntervalsServerError(500, "outage")
 
 
-def _activity(aid: int, day: date) -> Activity:
+def _activity(aid: str, day: date) -> Activity:
     return Activity.model_validate(
         {
             "id": aid,
@@ -228,7 +228,10 @@ async def test_backfill_uses_sync_once_per_day_window() -> None:
 async def test_backfill_aggregates_counts_across_windows(
     db_engine: AsyncEngine, caplog: pytest.LogCaptureFixture
 ) -> None:
-    days_with_activities = {date(2026, 1, 15): 1, date(2026, 1, 17): 2}
+    days_with_activities = {
+        date(2026, 1, 15): "i163428838",
+        date(2026, 1, 17): "i163419945",
+    }
     client = DayWindowClient(
         {
             day: [_activity(aid, day)]
@@ -309,8 +312,8 @@ async def test_backfill_continues_after_window_failure_and_reports(
 ) -> None:
     client = DayWindowClient(
         {
-            date(2026, 1, 15): [_activity(1, date(2026, 1, 15))],
-            date(2026, 1, 19): [_activity(2, date(2026, 1, 19))],
+            date(2026, 1, 15): [_activity("i163428838", date(2026, 1, 15))],
+            date(2026, 1, 19): [_activity("i163419945", date(2026, 1, 19))],
         },
         fail_on_day=date(2026, 1, 17),
     )

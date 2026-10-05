@@ -77,10 +77,10 @@ class FakeClient:
         self,
         *,
         activities: list[Activity] | None = None,
-        streams_by_id: dict[int, list[Stream]] | None = None,
+        streams_by_id: dict[str, list[Stream]] | None = None,
         wellness: list[Wellness] | None = None,
-        fit_files: dict[int, bytes] | None = None,
-        fail_ids: set[int] | None = None,
+        fit_files: dict[str, bytes] | None = None,
+        fail_ids: set[str] | None = None,
         clock: Any = None,
     ) -> None:
         self.activities = activities or []
@@ -98,7 +98,7 @@ class FakeClient:
         self._record("list_activities")
         return list(self.activities)
 
-    def get_streams(self, activity_id: int) -> list[Stream]:
+    def get_streams(self, activity_id: str) -> list[Stream]:
         self._record(f"streams:{activity_id}")
         if activity_id in self._fail_ids:
             raise IntervalsNotFoundError(404, f"no streams for {activity_id}")
@@ -108,14 +108,14 @@ class FakeClient:
         self._record("wellness")
         return list(self.wellness)
 
-    def download_fit_file(self, activity_id: int) -> bytes:
+    def download_fit_file(self, activity_id: str) -> bytes:
         self._record(f"fit:{activity_id}")
         if activity_id in self._fail_ids:
             raise IntervalsNotFoundError(404, f"no fit for {activity_id}")
         return self._fit_files.get(activity_id, b"")
 
 
-def _activity(aid: int, **extras: Any) -> Activity:
+def _activity(aid: str, **extras: Any) -> Activity:
     payload: dict[str, Any] = {
         "id": aid,
         "name": f"Ride {aid}",
@@ -161,11 +161,11 @@ async def test_sync_happy_path_persists_activities_streams_wellness(
     parsed = parse_fit_streams(fit_bytes)
     client = FakeClient(
         activities=[
-            _activity(1, icu_training_load=132.0, total_elevation_gain=120.0),
-            _activity(2),
+            _activity("i163428838", icu_training_load=132.0, total_elevation_gain=120.0),
+            _activity("i163419945"),
         ],
         streams_by_id={
-            2: [
+            "i163419945": [
                 Stream(type="power", data=[0, 100, 150]),
                 Stream(type="hr", data=[90, 110, 120]),
             ],
@@ -180,18 +180,23 @@ async def test_sync_happy_path_persists_activities_streams_wellness(
                     "weight": 70.2,
                     "lnHrv": 4.06,
                     "sleepScore": 77.0,
+                    # Intervals' own PMC values: stored as NON-authoritative
+                    # cross-check columns only (§5.1, §12.3 LOAD-10).
+                    "ctl": 71.2,
+                    "atl": 55.3,
                 }
             ),
         ],
-        fit_files={1: fit_bytes},
+        fit_files={"i163428838": fit_bytes},
     )
 
     result = await sync_date_range(
         OLDEST, NEWEST, _session_factory(db_engine), client
     )
 
-    # Count summary: activity 1 via FIT (5 non-empty streams; power/cadence
-    # all-None skipped), activity 2 via the streams endpoint (2 streams).
+    # Count summary: activity i163428838 via FIT (5 non-empty streams;
+    # power/cadence all-None skipped), activity i163419945 via the
+    # streams endpoint (2 streams).
     assert result.activities_synced == 2
     assert result.activities_failed == 0
     assert result.streams_synced == 7
@@ -200,11 +205,12 @@ async def test_sync_happy_path_persists_activities_streams_wellness(
     assert result.wellness_synced == 1
     assert result.wellness_failed == 0
 
-    # FIT-first choice: activity 1 uses the FIT file, activity 2 the endpoint.
+    # FIT-first choice: activity i163428838 uses the FIT file,
+    # activity i163419945 the endpoint.
     called = [name for name, _ in client.call_times]
-    assert "fit:1" in called
-    assert "streams:1" not in called
-    assert "streams:2" in called
+    assert "fit:i163428838" in called
+    assert "streams:i163428838" not in called
+    assert "streams:i163419945" in called
 
     counts = await _counts(db_engine)
     assert counts[ActivityRow] == 2
@@ -214,10 +220,12 @@ async def test_sync_happy_path_persists_activities_streams_wellness(
     async with _session_factory(db_engine)() as session:
         activity = (
             await session.execute(
-                _fresh(select(ActivityRow).where(ActivityRow.source_id == 1))
+                _fresh(
+                    select(ActivityRow).where(ActivityRow.source_id == "i163428838")
+                )
             )
         ).scalar_one()
-        assert activity.name == "Ride 1"
+        assert activity.name == "Ride i163428838"
         assert activity.distance_m == 10000.0
         assert activity.duration_s == 3600
         assert activity.elevation_m == 120.0
@@ -252,6 +260,9 @@ async def test_sync_happy_path_persists_activities_streams_wellness(
         assert wellness.weight == 70.2
         assert wellness.ln_hrv == 4.06
         assert wellness.sleep_score == 77.0
+        # §5.1 cross-check columns: Intervals' own CTL/ATL, never truth.
+        assert wellness.intervals_icu_ctl == 71.2
+        assert wellness.intervals_icu_atl == 55.3
 
 
 # ---------------------------------------------------------------------------
@@ -264,12 +275,15 @@ async def test_sync_is_idempotent_on_rerun(db_engine: AsyncEngine) -> None:
 
     def build_client() -> FakeClient:
         return FakeClient(
-            activities=[_activity(1, icu_training_load=132.0), _activity(2)],
+            activities=[
+                _activity("i163428838", icu_training_load=132.0),
+                _activity("i163419945"),
+            ],
             streams_by_id={
-                2: [Stream(type="power", data=[0, 100, 150])],
+                "i163419945": [Stream(type="power", data=[0, 100, 150])],
             },
             wellness=[Wellness.model_validate({"id": "2026-01-15", "hrv": 58.0})],
-            fit_files={1: fit_bytes},
+            fit_files={"i163428838": fit_bytes},
         )
 
     first = await sync_date_range(
@@ -319,8 +333,8 @@ async def test_intervals_load_stored_only_in_cross_check_column(
     db_engine: AsyncEngine,
 ) -> None:
     client = FakeClient(
-        activities=[_activity(1, icu_training_load=132.0)],
-        fit_files={1: FIXTURE_PATH.read_bytes()},
+        activities=[_activity("i163428838", icu_training_load=132.0)],
+        fit_files={"i163428838": FIXTURE_PATH.read_bytes()},
     )
 
     await sync_date_range(OLDEST, NEWEST, _session_factory(db_engine), client)
@@ -352,13 +366,17 @@ async def test_intervals_load_stored_only_in_cross_check_column(
 
 async def test_failing_activity_does_not_abort_sync(db_engine: AsyncEngine) -> None:
     client = FakeClient(
-        activities=[_activity(1), _activity(2), _activity(3)],
+        activities=[
+            _activity("i163428838"),
+            _activity("i163419945"),
+            _activity("i163400001"),
+        ],
         streams_by_id={
-            1: [Stream(type="hr", data=[90.0, 100.0])],
-            3: [Stream(type="power", data=[0.0, 250.0])],
+            "i163428838": [Stream(type="hr", data=[90.0, 100.0])],
+            "i163400001": [Stream(type="power", data=[0.0, 250.0])],
         },
         wellness=[Wellness.model_validate({"id": "2026-01-15", "hrv": 58.0})],
-        fail_ids={2},
+        fail_ids={"i163419945"},
     )
 
     result = await sync_date_range(
@@ -388,11 +406,11 @@ async def test_sync_archives_raw_fit_and_sets_raw_file_path(
     is stored on the activity row (§5.2: raw files must be re-runnable)."""
     fit_bytes = FIXTURE_PATH.read_bytes()
     client = FakeClient(
-        activities=[_activity(1), _activity(2)],
+        activities=[_activity("i163428838"), _activity("i163419945")],
         streams_by_id={
-            2: [Stream(type="power", data=[0.0, 100.0])],
+            "i163419945": [Stream(type="power", data=[0.0, 100.0])],
         },
-        fit_files={1: fit_bytes},
+        fit_files={"i163428838": fit_bytes},
     )
     settings = Settings(ingest_storage_root=str(tmp_path))
 
@@ -404,7 +422,9 @@ async def test_sync_archives_raw_fit_and_sets_raw_file_path(
     async with _session_factory(db_engine)() as session:
         stored = (
             await session.execute(
-                _fresh(select(ActivityRow).where(ActivityRow.source_id == 1))
+                _fresh(
+                    select(ActivityRow).where(ActivityRow.source_id == "i163428838")
+                )
             )
         ).scalar_one()
         # Relative path recorded on the row and the bytes round-trip.
@@ -416,13 +436,15 @@ async def test_sync_archives_raw_fit_and_sets_raw_file_path(
         # The endpoint-fallback activity has no raw file.
         fallback = (
             await session.execute(
-                _fresh(select(ActivityRow).where(ActivityRow.source_id == 2))
+                _fresh(
+                    select(ActivityRow).where(ActivityRow.source_id == "i163419945")
+                )
             )
         ).scalar_one()
         assert fallback.raw_file_path is None
 
     # Exactly one archived file: the FIT-bearing activity only.
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["1.fit"]
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["i163428838.fit"]
 
 
 async def test_sync_storage_disabled_keeps_raw_file_path_null(
@@ -430,8 +452,8 @@ async def test_sync_storage_disabled_keeps_raw_file_path_null(
 ) -> None:
     """Disabled storage mode writes nothing and leaves raw_file_path NULL."""
     client = FakeClient(
-        activities=[_activity(1)],
-        fit_files={1: FIXTURE_PATH.read_bytes()},
+        activities=[_activity("i163428838")],
+        fit_files={"i163428838": FIXTURE_PATH.read_bytes()},
     )
     settings = Settings(ingest_storage_root=str(tmp_path), ingest_storage_enabled=False)
 

@@ -36,7 +36,7 @@ class TestUpsertActivity:
     async def test_create_then_update_without_duplicate(self, db_session):  # type: ignore[no-untyped-def]
         created = await repository.upsert_activity(
             db_session,
-            source_id=42,
+            source_id="i163428838",
             type="Ride",
             name="Original",
             start_time=_T0,
@@ -51,7 +51,7 @@ class TestUpsertActivity:
 
         updated = await repository.upsert_activity(
             db_session,
-            source_id=42,
+            source_id="i163428838",
             type="Ride",
             name="Renamed",
             start_time=_T0,
@@ -63,7 +63,9 @@ class TestUpsertActivity:
         assert await _count(db_session, ActivityRow) == 1
         stored = (
             await db_session.execute(
-                _fresh(select(ActivityRow).where(ActivityRow.source_id == 42))
+                _fresh(
+                    select(ActivityRow).where(ActivityRow.source_id == "i163428838")
+                )
             )
         ).scalar_one()
         assert stored.name == "Renamed"
@@ -73,10 +75,10 @@ class TestUpsertActivity:
 
     async def test_different_source_ids_create_distinct_rows(self, db_session):  # type: ignore[no-untyped-def]
         await repository.upsert_activity(
-            db_session, source_id=1, type="Run", name="A", start_time=_T0
+            db_session, source_id="i163428840", type="Run", name="A", start_time=_T0
         )
         await repository.upsert_activity(
-            db_session, source_id=2, type="Run", name="B", start_time=_T0
+            db_session, source_id="i163428841", type="Run", name="B", start_time=_T0
         )
         assert await _count(db_session, ActivityRow) == 2
 
@@ -84,7 +86,11 @@ class TestUpsertActivity:
 class TestUpsertActivityStream:
     async def test_attach_then_replace_without_duplicate(self, db_session):  # type: ignore[no-untyped-def]
         activity = await repository.upsert_activity(
-            db_session, source_id=99, type="Ride", name="Ride", start_time=_T0
+            db_session,
+            source_id="i163419945",
+            type="Ride",
+            name="Ride",
+            start_time=_T0,
         )
 
         first = await repository.upsert_activity_stream(
@@ -115,7 +121,13 @@ class TestUpsertActivityStream:
 class TestUpsertWellness:
     async def test_same_date_updates_without_duplicate(self, db_session):  # type: ignore[no-untyped-def]
         first = await repository.upsert_wellness(
-            db_session, athlete_id=1, date=date(2026, 2, 1), hrv=58.0, weight=70.5
+            db_session,
+            athlete_id=1,
+            date=date(2026, 2, 1),
+            hrv=58.0,
+            weight=70.5,
+            intervals_icu_ctl=71.2,
+            intervals_icu_atl=55.3,
         )
         second = await repository.upsert_wellness(
             db_session,
@@ -133,3 +145,19 @@ class TestUpsertWellness:
         assert stored.hrv == 60.0
         assert stored.sleep_minutes == 430
         assert stored.weight is None
+        # Not re-supplied on the update: cleared, not stale.
+        assert stored.intervals_icu_ctl is None
+        assert stored.intervals_icu_atl is None
+
+    async def test_cross_check_ctl_atl_round_trip(self, db_session):  # type: ignore[no-untyped-def]
+        """The Intervals CTL/ATL cross-check columns (§5.1) persist and are
+        NULL when not supplied — never a silent 0 (a real 0 CTL is data)."""
+        row = await repository.upsert_wellness(
+            db_session,
+            athlete_id=1,
+            date=date(2026, 2, 2),
+            intervals_icu_ctl=0.0,
+            intervals_icu_atl=42.5,
+        )
+        assert row.intervals_icu_ctl == 0.0
+        assert row.intervals_icu_atl == 42.5

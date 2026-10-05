@@ -73,7 +73,7 @@ Independently verified by `gentle-ai-verify` (read-only) on HEAD `d4bf33f`, 2026
 - §5.1: Intervals.icu load is stored only in the non-authoritative `activity.intervals_icu_load` column and read by no engine code.
 - §6 purity: no `app.engine` imports under `app/ingest/` and no ingest/db/http imports under `app/engine/` (engine itself is Feature 3 scope).
 
-Not verified (stated limitation, not a pass): the live 180-day backfill and live Intervals.icu API behaviour (rate limits, gzip FIT responses) require the owner's personal API key at runtime; the endpoint contract is recorded in `docs/adr/0001-intervals-icu-api-verification.md` and covered by mocked tests only. Run `cd backend && uv run python -m app.ingest.backfill --days 180` with `INTERVALS_API_KEY` set to complete that acceptance item.
+**Live acceptance closed (2026-10-02, owner's API key):** after the string-id fix (`e79bcd9` on `fix/ingest-activity-id`), the real `--days 180` backfill completed with `180/180 windows ok; activities=26 (failed=0) streams=128 (skipped=54, failed=0) wellness=175 (failed=0)`. The same command re-run left the row counts byte-identical (activity 26, activity_stream 131, wellness 175), proving the §12.2 no-duplicates criterion against live data rather than mocks. Real-data shape: 26 activities 2026-04-05..2026-10-02 (Ride 17, WeightTraining 5, Walk 4), streams mostly heart-rate only (no power meter), `/activity/{id}/file` returned an uncompressed FIT.
 
 ## Progress
 
@@ -96,3 +96,12 @@ Known follow-ups (not blockers):
 - Backfill uses per-day windows (~2 API calls/day, ~360 for the 180-day run, ~36s of pacing at 10 req/s) for failure granularity and cheap retries; a chunked-window option is a possible later improvement.
 
 Commits: 9e3d114, 3b94069, 443527f, 12882b9, d362ae0, 20fd547, c2db5e1, 4658d45, d2db60a, 7cd8158, ce4708a, 8d00300, a2d4ed8, d4bf33f
+
+## Defects found against the live API (2026-10-02)
+
+Running the real 180-day backfill with the owner's API key exposed a contract bug that 86 mocked tests could not catch:
+
+- **Activity ids are strings** (`i163428838`, verified for all 26 activities in the window; the API's own docs use `GET /api/v1/activity/i55751783/file`). The model declared `id: int`, so **every** real activity failed validation and the backfill could not complete. Fixed on branch `fix/ingest-activity-id`: `Activity.id` is `str` with an int→str coercion validator, the string id is threaded through client/sync/repository/storage, and a migration alters `activity.source_id` from `Integer` to `String(32)` preserving the unique anchor. Verified live afterwards: 26/26 activities validate.
+- **The original file endpoint is not always gzipped**: `/activity/{id}/file` returned an uncompressed FIT (`b'.FIT'`, 35,828 bytes). The magic-byte gzip detection in the client already handled both cases — no change needed, and the assumption is now documented.
+
+Both findings are recorded in `docs/adr/0001-intervals-icu-api-verification.md` context: mocked tests alone are not sufficient evidence for an external API contract.

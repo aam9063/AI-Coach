@@ -38,48 +38,51 @@ PAYLOAD = b"FIT-bytes-\x00\x01-fixture"
 def test_save_returns_relative_path_and_writes_bytes(tmp_path: Path) -> None:
     storage = LocalVolumeStorage(tmp_path)
 
-    relative = storage.save(42, PAYLOAD)
+    relative = storage.save("i163428838", PAYLOAD)
 
-    assert relative == "42.fit"
+    assert relative == "i163428838.fit"
     assert (tmp_path / relative).read_bytes() == PAYLOAD
 
 
 def test_save_layout_is_flat_per_activity_id(tmp_path: Path) -> None:
     storage = LocalVolumeStorage(tmp_path)
 
-    first = storage.save(7, PAYLOAD)
-    second = storage.save(8, b"other")
+    first = storage.save("i163428838", PAYLOAD)
+    second = storage.save("i163419945", b"other")
 
     # Deterministic: same id -> same path; different ids -> different files,
     # all directly under the root (no date or source subdirectories).
-    assert first == "7.fit"
-    assert second == "8.fit"
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["7.fit", "8.fit"]
+    assert first == "i163428838.fit"
+    assert second == "i163419945.fit"
+    assert sorted(p.name for p in tmp_path.iterdir()) == [
+        "i163419945.fit",
+        "i163428838.fit",
+    ]
 
 
 def test_save_overwrites_same_activity_atomically(tmp_path: Path) -> None:
     storage = LocalVolumeStorage(tmp_path)
 
-    path = storage.save(9, b"old-bytes")
-    path_again = storage.save(9, b"new-bytes")
+    path = storage.save("i163428838", b"old-bytes")
+    path_again = storage.save("i163428838", b"new-bytes")
 
-    assert path == path_again == "9.fit"
+    assert path == path_again == "i163428838.fit"
     # Exactly one file per id: no temp files left behind by either write.
-    assert [p.name for p in tmp_path.iterdir()] == ["9.fit"]
-    assert (tmp_path / "9.fit").read_bytes() == b"new-bytes"
+    assert [p.name for p in tmp_path.iterdir()] == ["i163428838.fit"]
+    assert (tmp_path / "i163428838.fit").read_bytes() == b"new-bytes"
 
 
 def test_root_directory_is_created_on_demand(tmp_path: Path) -> None:
     storage = LocalVolumeStorage(tmp_path / "nested" / "fit")
 
-    relative = storage.save(1, PAYLOAD)
+    relative = storage.save("i163428838", PAYLOAD)
 
     assert (tmp_path / "nested" / "fit" / relative).read_bytes() == PAYLOAD
 
 
 def test_load_returns_saved_bytes(tmp_path: Path) -> None:
     storage = LocalVolumeStorage(tmp_path)
-    relative = storage.save(3, PAYLOAD)
+    relative = storage.save("i163419945", PAYLOAD)
 
     assert storage.load(relative) == PAYLOAD
 
@@ -87,9 +90,9 @@ def test_load_returns_saved_bytes(tmp_path: Path) -> None:
 def test_exists_reflects_saved_files(tmp_path: Path) -> None:
     storage = LocalVolumeStorage(tmp_path)
 
-    assert storage.exists("3.fit") is False
-    storage.save(3, PAYLOAD)
-    assert storage.exists("3.fit") is True
+    assert storage.exists("i163419945.fit") is False
+    storage.save("i163419945", PAYLOAD)
+    assert storage.exists("i163419945.fit") is True
 
 
 @pytest.mark.parametrize("bad_path", ["../escape.fit", "sub/../../escape.fit"])
@@ -116,7 +119,7 @@ def test_exists_rejects_paths_outside_the_root(tmp_path: Path, bad_path: str) ->
 def test_null_storage_is_inert(tmp_path: Path) -> None:
     storage = NullStorage()
 
-    assert storage.save(1, PAYLOAD) == ""
+    assert storage.save("i163428838", PAYLOAD) == ""
     assert storage.load("1.fit") == b""
     assert storage.exists("1.fit") is False
     # Nothing was written anywhere under tmp_path.

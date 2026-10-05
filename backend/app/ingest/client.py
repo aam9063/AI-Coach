@@ -10,6 +10,8 @@ Endpoints used (§5.1):
 - ``GET /athlete/{id}/activities?oldest=YYYY-MM-DD&newest=YYYY-MM-DD``
 - ``GET /activity/{id}/streams`` (power, HR, speed, cadence, altitude, distance, time)
 - ``GET /athlete/{id}/wellness?oldest=YYYY-MM-DD&newest=YYYY-MM-DD``
+- ``GET /athlete/{id}/sport-settings`` (per-sport thresholds; shape live-verified 2026-10-02)
+- ``GET /athlete/{id}`` (athlete profile: resting HR, weight, sex; shape live-verified 2026-10-02)
 - ``GET /activity/{id}/file`` (original upload; response is GZIP-compressed)
 - ``GET /activity/{id}/fit-file`` (generated FIT file)
 
@@ -40,7 +42,7 @@ from app.ingest.exceptions import (
     IntervalsRateLimitError,
     IntervalsServerError,
 )
-from app.ingest.models import Activity, Stream, Wellness
+from app.ingest.models import Activity, AthleteProfile, SportSettings, Stream, Wellness
 
 # Module-level indirection so tests can observe backoff without real sleeps.
 _sleep = time.sleep
@@ -104,10 +106,11 @@ class IntervalsClient:
         )
         return [Activity.model_validate(item) for item in response.json()]
 
-    def get_streams(self, activity_id: int) -> list[Stream]:
+    def get_streams(self, activity_id: str) -> list[Stream]:
         """Fetch per-second streams (power, HR, speed, cadence, altitude, distance, time).
 
-        ``GET /activity/{id}/streams`` (verified: official API cookbook).
+        ``GET /activity/{id}/streams`` where ``id`` is the string activity id
+        (live-verified form, e.g. ``i163428838``).
         """
         response = self._request("GET", f"/activity/{activity_id}/streams")
         return [Stream.model_validate(item) for item in response.json()]
@@ -125,17 +128,52 @@ class IntervalsClient:
         )
         return [Wellness.model_validate(item) for item in response.json()]
 
-    def download_original_file(self, activity_id: int) -> bytes:
+    def get_sport_settings(self) -> list[SportSettings]:
+        """Fetch the per-sport-group threshold configuration entries.
+
+        ``GET /athlete/{id}/sport-settings`` — response shape verified against
+        the live API on 2026-10-02 (owner account: 4 entries — Ride, Run,
+        Swim, Other — each with ``ftp``/``lthr``/``max_hr``/``threshold_pace``
+        and zone arrays; ``threshold_pace`` is a speed in m/s, e.g. 0.8333333
+        on the swim entry, i.e. CSS speed).
+
+        The values returned are owner-editable configuration surfaced by
+        Intervals.icu; they are never treated as authoritative computed
+        metrics (§5.1).
+        """
+        response = self._request(
+            "GET", f"/athlete/{self._settings.intervals_athlete_id}/sport-settings"
+        )
+        return [SportSettings.model_validate(item) for item in response.json()]
+
+    def get_athlete_profile(self) -> AthleteProfile:
+        """Fetch the athlete profile (resting HR, weight, sex, name).
+
+        ``GET /athlete/{id}`` — response shape verified against the live API
+        on 2026-10-02 (string ``id`` with an ``i`` prefix, e.g. ``"i555003"``;
+        ``icu_resting_hr`` set, ``weight`` null for the owner). Like
+        ``get_sport_settings`` the values are owner-editable configuration,
+        never authoritative computed metrics (§5.1).
+        """
+        response = self._request(
+            "GET", f"/athlete/{self._settings.intervals_athlete_id}"
+        )
+        return AthleteProfile.model_validate(response.json())
+
+    def download_original_file(self, activity_id: str) -> bytes:
         """Download the original uploaded file for an activity as raw bytes.
 
-        ``GET /activity/{id}/file`` — the response body is GZIP-compressed
-        (verified: official API cookbook and forum threads 80090/609) and may
-        be fit/gpx/tcx bytes once decompressed; gzip is removed here.
+        ``GET /activity/{id}/file`` — the response body may be
+        GZIP-compressed or an uncompressed FIT file (live-verified: a
+        request returned an uncompressed FIT, ``b'.FIT'`` at offset 8), so
+        gzip is removed here only when the magic bytes say so; other bodies
+        pass through unchanged. Decompressed content may be fit/gpx/tcx
+        bytes.
         """
         response = self._request("GET", f"/activity/{activity_id}/file")
         return self._gunzip(response.content)
 
-    def download_fit_file(self, activity_id: int) -> bytes:
+    def download_fit_file(self, activity_id: str) -> bytes:
         """Download the generated always-FIT file for an activity as raw bytes.
 
         ``GET /activity/{id}/fit-file`` (verified: forum threads 80090/609).

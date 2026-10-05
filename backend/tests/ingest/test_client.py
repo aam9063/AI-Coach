@@ -108,7 +108,7 @@ def test_list_activities_sends_date_range_params() -> None:
 def test_list_activities_parses_activity_models() -> None:
     payload = [
         {
-            "id": 123,
+            "id": "i163428838",
             "name": "Morning ride",
             "type": "Ride",
             "start_date_local": "2024-01-02T08:00:00+01:00",
@@ -120,7 +120,8 @@ def test_list_activities_parses_activity_models() -> None:
     activities = client.list_activities("2024-01-01", "2024-01-31")
 
     assert len(activities) == 1
-    assert activities[0].id == 123
+    # Real Intervals.icu ids are strings with an "i" prefix (live-verified).
+    assert activities[0].id == "i163428838"
     assert activities[0].name == "Morning ride"
 
 
@@ -139,9 +140,9 @@ def test_get_streams_uses_activity_streams_endpoint() -> None:
     payload = [{"type": "power", "data": [0, 100, 250]}]
     client, sent = make_client(lambda _: json_response(payload), make_settings())
 
-    streams = client.get_streams(123)
+    streams = client.get_streams("i123")
 
-    assert relative_path(sent[0]) == "/activity/123/streams"
+    assert relative_path(sent[0]) == "/activity/i123/streams"
     assert streams[0].type == "power"
 
 
@@ -202,7 +203,7 @@ def test_404_raises_not_found_error() -> None:
     )
 
     with pytest.raises(IntervalsNotFoundError):
-        client.get_streams(999999)
+        client.get_streams("i999999")
 
     assert len(sent) == 1
 
@@ -244,9 +245,9 @@ def test_download_original_file_gunzips_response() -> None:
         lambda _: httpx.Response(200, content=gzipped), make_settings()
     )
 
-    data = client.download_original_file(123)
+    data = client.download_original_file("i123")
 
-    assert relative_path(sent[0]) == "/activity/123/file"
+    assert relative_path(sent[0]) == "/activity/i123/file"
     assert data == raw_fit, "gzip-compressed body must be decompressed to raw bytes"
 
 
@@ -255,7 +256,7 @@ def test_download_fit_file_returns_raw_bytes() -> None:
         lambda _: httpx.Response(200, content=b"GENERATED-FIT"), make_settings()
     )
 
-    data = client.download_fit_file(123)
+    data = client.download_fit_file("i123")
 
-    assert relative_path(sent[0]) == "/activity/123/fit-file"
+    assert relative_path(sent[0]) == "/activity/i123/fit-file"
     assert data == b"GENERATED-FIT"
