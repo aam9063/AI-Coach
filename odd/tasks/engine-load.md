@@ -81,7 +81,9 @@ Independently verified by `gentle-ai-verify` (read-only) at HEAD `5e3e9ac`, 2026
 
 **Review findings fixed after verification** (commit `63cafcd`): the calibration tool crashed on a Windows cp1252 console (U+2248 is not representable) and now prints an ASCII-safe report; two functions gained docstrings; and `tests/test_dbsupport.py` had imported `test_database_url` under its own name, so pytest collected it as a test and warned — now aliased with an explanatory comment.
 
-Not verified (stated limitations, not passes): the strength sRPE path has no live data to exercise because no RPE is entered in Intervals.icu yet (verified by tests only), and the hand-derived reference values inside the test docstrings were accepted from the parent's independent re-derivation rather than recomputed by the verifier.
+**Later closed with real data (2026-10-05)**: the owner entered RPE in Intervals.icu, so the strength sRPE path is no longer test-only. After a re-sync, 14 of 26 activities carry an RPE (the five weight-training sessions all RPE 4) and the daily-load recompute switched exactly those five from `hr` to `srpe`: 17-jun 6.62 → **38.40**, 4-jul 7.18 → **64.27**, 7-jul 12.13 → **59.30** TSS, with 21 activities still on HR. The PMC reflects it (17-jun CTL 18.67, TSB −15.52). The informational comparison printed by `app.tools.calibrate_srpe` over the 14 sessions with both RPE and HR gives a median hrTSS-implied factor of **0.0768** (gym-only ≈ 0.041), i.e. the owner-agreed equivalent-effort anchor (0.2381) deliberately rates strength work about three times higher than an hrTSS-anchored calibration would — recorded here so the magnitude of that choice stays visible.
+
+Remaining limitation: the hand-derived reference values inside the test docstrings were accepted from the parent's independent re-derivation rather than recomputed by the verifier.
 
 ## Progress
 
