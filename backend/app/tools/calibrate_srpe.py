@@ -1,28 +1,35 @@
-"""sRPE calibration report (LOAD-12): implied TSS-equivalent factor.
+"""sRPE hrTSS comparison report (LOAD-12): the implied TSS-equivalent factor.
 
-Read-only tool that computes how the documented PLACEHOLDER sRPE factor
-(``engine_srpe_tss_equivalent_factor = 1.0``, raw Foster AU — LOAD-11)
-gets replaced by a MEASURED one once RPE data exists.
+Read-only tool that computes what the sRPE TSS-equivalent factor would be
+if strength loads were anchored to heart rate: the MEDIAN of
+``hrTSS / sRPE_AU`` over sessions that have BOTH a stored owner-entered
+RPE and an HR stream.
 
-Method (owner-agreed, documented in ``app.engine.load``): for every
-session that has BOTH a stored owner-entered RPE (``activity.rpe``,
-LOAD-12) and an HR stream, compute
-
-    sRPE_AU       = RPE * duration_min          (Foster et al. 2001)
-    hrTSS         = the engine's HR-based load for the same session
-    implied factor = hrTSS / sRPE_AU
-
-and report the MEDIAN implied factor over those sessions, together with
-the per-session values, so the owner can review each data point before
-replacing the placeholder. This tool NEVER writes the factor (or anything
-else): changing the default is an explicit owner decision in settings
-(§14).
+This number is INFORMATIONAL EVIDENCE, not the configured factor. The
+configured factor (``engine_srpe_tss_equivalent_factor``, settings) comes
+from the owner-agreed equivalent-effort anchor (1 h at RPE 7 = 420 Foster
+AU ≡ 1 h at threshold = 100 TSS, so 100/420 ≈ 0.2381; see
+``app.engine.load``). The hrTSS-implied value (≈ 0.024 in practice) was
+considered and explicitly rejected: it reproduces heart rate's systematic
+undervaluation of strength work. This tool exists to keep that comparison
+reviewable — it shows what the hrTSS anchor would have been, and why it
+was rejected. It NEVER writes the factor (or anything else): changing the
+default is an explicit owner decision in settings (§14).
 
 Read-only: the tool only SELECTs from ``activity``/``activity_stream``.
 Sessions with an RPE but no usable HR side (no HR stream, unconfigured or
 degenerate HR thresholds, non-positive duration) are EXCLUDED with a
 reportable reason, never silently dropped. With no RPE data at all the
 report says so — zero sessions, no invented number, exit code 0.
+
+Method: for every qualifying session compute
+
+    sRPE_AU       = RPE * duration_min          (Foster et al. 2001)
+    hrTSS         = the engine's HR-based load for the same session
+    implied factor = hrTSS / sRPE_AU
+
+and report the MEDIAN implied factor together with the per-session
+values, so the owner can re-review the rejected comparison at any time.
 
 Entry points:
 
@@ -260,18 +267,21 @@ async def collect_srpe_hr_sessions(
 
 
 def format_report(report: CalibrationReport) -> str:
-    """Human-readable report of one calibration pass (read-only)."""
+    """Human-readable report of one comparison pass (read-only)."""
     lines = [
-        "sRPE calibration (LOAD-12) — how the placeholder factor gets",
-        "replaced by a measured one:",
+        "sRPE hrTSS comparison (LOAD-12) — informational evidence, NOT the",
+        "configured factor:",
         "  implied factor = median of hrTSS / sRPE_AU over sessions with",
-        "  BOTH a stored owner-entered RPE and an HR stream.",
+        "  BOTH a stored owner-entered RPE and an HR stream. The configured",
+        "  engine_srpe_tss_equivalent_factor comes from the owner-agreed",
+        "  equivalent-effort anchor (1 h at RPE 7 = 420 AU ≡ 1 h at",
+        "  threshold = 100 TSS, so 100/420 ≈ 0.2381), not from this report.",
     ]
     if not report.sessions:
         lines.append(
             "sessions with both RPE and HR: 0 (zero sessions) — nothing to "
-            "calibrate yet. Enter an RPE on your gym sessions in "
-            "Intervals.icu and re-sync; no factor is invented without data."
+            "compare yet. Enter an RPE on your gym sessions in "
+            "Intervals.icu and re-sync; no number is invented without data."
         )
     else:
         factor = report.implied_factor
@@ -286,9 +296,10 @@ def format_report(report: CalibrationReport) -> str:
         )
         lines.append(f"implied factor (median): {factor:.6f}")
         lines.append(
-            "Replacing the placeholder is an explicit owner decision: set "
-            "engine_srpe_tss_equivalent_factor in settings (§14); this tool "
-            "never writes it."
+            "This number is the comparison the owner reviewed when choosing "
+            "the anchor factor (the hrTSS anchor was rejected because it "
+            "reproduces HR's undervaluation of strength work); this tool "
+            "never writes the factor."
         )
     if report.excluded:
         lines.append(
@@ -306,10 +317,12 @@ def build_parser() -> argparse.ArgumentParser:
     return argparse.ArgumentParser(
         prog="python -m app.tools.calibrate_srpe",
         description=(
-            "Read-only report: the implied sRPE TSS-equivalent factor "
+            "Read-only report: the hrTSS-implied sRPE TSS-equivalent factor "
             "(median of hrTSS / sRPE_AU over sessions with both a stored "
-            "owner-entered RPE and an HR stream). With no RPE data it "
-            "reports zero sessions. Never writes anything."
+            "owner-entered RPE and an HR stream) — informational evidence "
+            "compared against the owner-agreed anchor factor (100/420). "
+            "With no RPE data it reports zero sessions. Never writes "
+            "anything."
         ),
     )
 

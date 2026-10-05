@@ -48,8 +48,9 @@ __all__ = [
 
 # LOAD-12 note: with an owner-entered RPE stored on strength activities,
 # this CLI's report shows the sRPE method under "load methods used" and
-# the calibration tool (app.tools.calibrate_srpe) reads the same data to
-# replace the placeholder factor. Nothing else changes for other sports.
+# the comparison tool (app.tools.calibrate_srpe) reads the same data to
+# report the hrTSS-implied factor as informational evidence. Nothing else
+# changes for other sports.
 
 
 def thresholds_from_settings(settings: Settings) -> ThresholdBundle:
@@ -58,13 +59,13 @@ def thresholds_from_settings(settings: Settings) -> ThresholdBundle:
     Missing values stay ``None`` — the engine then reports the affected
     method as skipped instead of silently defaulting (§5.1). The sRPE
     TSS-equivalent factor comes from settings (LOAD-11): its shipped value
-    1.0 is a documented PLACEHOLDER — the raw Foster load in arbitrary
-    units, NOT calibrated to the TSS scale, because there is no RPE data
-    anywhere to calibrate against. Documented calibration method: once gym
-    sessions record an RPE, compare their sRPE AU against the hrTSS of the
-    same sessions (gym sessions carry HR) and set the factor so the two
-    agree on average — measured by the read-only tool
-    ``python -m app.tools.calibrate_srpe`` (LOAD-12).
+    100/420 ≈ 0.2381 is the documented OWNER CHOICE (2026-10-05,
+    equivalent-effort anchor: 1 h at RPE 7 = 420 Foster AU ≡ 1 h at
+    threshold = 100 TSS — a documented owner decision, not a literature
+    constant). The hrTSS-implied factor (≈ 0.024, measured by the read-only
+    tool ``python -m app.tools.calibrate_srpe``) was considered and
+    explicitly rejected because it reproduces heart rate's undervaluation
+    of strength work.
     """
     return ThresholdBundle(
         ftp_watts=settings.athlete_ftp_w,

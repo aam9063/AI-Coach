@@ -127,20 +127,28 @@ class Settings(BaseSettings):
     # hour at LTHR = 100 hrTSS).
     engine_trimp_reference_minutes: float = 60.0
     # Strength sRPE TSS-equivalent factor (Foster et al. 2001 session-RPE).
-    # PLACEHOLDER: 1.0 = raw Foster arbitrary units, NOT calibrated to the
-    # TSS scale — there is no RPE data anywhere to calibrate against.
-    # Calibration method (owner-agreed plan): once gym sessions record RPE,
-    # compare their sRPE AU against the hrTSS of the SAME sessions (the
-    # owner's gym sessions do carry HR) and set this factor so the two
-    # agree on average.
+    # OWNER CHOICE (2026-10-05): equivalent-effort anchor — NOT a literature
+    # constant and NOT an hrTSS calibration. One hour at RPE 7 (Foster AU =
+    # 7 x 60 = 420) is treated as equivalent to one hour at threshold
+    # (100 TSS), so the factor is
+    #   100 / 420 = 0.2380952380952381  (≈ 0.2381).
+    # Consequence: the owner's real 40.3-minute RPE-7 gym session (282.1 AU)
+    # becomes ≈ 67 TSS-equivalent — comparable to a one-hour ride (~60 TSS) —
+    # where the earlier raw-AU value 1.0 made it 282 and dwarfed every ride.
+    # The hrTSS-implied anchor (≈ 0.024, measured by the read-only tool
+    # app.tools.calibrate_srpe) was explicitly rejected: it reproduces heart
+    # rate's systematic undervaluation of strength work.
     engine_srpe_tss_equivalent_factor: float = Field(
-        default=1.0,
+        default=100 / 420,  # 100 TSS per 420 AU (1 h at RPE 7) = 0.2380952380952381
         description=(
-            "PLACEHOLDER (raw Foster AU, not TSS-calibrated; Foster et al. "
-            "2001). Calibration method: once gym sessions record RPE, "
-            "compare their sRPE AU against the hrTSS of the same sessions "
-            "(gym sessions carry HR) and set the factor so the two agree on "
-            "average."
+            "OWNER CHOICE (2026-10-05): equivalent-effort anchor — one hour "
+            "at RPE 7 (420 Foster AU) counts as one hour at threshold "
+            "(100 TSS), so the factor is 100/420 = 0.2380952380952381. A "
+            "documented owner decision, not a literature constant. It makes "
+            "a 40.3-minute RPE-7 gym session (~282 AU) ≈ 67 TSS-equivalent, "
+            "comparable to a one-hour ride. The hrTSS-implied factor (~0.024, "
+            "see app.tools.calibrate_srpe) was considered and rejected: it "
+            "reproduces heart rate's undervaluation of strength work."
         ),
     )
     # Banister impulse-response time constants (Banister 1991; Morton,

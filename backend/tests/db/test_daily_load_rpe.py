@@ -3,7 +3,8 @@
 The stored owner-entered ``activity.rpe`` must reach the engine so a
 strength session with an RPE gets a real sRPE load (instead of being
 skipped or mis-rated through gym-level HR), and the configured sRPE
-factor (``engine_srpe_tss_equivalent_factor``; placeholder 1.0, LOAD-11)
+factor (``engine_srpe_tss_equivalent_factor``; owner-agreed anchor 100/420,
+LOAD-11)
 must flow into the persisted and returned load. The chosen method stays
 traceable in the persisted ``methods`` trace and the CLI report.
 """

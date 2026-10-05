@@ -4,7 +4,8 @@ defaults (LOAD-11, §7/§14).
 Contract: the Settings defaults are EXACTLY today's effective engine
 values (the pure engine's documented module constants remain the fallback),
 each configurable via environment variables, and the sRPE TSS-equivalent
-factor is documented as a PLACEHOLDER pending calibration.
+factor is the documented OWNER CHOICE (equivalent-effort anchor,
+2026-10-05: 100/420).
 """
 
 from __future__ import annotations
@@ -64,8 +65,12 @@ class TestSettingsDefaultsMatchEngineConstants:
         assert settings.engine_trimp_sex == "male"
         assert settings.engine_trimp_reference_minutes == 60.0
 
-    def test_srpe_placeholder_default_is_raw_foster_au(self) -> None:
-        assert _settings().engine_srpe_tss_equivalent_factor == 1.0
+    def test_srpe_factor_default_is_the_owner_anchor(self) -> None:
+        # 100 TSS per 420 Foster AU (1 h at RPE 7) = 100 / 420 =
+        # 0.2380952380952381 — the owner-agreed equivalent-effort anchor.
+        assert _settings().engine_srpe_tss_equivalent_factor == pytest.approx(
+            100 / 420
+        )
 
     def test_banister_constants(self) -> None:
         settings = _settings()
@@ -103,12 +108,13 @@ class TestSettingsAreConfigurableFromEnvironment:
         assert settings.engine_cross_check_relative_tolerance == 0.2
 
 
-class TestSrpePlaceholderDocumented:
-    def test_field_description_says_placeholder_and_calibration(self) -> None:
+class TestSrpeOwnerChoiceDocumented:
+    def test_field_description_says_owner_choice_and_anchor(self) -> None:
         description = (
             Settings.model_fields["engine_srpe_tss_equivalent_factor"].description
             or ""
         ).lower()
-        assert "placeholder" in description
-        assert "calibrat" in description
-        assert "hrtss" in description
+        assert "owner" in description
+        assert "anchor" in description
+        assert "420" in description
+        assert "hrtss" in description  # the rejected alternative is named

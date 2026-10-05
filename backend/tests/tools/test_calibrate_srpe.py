@@ -2,10 +2,12 @@
 
 ``app.tools.calibrate_srpe`` computes the implied sRPE TSS-equivalent
 factor as the MEDIAN of ``hrTSS / sRPE_AU`` over sessions that have BOTH
-a stored owner-entered RPE and an HR stream — this is how the documented
-placeholder factor (1.0, LOAD-11) gets replaced by a measured one once
-RPE data exists. With no RPE data it must report zero sessions instead of
-failing or inventing a number. The tool is strictly read-only.
+a stored owner-entered RPE and an HR stream — INFORMATIONAL EVIDENCE only:
+the configured factor now comes from the owner-agreed equivalent-effort
+anchor (100/420, LOAD-11), and this number is the hrTSS-implied comparison
+the owner reviewed and rejected. With no RPE data it must report zero
+sessions instead of failing or inventing a number. The tool is strictly
+read-only.
 """
 
 import datetime as dt
@@ -103,11 +105,12 @@ class TestCalibrationReport:
         assert "0" in text
         assert "no sessions" in text.lower() or "zero" in text.lower()
 
-    def test_report_states_the_calibration_purpose(self) -> None:
+    def test_report_states_the_comparison_purpose(self) -> None:
         text = format_report(CalibrationReport(sessions=(), excluded=()))
-        # The report must say this is how the placeholder factor gets
-        # replaced by a measured one.
-        assert "placeholder" in text.lower()
+        # The report must present the number as a comparison against the
+        # owner-agreed anchor factor, not as a pending replacement.
+        assert "comparison" in text.lower()
+        assert "owner" in text.lower()
 
     def test_excluded_sessions_are_reported_not_silent(self) -> None:
         report = CalibrationReport(

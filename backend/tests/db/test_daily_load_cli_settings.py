@@ -50,8 +50,10 @@ class TestThresholdsFromSettings:
         bundle = thresholds_from_settings(_settings())
         assert bundle.ftp_watts is None
         assert bundle.lthr_bpm is None
-        # Placeholder default: raw Foster AU, NOT a calibrated value.
-        assert bundle.srpe_tss_equivalent_factor == 1.0
+        # Owner-agreed anchor default: 100/420 ≈ 0.2381 (1 h at RPE 7 ≡
+        # 1 h at threshold) — a documented owner choice, not a literature
+        # constant.
+        assert bundle.srpe_tss_equivalent_factor == pytest.approx(100 / 420)
 
     def test_non_default_srpe_factor_flows_through_the_engine(self) -> None:
         bundle = thresholds_from_settings(

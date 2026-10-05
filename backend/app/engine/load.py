@@ -40,13 +40,16 @@ monitoring exercise training", J Strength Cond Res 15(1):109-115):
     TSS-equivalent     = Foster load * tss_equivalent_factor
 
 The ``tss_equivalent_factor`` maps Foster arbitrary units (AU) onto the
-TSS scale. **PLACEHOLDER (LOAD-11): the shipped value is 1.0 — the raw
-Foster load, NOT calibrated to the TSS scale**, because there is no RPE
-data anywhere to calibrate against. Calibration method (owner-agreed
-plan): once gym sessions record an RPE, compare their sRPE AU against the
-hrTSS of the SAME sessions (the owner's gym sessions do carry HR) and set
-the factor so the two agree on average. Until then every sRPE load is a
-raw AU value and must not be read as TSS. The factor is an explicit,
+TSS scale. **OWNER CHOICE (2026-10-05): equivalent-effort anchor — one
+hour at RPE 7 (Foster AU = 7 x 60 = 420) is treated as equivalent to one
+hour at threshold (100 TSS), so the factor is 100 / 420 ≈ 0.2381.** This
+is a documented owner decision, not a literature constant. It makes the
+owner's real 40.3-minute RPE-7 gym session (282.1 AU) ≈ 67 TSS-equivalent
+— comparable to a one-hour ride (~60 TSS) — whereas the earlier raw-AU
+value 1.0 made it 282 and dwarfed every ride. The hrTSS-implied anchor
+(≈ 0.024, measurable with the read-only tool ``app.tools.calibrate_srpe``)
+was explicitly rejected: it reproduces heart rate's systematic
+undervaluation of strength work. The factor is an explicit,
 caller-supplied parameter (settings field
 ``engine_srpe_tss_equivalent_factor``), documented here as the single
 scaling knob.
@@ -147,10 +150,12 @@ effective values — this module never imports settings (§6 purity):
   = 100): ``trimp_at_lthr_reference(duration_min=...)`` and the
   ``trimp_reference_minutes`` parameter of :func:`select_load_method`;
   settings ``engine_trimp_reference_minutes``.
-- sRPE TSS-equivalent factor 1.0 — PLACEHOLDER, raw Foster AU, NOT
-  calibrated (Foster et al. 2001); calibration method in the module text
-  above (measured by ``app.tools.calibrate_srpe`` once RPE data exists,
-  LOAD-12); settings ``engine_srpe_tss_equivalent_factor``.
+- sRPE TSS-equivalent factor 100/420 ≈ 0.2381 — OWNER CHOICE
+  (2026-10-05), equivalent-effort anchor: 1 h at RPE 7 (420 Foster AU) ≡
+  1 h at threshold (100 TSS); a documented owner decision, not a
+  literature constant (rationale in the module text above; the rejected
+  hrTSS-implied alternative is measured by ``app.tools.calibrate_srpe``);
+  settings ``engine_srpe_tss_equivalent_factor``.
 - NP rolling window 30 samples (Coggan NP definition, 1 Hz stream):
   :data:`NP_WINDOW_SAMPLES`; settings ``engine_np_window_samples``.
 - NP minimum valid fraction 1.0 (owner choice, strict windows):
@@ -310,13 +315,12 @@ def srpe_load(rpe: float, duration_min: float, *, tss_equivalent_factor: float) 
     TSS scale; pass 1.0 for the raw Foster load. RPE outside [0, 10],
     non-positive duration, or a negative factor raise ``ValueError``.
 
-    PLACEHOLDER (LOAD-11): the shipped setting value is 1.0 — the raw
-    Foster load in arbitrary units, NOT calibrated to the TSS scale,
-    because there is no RPE data anywhere to calibrate against. Documented
-    calibration method: once gym sessions record an RPE, compare their
-    sRPE AU against the hrTSS of the SAME sessions (the owner's gym
-    sessions do carry HR) and set the factor so the two agree on average.
-    Until then, sRPE output must not be read as a TSS value.
+    Shipped setting value — OWNER CHOICE (2026-10-05): 100 / 420 ≈ 0.2381,
+    the equivalent-effort anchor: one hour at RPE 7 (Foster AU = 420)
+    counts as one hour at threshold (100 TSS). A documented owner
+    decision, not a literature constant; see the module docstring for the
+    rationale and for the rejected hrTSS-implied alternative (≈ 0.024,
+    measured by ``app.tools.calibrate_srpe``).
 
     Reference: Foster et al. 2001.
     """
@@ -899,12 +903,11 @@ class ThresholdBundle:
     the caller; nothing is read from settings here). ``None`` means "not
     configured" and makes the corresponding method inapplicable (reported
     as a skip reason), never silently defaulted. ``srpe_tss_equivalent_factor``
-    defaults to 1.0: a documented PLACEHOLDER (raw Foster AU, NOT
-    calibrated to the TSS scale — no RPE data exists to calibrate
-    against). Calibration method: once gym sessions record an RPE,
-    compare their sRPE AU against the hrTSS of the same sessions (gym
-    sessions carry HR) and set the factor so the two agree on average
-    (Foster et al. 2001; see :func:`srpe_load`).
+    defaults to 100 / 420 ≈ 0.2381 — the documented OWNER CHOICE
+    (2026-10-05, equivalent-effort anchor: 1 h at RPE 7 = 420 Foster AU ≡
+    1 h at threshold = 100 TSS; a documented owner decision, not a
+    literature constant — see :func:`srpe_load` and the module docstring;
+    the rejected hrTSS-implied alternative is ≈ 0.024).
     """
 
     ftp_watts: float | None = None
@@ -913,7 +916,7 @@ class ThresholdBundle:
     lthr_bpm: float | None = None
     hr_max_bpm: float | None = None
     hr_rest_bpm: float | None = None
-    srpe_tss_equivalent_factor: float = 1.0
+    srpe_tss_equivalent_factor: float = 100 / 420
 
 
 @dataclass(frozen=True, slots=True)

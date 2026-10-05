@@ -6,8 +6,9 @@ service layer reads the values and passes them in. These tests pin:
 
 - the engine module defaults still match the documented values,
 - the newly parameterized entry points accept and use non-default values,
-- the sRPE TSS-equivalent factor is documented as an explicit PLACEHOLDER
-  (raw Foster AU) with the calibration method spelled out.
+- the sRPE TSS-equivalent factor is documented as an explicit OWNER CHOICE
+  (equivalent-effort anchor: 1 h at RPE 7 = 420 AU ≡ 1 h at threshold =
+  100 TSS, so 100/420).
 """
 
 import inspect
@@ -202,24 +203,43 @@ class TestSelectLoadMethodConstantParameters:
         assert wide.tss != pytest.approx(default.tss)
 
 
-class TestSrpePlaceholderDocumented:
-    """The sRPE factor 1.0 is an explicit PLACEHOLDER (raw Foster AU), with
-    the calibration method spelled out — never presented as calibrated."""
+class TestSrpeOwnerAnchorDocumented:
+    """The sRPE factor 100/420 ≈ 0.2381 is the documented OWNER CHOICE
+    (equivalent-effort anchor, 2026-10-05): one hour at RPE 7 (Foster AU =
+    7 x 60 = 420) counts as one hour at threshold (100 TSS) — a documented
+    owner decision, never presented as a pending calibration."""
 
-    def test_srpe_load_docstring_documents_placeholder_and_calibration(self) -> None:
+    def test_srpe_load_docstring_documents_the_owner_anchor(self) -> None:
         doc = (inspect.getdoc(srpe_load) or "").lower()
-        assert "placeholder" in doc
-        assert "calibrat" in doc
-        assert "hrtss" in doc  # the comparison target of the calibration
+        assert "owner" in doc
+        assert "420" in doc
+        assert "hrtss" in doc  # the rejected alternative is named
 
-    def test_threshold_bundle_docstring_documents_placeholder(self) -> None:
+    def test_threshold_bundle_docstring_documents_the_owner_anchor(self) -> None:
         doc = (inspect.getdoc(ThresholdBundle) or "").lower()
-        assert "placeholder" in doc
-        assert "calibrat" in doc
+        assert "owner" in doc
+        assert "420" in doc
 
-    def test_raw_foster_units_are_the_default(self) -> None:
-        # RPE 7 x 60 min stays 420 raw Foster AU with the placeholder factor.
+    def test_factor_one_gives_the_raw_foster_load(self) -> None:
+        # Explicit factor 1.0 stays the raw Foster load: RPE 7 x 60 min = 420 AU.
         assert srpe_load(7.0, 60.0, tss_equivalent_factor=1.0) == pytest.approx(420.0)
+
+    def test_engine_default_makes_one_hour_at_rpe_7_equal_100_tss(self) -> None:
+        # Anchor arithmetic: 7 (RPE) x 60 (min) = 420 AU; 420 x (100/420)
+        # = 100 TSS-equivalent — one hour at RPE 7 ≡ one hour at threshold.
+        default_factor = ThresholdBundle().srpe_tss_equivalent_factor
+        assert srpe_load(7.0, 60.0, tss_equivalent_factor=default_factor) == (
+            pytest.approx(100.0)
+        )
+
+    def test_owner_gym_session_is_about_67_tss_equivalent(self) -> None:
+        # The owner's real 40.3-minute RPE-7 gym session: 7 x 40.3 = 282.1 AU;
+        # 282.1 x (100/420) = 67.1666... ≈ 67 TSS-equivalent (comparable to
+        # the ~60 TSS of a one-hour ride; the old 1.0 factor made it 282).
+        default_factor = ThresholdBundle().srpe_tss_equivalent_factor
+        assert srpe_load(7.0, 40.3, tss_equivalent_factor=default_factor) == (
+            pytest.approx(67.0, abs=0.5)
+        )
 
 
 class TestMinettiFlatCostStillDocumented:
