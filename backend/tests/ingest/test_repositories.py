@@ -121,7 +121,13 @@ class TestUpsertActivityStream:
 class TestUpsertWellness:
     async def test_same_date_updates_without_duplicate(self, db_session):  # type: ignore[no-untyped-def]
         first = await repository.upsert_wellness(
-            db_session, athlete_id=1, date=date(2026, 2, 1), hrv=58.0, weight=70.5
+            db_session,
+            athlete_id=1,
+            date=date(2026, 2, 1),
+            hrv=58.0,
+            weight=70.5,
+            intervals_icu_ctl=71.2,
+            intervals_icu_atl=55.3,
         )
         second = await repository.upsert_wellness(
             db_session,
@@ -139,3 +145,19 @@ class TestUpsertWellness:
         assert stored.hrv == 60.0
         assert stored.sleep_minutes == 430
         assert stored.weight is None
+        # Not re-supplied on the update: cleared, not stale.
+        assert stored.intervals_icu_ctl is None
+        assert stored.intervals_icu_atl is None
+
+    async def test_cross_check_ctl_atl_round_trip(self, db_session):  # type: ignore[no-untyped-def]
+        """The Intervals CTL/ATL cross-check columns (§5.1) persist and are
+        NULL when not supplied — never a silent 0 (a real 0 CTL is data)."""
+        row = await repository.upsert_wellness(
+            db_session,
+            athlete_id=1,
+            date=date(2026, 2, 2),
+            intervals_icu_ctl=0.0,
+            intervals_icu_atl=42.5,
+        )
+        assert row.intervals_icu_ctl == 0.0
+        assert row.intervals_icu_atl == 42.5

@@ -297,6 +297,10 @@ async def _persist_wellness(
                         extras.get("sleepScore", extras.get("sleepScoreCalculated"))
                     ),
                     weight=record.weight,
+                    # §5.1: Intervals' own PMC values, stored ONLY in the
+                    # explicitly non-authoritative cross-check columns.
+                    intervals_icu_ctl=_numeric(extras.get("ctl")),
+                    intervals_icu_atl=_numeric(extras.get("atl")),
                 )
             await session.commit()
     except Exception:

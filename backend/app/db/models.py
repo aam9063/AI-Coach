@@ -104,6 +104,13 @@ class WellnessRow(Base):
     sleep_minutes: Mapped[int | None] = mapped_column(Integer, default=None)
     sleep_score: Mapped[float | None] = mapped_column(Float, default=None)
     weight: Mapped[float | None] = mapped_column(Float, default=None)  # kg
+    # NON-AUTHORITATIVE cross-check columns (§5.1, §12.3; LOAD-10): the PMC
+    # values (CTL/ATL) computed by Intervals.icu itself, stored ONLY to
+    # cross-check our engine's PMC (``app.engine.pmc``) for the same load
+    # inputs. Never consumed as authoritative training state; the column
+    # names the source explicitly so neither can be mistaken for truth.
+    intervals_icu_ctl: Mapped[float | None] = mapped_column(Float, default=None)
+    intervals_icu_atl: Mapped[float | None] = mapped_column(Float, default=None)
 
 
 class DailyLoadRow(Base):

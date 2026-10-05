@@ -152,8 +152,16 @@ async def upsert_wellness(
     sleep_minutes: int | None = None,
     sleep_score: float | None = None,
     weight: float | None = None,
+    intervals_icu_ctl: float | None = None,
+    intervals_icu_atl: float | None = None,
 ) -> WellnessRow:
-    """Insert or update one daily wellness record keyed by (athlete, date)."""
+    """Insert or update one daily wellness record keyed by (athlete, date).
+
+    ``intervals_icu_ctl``/``intervals_icu_atl`` are the NON-authoritative
+    Intervals.icu PMC cross-check values (§5.1); passing no value clears
+    them on conflict, so a day whose source no longer reports a value does
+    not keep a stale one.
+    """
     values: dict[str, Any] = {
         "athlete_id": athlete_id,
         "date": date,
@@ -163,6 +171,8 @@ async def upsert_wellness(
         "sleep_minutes": sleep_minutes,
         "sleep_score": sleep_score,
         "weight": weight,
+        "intervals_icu_ctl": intervals_icu_ctl,
+        "intervals_icu_atl": intervals_icu_atl,
     }
     stmt = (
         pg_insert(WellnessRow)

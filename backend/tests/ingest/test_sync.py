@@ -180,6 +180,10 @@ async def test_sync_happy_path_persists_activities_streams_wellness(
                     "weight": 70.2,
                     "lnHrv": 4.06,
                     "sleepScore": 77.0,
+                    # Intervals' own PMC values: stored as NON-authoritative
+                    # cross-check columns only (§5.1, §12.3 LOAD-10).
+                    "ctl": 71.2,
+                    "atl": 55.3,
                 }
             ),
         ],
@@ -256,6 +260,9 @@ async def test_sync_happy_path_persists_activities_streams_wellness(
         assert wellness.weight == 70.2
         assert wellness.ln_hrv == 4.06
         assert wellness.sleep_score == 77.0
+        # §5.1 cross-check columns: Intervals' own CTL/ATL, never truth.
+        assert wellness.intervals_icu_ctl == 71.2
+        assert wellness.intervals_icu_atl == 55.3
 
 
 # ---------------------------------------------------------------------------
