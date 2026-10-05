@@ -10,6 +10,9 @@ NO power meter, so there is no real power stream to fit. Per PROJECT_BRIEF
 section 12.4 the acceptance for the CP/W' fit is validation on SYNTHETIC
 data with known parameters (``tests/engine/test_zones_cp.py``), and every
 result computed from a real stream later must be treated accordingly.
+Consequently the owner's FTP of record is the MANUALLY confirmed 180 W and
+the manual source is the FTP path that will be used in practice (ZON-3;
+see "FTP resolution" below and the documented precedence).
 
 Formulas and references
 -----------------------
@@ -34,6 +37,55 @@ iterative optimiser needed for the linear form). Fit quality is reported
 as R^2 and RMSE (in joules, on the Work axis) plus the number of curve
 points used, so callers can judge — and later gate threshold proposals
 (ZON-9) on — how well the athlete's data matches the 2-parameter model.
+
+FTP resolution (ZON-3, PROJECT_BRIEF section 7.3)
+-------------------------------------------------
+FTP is configurable from three sources and the output ALWAYS states which
+one is in use (a stable machine-readable ``source`` key plus a human
+explanation in ``FtpResolution.detail``):
+
+- ``"manual"``: a manual FTP value configured by the athlete. This is the
+  path used in practice for this owner — there is no power meter, and the
+  FTP of record is the manually confirmed 180 W (human-in-the-loop,
+  section 7.3).
+- ``"cp_derived"``: the CP of a :class:`CriticalPowerFit` times an explicit,
+  configurable factor (default 1.0). The linear-form CP approximates FTP;
+  taking CP directly as the FTP estimate (factor 1.0) is the standard
+  convention AND a documented OWNER CHOICE here — the factor is a first
+  parameter of :func:`resolve_ftp`, never buried.
+- ``"twenty_min_power"``: 95% of the best 20-minute power (the 600 s point
+  of the mean-maximal power curve). The 95% factor is the Allen & Coggan
+  FTP convention (LITERATURE constant
+  :data:`TWENTY_MIN_TO_FTP_FACTOR`).
+
+When more than one source is available a documented, configurable
+precedence decides (:data:`DEFAULT_FTP_PRECEDENCE`) and the result still
+reports the winning source. Default precedence ``manual > cp_derived >
+twenty_min_power`` is an OWNER CHOICE: the owner's manually confirmed value
+is the FTP of record and always wins while configured. When no source is
+available, :func:`resolve_ftp` raises ``ValueError`` naming all three.
+
+Power zones (ZON-4, PROJECT_BRIEF sections 7.3 and 12.4)
+--------------------------------------------------------
+The Coggan power zone table, exactly as printed in section 7.3 (% of FTP):
+
+    Z1 < 55, Z2 56-75, Z3 76-90, Z4 91-105, Z5 106-120, Z6 121-150, Z7 > 150
+
+(LITERATURE: Allen & Coggan, "Training and Racing with a Power Meter";
+zone names from the same source.) Absolute watt ranges are derived from
+the FTP and reported unrounded (pct x FTP / 100); rounding for display is
+a caller concern.
+
+Gap rule for fractional percentages: the printed bounds leave gaps for
+values strictly between whole numbers (e.g. 55.5%). The implemented rule
+is the continuous partition at the printed boundary values themselves:
+each of Z2-Z6 spans from its printed lower boundary value (inclusive) to
+the next zone's boundary value (exclusive) — Z2 = [55, 76), Z3 = [76, 91),
+Z4 = [91, 106), Z5 = [106, 121), Z6 = [121, 150] — while Z1 stays strictly
+below 55 and Z7 strictly above 150, exactly as printed. So 55.0% and 55.5%
+are Z2, 75.5% is still Z2, 76.0% is Z3, and 150.5% is Z7: both strict
+printed inequalities are preserved and the fractional gaps join the zone
+whose printed range they adjoin from below.
 
 Purity: all functions are pure and fully typed; validation errors raise
 ``ValueError`` rather than clamping or silently defaulting.
@@ -85,20 +137,48 @@ purity):
 - MMP ``min_valid_fraction`` default 1.0 (strict: only fully complete
   windows count): OWNER CHOICE, mirroring the strict NP default in
   ``app.engine.load``; relax explicitly for gap-heavy streams.
+- CP-to-FTP factor default 1.0 (:func:`resolve_ftp` parameter
+  ``cp_to_ftp_factor``): the linear-form CP approximates FTP; taking CP
+  directly as the FTP estimate is the standard convention and a documented
+  OWNER CHOICE — explicitly configurable, never buried.
+- FTP source precedence default ``manual > cp_derived > twenty_min_power``
+  (:func:`resolve_ftp` parameter ``precedence``): OWNER CHOICE — the owner
+  has no power meter and the manually confirmed 180 W is the FTP of record
+  (human-in-the-loop, section 7.3).
+- 20-min-to-FTP factor 0.95 (:data:`TWENTY_MIN_TO_FTP_FACTOR`) and the
+  600 s reference duration (:data:`FTP_TWENTY_MIN_DURATION_S`):
+  LITERATURE (Allen & Coggan FTP convention; section 7.3 fixes the 95%).
+- Coggan power zone percentages (:data:`_COGGAN_ZONE_SPECS`): LITERATURE,
+  exactly as printed in section 7.3 (section 12.4 acceptance); the
+  fractional-gap rule is a documented implementation choice (see the
+  "Power zones" section above).
 """
 
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, Literal
 
 __all__ = [
     "CP_MAX_DURATION_S",
     "CP_MIN_DURATION_S",
+    "DEFAULT_CP_TO_FTP_FACTOR",
+    "DEFAULT_FTP_PRECEDENCE",
     "DEFAULT_MMP_DURATIONS_S",
+    "FTP_SOURCE_CP_DERIVED",
+    "FTP_SOURCE_KEYS",
+    "FTP_SOURCE_MANUAL",
+    "FTP_SOURCE_TWENTY_MIN_POWER",
+    "FTP_TWENTY_MIN_DURATION_S",
+    "TWENTY_MIN_TO_FTP_FACTOR",
     "CriticalPowerFit",
+    "FtpResolution",
+    "PowerZone",
     "fit_critical_power",
     "mean_maximal_power_curve",
+    "power_zone_for",
+    "power_zones",
+    "resolve_ftp",
 ]
 
 
@@ -310,3 +390,332 @@ def fit_critical_power(
         rmse_joules=rmse,
         n_points=len(points),
     )
+
+
+FtpSourceKey = Literal["manual", "cp_derived", "twenty_min_power"]
+"""Stable machine-readable keys of the three FTP sources (section 7.3)."""
+
+FTP_SOURCE_MANUAL: Final[FtpSourceKey] = "manual"
+"""Machine-readable source key: a manual FTP value configured by the athlete.
+
+The path used in PRACTICE for this owner (no power meter; the FTP of record
+is the manually confirmed 180 W) — see the module docstring, "FTP resolution".
+"""
+
+FTP_SOURCE_CP_DERIVED: Final[FtpSourceKey] = "cp_derived"
+"""Machine-readable source key: CP-derived estimate (CP x cp_to_ftp_factor)."""
+
+FTP_SOURCE_TWENTY_MIN_POWER: Final[FtpSourceKey] = "twenty_min_power"
+"""Machine-readable source key: 95% of best 20-minute power."""
+
+FTP_SOURCE_KEYS: Final[tuple[FtpSourceKey, ...]] = (
+    FTP_SOURCE_MANUAL,
+    FTP_SOURCE_CP_DERIVED,
+    FTP_SOURCE_TWENTY_MIN_POWER,
+)
+"""All three FTP source keys, in the default precedence order."""
+
+DEFAULT_FTP_PRECEDENCE: Final[tuple[FtpSourceKey, ...]] = FTP_SOURCE_KEYS
+"""Default FTP source precedence: manual > cp_derived > twenty_min_power.
+
+OWNER CHOICE: the owner has no power meter and the manually confirmed 180 W
+is the FTP of record (human-in-the-loop, section 7.3), so the manual source
+always wins while configured. Configurable per call via ``resolve_ftp``.
+"""
+
+DEFAULT_CP_TO_FTP_FACTOR: Final[float] = 1.0
+"""Default CP-to-FTP factor: the linear-form CP approximates FTP.
+
+STANDARD CONVENTION and documented OWNER CHOICE: CP (the linear-form slope)
+is taken directly as the FTP estimate. Explicitly configurable per call
+(``resolve_ftp`` parameter ``cp_to_ftp_factor``) — deliberately visible as a
+parameter, never buried in the arithmetic.
+"""
+
+FTP_TWENTY_MIN_DURATION_S: Final[int] = 600
+"""Duration of the mean-maximal power curve point used for the FTP estimate:
+20 minutes = 600 s. LITERATURE (Allen & Coggan)."""
+
+TWENTY_MIN_TO_FTP_FACTOR: Final[float] = 0.95
+"""FTP = 95% of best 20-minute power. LITERATURE (Allen & Coggan FTP
+convention; section 7.3 fixes the 95%)."""
+
+
+@dataclass(frozen=True, slots=True)
+class FtpResolution:
+    """Resolved FTP that always states which source is in use (section 7.3).
+
+    ``ftp_watts`` is the resolved FTP, ``source`` the stable machine-readable
+    key of the winning source (:data:`FTP_SOURCE_KEYS`) and ``detail`` a
+    human-readable explanation of the choice (including the arithmetic for
+    the derived sources). ``available_sources`` lists every source that had
+    a value, in precedence order. The remaining fields carry the winning
+    source's provenance: ``cp_watts`` / ``cp_to_ftp_factor`` for
+    ``"cp_derived"`` and ``best_20_min_power_watts`` for
+    ``"twenty_min_power"`` (``None`` otherwise). Frozen and slotted,
+    consistent with :class:`CriticalPowerFit` and the other engine result
+    conventions.
+    """
+
+    ftp_watts: float
+    source: FtpSourceKey
+    detail: str
+    available_sources: tuple[FtpSourceKey, ...] = ()
+    cp_watts: float | None = None
+    cp_to_ftp_factor: float | None = None
+    best_20_min_power_watts: float | None = None
+
+
+def resolve_ftp(
+    *,
+    manual_ftp_watts: float | None = None,
+    cp_fit: CriticalPowerFit | None = None,
+    cp_to_ftp_factor: float = DEFAULT_CP_TO_FTP_FACTOR,
+    curve: Mapping[int, float] | None = None,
+    twenty_min_power_watts: float | None = None,
+    precedence: Sequence[FtpSourceKey] = DEFAULT_FTP_PRECEDENCE,
+) -> FtpResolution:
+    """Resolve FTP from up to three configurable sources, stating the source.
+
+    Sources (any combination; each contributes a candidate value):
+
+    - ``manual_ftp_watts``: the athlete's manually configured FTP (the
+      PRACTICAL path for this owner — no power meter, FTP of record is the
+      manually confirmed 180 W). Must be positive.
+    - ``cp_fit``: a :class:`CriticalPowerFit`; the candidate is
+      ``cp_fit.cp_watts * cp_to_ftp_factor``. The linear-form CP
+      approximates FTP; the factor default 1.0 is the standard convention
+      AND a documented OWNER CHOICE, kept explicit as a parameter (never
+      buried). CP and the factor must be positive.
+    - best 20-minute power: ``twenty_min_power_watts`` directly, or the
+      :data:`FTP_TWENTY_MIN_DURATION_S` (600 s) point of ``curve`` when the
+      direct value is not given (a curve without a 600 s point leaves the
+      source unavailable). The candidate is 95% of that power
+      (:data:`TWENTY_MIN_TO_FTP_FACTOR`, LITERATURE). The value must be
+      positive.
+
+    When several sources are available, the first one in ``precedence`` (a
+    permutation of :data:`FTP_SOURCE_KEYS`; default :data:`DEFAULT_FTP_PRECEDENCE`,
+    manual first — OWNER CHOICE) wins, and the returned
+    :class:`FtpResolution` still reports the winning ``source`` key. With no
+    source available, raises ``ValueError`` naming all three. Every
+    configured value must be positive (``ValueError``), even one that would
+    lose the precedence.
+
+    Returns a frozen :class:`FtpResolution` whose ``source`` is always
+    stated (machine-readable key plus human explanation in ``detail``).
+    """
+    order = tuple(precedence)
+    if sorted(order) != sorted(FTP_SOURCE_KEYS):
+        raise ValueError(
+            "precedence must be a permutation of the three FTP source keys "
+            f"{FTP_SOURCE_KEYS}, got {order!r}"
+        )
+    if cp_to_ftp_factor <= 0.0:
+        raise ValueError(
+            f"cp_to_ftp_factor must be positive, got {cp_to_ftp_factor!r}"
+        )
+
+    candidates: dict[FtpSourceKey, float] = {}
+    if manual_ftp_watts is not None:
+        if manual_ftp_watts <= 0.0:
+            raise ValueError(
+                f"manual FTP value must be positive, got {manual_ftp_watts!r}"
+            )
+        candidates[FTP_SOURCE_MANUAL] = manual_ftp_watts
+    if cp_fit is not None:
+        if cp_fit.cp_watts <= 0.0:
+            raise ValueError(
+                "CP-derived FTP is not usable: CP must be positive, got "
+                f"{cp_fit.cp_watts!r} W"
+            )
+        candidates[FTP_SOURCE_CP_DERIVED] = cp_fit.cp_watts * cp_to_ftp_factor
+    twenty_min = twenty_min_power_watts
+    if twenty_min is None and curve is not None:
+        twenty_min = curve.get(FTP_TWENTY_MIN_DURATION_S)
+    if twenty_min is not None:
+        if twenty_min <= 0.0:
+            raise ValueError(
+                "best 20-minute power must be positive, got "
+                f"{twenty_min!r} W (source {FTP_SOURCE_TWENTY_MIN_POWER!r})"
+            )
+        candidates[FTP_SOURCE_TWENTY_MIN_POWER] = (
+            TWENTY_MIN_TO_FTP_FACTOR * twenty_min
+        )
+
+    if not candidates:
+        raise ValueError(
+            "no FTP source available: provide a manual FTP value, a "
+            "CriticalPowerFit (CP-derived estimate) or a best 20-minute "
+            f"power; all three sources ({', '.join(FTP_SOURCE_KEYS)}) are missing"
+        )
+
+    source = next(s for s in order if s in candidates)
+    ftp_watts = candidates[source]
+    if source == FTP_SOURCE_MANUAL:
+        detail = (
+            f"manual FTP value of {ftp_watts:.1f} W supplied by the athlete "
+            "(owner-confirmed FTP of record; no power meter)"
+        )
+        provenance: dict[str, float | None] = {
+            "cp_watts": None,
+            "cp_to_ftp_factor": None,
+            "best_20_min_power_watts": None,
+        }
+    elif source == FTP_SOURCE_CP_DERIVED:
+        assert cp_fit is not None  # the candidate could only come from cp_fit
+        detail = (
+            f"CP-derived FTP estimate: CP {cp_fit.cp_watts:.1f} W x "
+            f"cp_to_ftp_factor {cp_to_ftp_factor:g} = {ftp_watts:.1f} W "
+            "(the linear-form CP approximates FTP; factor 1.0 is the "
+            "documented owner choice / standard convention)"
+        )
+        provenance = {
+            "cp_watts": cp_fit.cp_watts,
+            "cp_to_ftp_factor": cp_to_ftp_factor,
+            "best_20_min_power_watts": None,
+        }
+    else:
+        assert twenty_min is not None  # the candidate could only come from here
+        detail = (
+            f"{TWENTY_MIN_TO_FTP_FACTOR:g} x best 20-minute power "
+            f"({FTP_TWENTY_MIN_DURATION_S} s MMP point) {twenty_min:.1f} W = "
+            f"{ftp_watts:.2f} W FTP (Allen & Coggan FTP convention)"
+        )
+        provenance = {
+            "cp_watts": None,
+            "cp_to_ftp_factor": None,
+            "best_20_min_power_watts": twenty_min,
+        }
+    return FtpResolution(
+        ftp_watts=ftp_watts,
+        source=source,
+        detail=detail,
+        available_sources=tuple(s for s in order if s in candidates),
+        cp_watts=provenance["cp_watts"],
+        cp_to_ftp_factor=provenance["cp_to_ftp_factor"],
+        best_20_min_power_watts=provenance["best_20_min_power_watts"],
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class PowerZone:
+    """One Coggan power zone, printed percentages plus absolute watt bounds.
+
+    ``min_pct_ftp`` / ``max_pct_ftp`` are the EFFECTIVE percentage bounds of
+    the zone under the documented gap rule (see the module docstring,
+    "Power zones"); ``*_inclusive`` state whether each bound belongs to the
+    zone (Z1's 55% top edge and Z7's 150% bottom edge are exclusive, exactly
+    as printed: Z1 < 55, Z7 > 150). ``min_watts`` / ``max_watts`` are the
+    same bounds in watts for the FTP the table was built from (pct x FTP /
+    100, unrounded). ``None`` means unbounded on that side. Frozen and
+    slotted, consistent with the other engine result conventions.
+    """
+
+    key: str
+    name: str
+    min_pct_ftp: float | None
+    min_pct_inclusive: bool
+    max_pct_ftp: float | None
+    max_pct_inclusive: bool
+    min_watts: float | None
+    max_watts: float | None
+
+    def contains_pct(self, pct: float) -> bool:
+        """Whether a %FTP value falls inside this zone under the gap rule."""
+        below_min = self.min_pct_ftp is not None and (
+            pct < self.min_pct_ftp
+            or (not self.min_pct_inclusive and pct == self.min_pct_ftp)
+        )
+        if below_min:
+            return False
+        above_max = self.max_pct_ftp is not None and (
+            pct > self.max_pct_ftp
+            or (not self.max_pct_inclusive and pct == self.max_pct_ftp)
+        )
+        return not above_max
+
+
+# The Coggan power zone table, exactly as printed in section 7.3 (% of FTP):
+# Z1 < 55, Z2 56-75, Z3 76-90, Z4 91-105, Z5 106-120, Z6 121-150, Z7 > 150.
+# Effective bounds under the documented gap rule: Z2-Z6 span from the printed
+# lower boundary value (inclusive) to the next zone's boundary value
+# (exclusive); Z1 stays strictly below 55 and Z7 strictly above 150.
+# (key, name, min_pct, min_inclusive, max_pct, max_inclusive)
+# LITERATURE: Allen & Coggan, "Training and Racing with a Power Meter".
+_COGGAN_ZONE_SPECS: Final[
+    tuple[tuple[str, str, float | None, bool, float | None, bool], ...]
+] = (
+    ("Z1", "Active recovery", None, False, 55.0, False),
+    ("Z2", "Endurance", 55.0, True, 76.0, False),
+    ("Z3", "Tempo", 76.0, True, 91.0, False),
+    ("Z4", "Threshold", 91.0, True, 106.0, False),
+    ("Z5", "VO2 max", 106.0, True, 121.0, False),
+    ("Z6", "Anaerobic capacity", 121.0, True, 150.0, True),
+    ("Z7", "Neuromuscular power", 150.0, False, None, False),
+)
+
+
+def power_zones(ftp_watts: float) -> tuple[PowerZone, ...]:
+    """The Coggan power zone table with absolute watt ranges for ``ftp_watts``.
+
+    The published percentages are reproduced EXACTLY (section 7.3, section
+    12.4 acceptance): Z1 < 55, Z2 56-75, Z3 76-90, Z4 91-105, Z5 106-120,
+    Z6 121-150, Z7 > 150 (% FTP; Allen & Coggan). Absolute watt bounds are
+    pct x FTP / 100, reported unrounded.
+
+    Gap rule for fractional percentages (documented, not left undefined):
+    the printed bounds leave gaps for values strictly between whole numbers
+    (e.g. 55.5%). The implemented rule partitions the percentage space at
+    the printed boundary values themselves: Z2 = [55, 76), Z3 = [76, 91),
+    Z4 = [91, 106), Z5 = [106, 121), Z6 = [121, 150], Z1 strictly below 55,
+    Z7 strictly above 150. So 55.0% and 55.5% are Z2, 75.5% is still Z2,
+    76.0% is Z3, and 150.5% is Z7 — both strict printed inequalities
+    (Z1 < 55, Z7 > 150) are preserved and each fractional gap joins the
+    zone whose printed range it adjoins from below.
+
+    ``ftp_watts`` must be positive (``ValueError``).
+    """
+    if ftp_watts <= 0.0:
+        raise ValueError(f"ftp_watts must be positive, got {ftp_watts!r}")
+    return tuple(
+        PowerZone(
+            key=key,
+            name=name,
+            min_pct_ftp=min_pct,
+            min_pct_inclusive=min_inclusive,
+            max_pct_ftp=max_pct,
+            max_pct_inclusive=max_inclusive,
+            min_watts=None if min_pct is None else min_pct * ftp_watts / 100.0,
+            max_watts=None if max_pct is None else max_pct * ftp_watts / 100.0,
+        )
+        for key, name, min_pct, min_inclusive, max_pct, max_inclusive in (
+            _COGGAN_ZONE_SPECS
+        )
+    )
+
+
+def power_zone_for(watts: float, ftp_watts: float) -> PowerZone:
+    """Classify an absolute power into its Coggan zone for ``ftp_watts``.
+
+    Consistent with :func:`power_zones`: the value is converted to % FTP
+    (``watts / ftp_watts * 100``) and matched against the same effective
+    bounds, including the documented fractional-gap rule (e.g. 55.5% of FTP
+    is Z2, 150.5% is Z7 — see the :func:`power_zones` docstring).
+
+    ``ftp_watts`` must be positive and ``watts`` non-negative
+    (``ValueError``); zero watts is valid (coasting) and is Z1.
+    """
+    if ftp_watts <= 0.0:
+        raise ValueError(f"ftp_watts must be positive, got {ftp_watts!r}")
+    if watts < 0.0:
+        raise ValueError(f"watts must not be negative, got {watts!r}")
+    pct = watts * 100.0 / ftp_watts
+    for zone in power_zones(ftp_watts):
+        if zone.contains_pct(pct):
+            return zone
+    raise ValueError(  # pragma: no cover - the table covers [0, inf) exactly
+        f"no power zone covers {watts!r} W at FTP {ftp_watts!r} "
+        f"({pct!r}% FTP); this should be unreachable"
+    )
+
