@@ -47,7 +47,7 @@ The brief's core principle is "deterministic engine decides, LLM explains" (PROJ
 - [x] `LOAD-7`: RED+GREEN: CTL/ATL/TSB recursion tests (seed values, time-constant configurability, combined and per-sport, low-confidence flag before 90 days of history) (§7.2).
 - [x] `LOAD-8`: RED+GREEN: EWMA ACWR computation tested on synthetic series; assert it is returned as context-only metadata, not a warning (§7.2).
 - [x] `LOAD-9`: RED+GREEN: Banister model evaluation and `scipy.optimize` fit gated on performance-marker availability, with fit-quality reporting and a guard that unfitted models are marked non-personalized (§7.2).
-- [ ] `LOAD-10`: Integrate engine outputs into `daily_load` persistence with `engine_version` (§6) and write a cross-check test comparing PMC values to stored Intervals.icu values within the agreed tolerance (§12.3), documented as cross-check-only.
+- [x] `LOAD-10`: Integrate engine outputs into `daily_load` persistence with `engine_version` (§6) and write a cross-check test comparing PMC values to stored Intervals.icu values within the agreed tolerance (§12.3), documented as cross-check-only.
 - [ ] `LOAD-11`: Add configurable constants (time constants, coefficient sets, scaling factors) to settings with source comments (§14) and document module references in the `load.py` docstring.
 
 ## Acceptance criteria
@@ -96,4 +96,6 @@ In progress (Feature 3/11) on branch `feat/engine-load`, stacked on `fix/ingest-
 
   Positive result: day by day from 2026-04-11 to 2026-08-03 our CTL/ATL matched Intervals to `0.0000` given the same aerobic loads — an independent validation of LOAD-7/8 against a production implementation. Intervals values remain cross-check only (§5.1).
 
-Commits: 8451fb3 (LOAD-11 first half), 5e55275, 46e6964 (LOAD-5), 6b13cd7 (LOAD-1/2), cde4877 (LOAD-3/4), 2193f4a (LOAD-6), 37b197e (LOAD-7/8), 9515107 (LOAD-9), 5cf3b5d (test DB isolation), 0311617 (LOAD-10 first half)
+  **LOAD-10 acceptance met (§12.3)** — like-for-like verdict on the owner's real data, 200-day window: **PASS**. CTL compared on the aerobic-only view (matching Intervals' CTL definition) over 175 comparable days: median relative deviation **`0.0000%`**, max 9.05%, max absolute 0.4865 points, **0 failures**. ATL compared on the all-loads view over 176 days: median `0.0000%`, max absolute 0.3868 points, 0 failures. Three Intervals-side revisions detected and excluded (2026-07-19 ATL, 2026-08-04 CTL, 2026-08-28 CTL). The two non-like-for-like views remain printed and failing (19 and 15 days) as the evidence that the earlier FAIL was a definition difference. Owner decisions recorded: strength load **counts** toward our CTL (deliberate; Intervals excludes it), and the agreed tolerance is the hybrid rule (≤10% relative **or** ≤0.5 points absolute).
+
+Commits: 8451fb3 (LOAD-11 first half), 5e55275, 46e6964 (LOAD-5), 6b13cd7 (LOAD-1/2), cde4877 (LOAD-3/4), 2193f4a (LOAD-6), 37b197e (LOAD-7/8), 9515107 (LOAD-9), 5cf3b5d (test DB isolation), 0311617 (LOAD-10 first half), 7f8fa0c (cross-check diagnosis), 7ab07c0 + 2edef32 (cross-check like-for-like + cross-check columns)
