@@ -23,12 +23,14 @@ from typing import Final
 import pytest
 
 from app.engine.load import (
+    STRENGTH_SPORTS,
     ActivityLoadInput,
     BikePowerLoad,
     RunPaceLoad,
     SwimPaceLoad,
     ThresholdBundle,
     TrimpCoefficients,
+    is_strength_sport,
     run_pace_load,
     select_load_method,
 )
@@ -263,6 +265,35 @@ class TestPerSportApplicability:
         assert selection.method == "srpe"
         assert selection.tss == pytest.approx(210.0)
 
+    @pytest.mark.parametrize("sport", ["Walk", "Hike", "Snowshoe"])
+    def test_walking_sports_are_known_and_use_the_hr_path(self, sport: str) -> None:
+        """Real-data gap found on the owner's account (LOAD-10): 4 activities
+        are typed ``Walk`` and were rejected as unknown sports, losing their
+        load. Walking/hiking are legitimate aerobic load for a triathlete, so
+        the Strava-style walking types are known and reach the HR-based TRIMP
+        path (no walk-specific pace threshold exists; sRPE stays the last
+        resort). 60 min @ 150 bpm reuses the hand-calculated hrTSS value."""
+        activity = ActivityLoadInput(
+            sport=sport,
+            duration_s=3600.0,
+            hr_avg_bpm=150.0,
+            rpe=7.0,
+        )
+        selection = select_load_method(activity, FULL_THRESHOLDS, coefficients=COEFF)
+        assert selection.method == "hr"
+        assert selection.tss == pytest.approx(60.4576391242)
+        # Power and pace/speed were evaluated and skipped before HR won;
+        # the walk reason must not be a silent fall-through.
+        assert "power" in selection.skipped
+        assert "pace_speed" in selection.skipped
+
+    def test_walk_with_hr_and_no_rpe_still_needs_a_method(self) -> None:
+        """A known walking sport without HR and without RPE still raises the
+        explicit no-applicable-method error (known sport != decidable)."""
+        activity = ActivityLoadInput(sport="Walk", duration_s=3600.0)
+        with pytest.raises(ValueError, match="no applicable load method"):
+            select_load_method(activity, FULL_THRESHOLDS, coefficients=COEFF)
+
 
 class TestNothingApplicable:
     def test_empty_ride_raises_value_error(self) -> None:
@@ -421,3 +452,37 @@ class TestResultShape:
         assert set(selection.skipped) == {"power", "pace_speed", "hr"}
         for reason in selection.skipped.values():
             assert isinstance(reason, str) and reason
+
+
+class TestStrengthSportClassification:
+    """Public engine helper: which sports are strength sessions (LOAD-10).
+
+    The Intervals.icu PMC cross-check must exclude exactly the sports the
+    engine treats as strength when building its aerobic-only load view;
+    the classification lives here so the tool imports it instead of
+    duplicating the literals.
+    """
+
+    def test_known_strength_types_case_insensitive(self) -> None:
+        for sport in ("weighttraining", "strengthworkout", "workout"):
+            assert is_strength_sport(sport)
+        assert is_strength_sport("WeightTraining")
+        assert is_strength_sport("STRENGTHWORKOUT")
+        assert is_strength_sport("Workout")
+
+    def test_surrounding_whitespace_is_stripped(self) -> None:
+        assert is_strength_sport("  Workout ")
+
+    def test_aerobic_sports_are_not_strength(self) -> None:
+        for sport in ("Ride", "Run", "Swim", "Walk", "Hike", "VirtualRide"):
+            assert not is_strength_sport(sport)
+
+    def test_unknown_sport_is_not_strength(self) -> None:
+        # is_strength_sport classifies; it does not validate vocabulary.
+        # Strict validation stays in select_load_method (ValueError there).
+        assert not is_strength_sport("Windsurf")
+
+    def test_strength_sports_are_part_of_the_known_vocabulary(self) -> None:
+        # The strength types must stay recognised sports (a typo here would
+        # silently make select_load_method reject real strength sessions).
+        assert {"weighttraining", "strengthworkout", "workout"} == STRENGTH_SPORTS

@@ -130,6 +130,7 @@ from dataclasses import dataclass
 from typing import Final, Literal
 
 __all__ = [
+    "STRENGTH_SPORTS",
     "ActivityLoadInput",
     "BikePowerLoad",
     "LoadSelection",
@@ -142,6 +143,7 @@ __all__ = [
     "hr_ratio",
     "hrtss",
     "intensity_factor",
+    "is_strength_sport",
     "minetti_energy_cost",
     "normalized_graded_speed",
     "normalized_power",
@@ -755,11 +757,55 @@ _RUNNING_SPORTS: Final[frozenset[str]] = frozenset(
 _SWIMMING_SPORTS: Final[frozenset[str]] = frozenset({"swim"})
 """Activity types the swim pace method applies to (CSS)."""
 
+_WALKING_SPORTS: Final[frozenset[str]] = frozenset({"walk", "hike", "snowshoe"})
+"""Activity types walked on foot (Strava-style types: Walk, Hike, Snowshoe).
+
+Decision (LOAD-10, real-data finding 2026-10): the owner's account contains
+4 ``Walk`` activities and the engine originally rejected them as unknown
+sports, silently losing their load from ``daily_load``. Walking and hiking
+are legitimate aerobic training for a triathlete, so they are known sports;
+they deliberately have NO pace-based method (the run threshold pace is not
+a walking threshold and no walk threshold is configured), so they always
+select the HR-based TRIMP path when HR data exists and fall through to sRPE
+otherwise — exactly like any other sport without a pace method. Unknown
+sports still raise ``ValueError``; only this closed vocabulary was added.
+"""
+
+_STRENGTH_SPORTS: Final[frozenset[str]] = frozenset(
+    {"weighttraining", "strengthworkout", "workout"}
+)
+"""Activity types that are strength sessions (sRPE method, Foster et al.
+2001). Re-exported publicly as :data:`STRENGTH_SPORTS`: other modules that
+need the strength/non-strength split (e.g. the Intervals.icu PMC cross-check
+builds an aerobic-only load view) import this set instead of duplicating the
+literals, so the classification cannot drift from the engine's.
+"""
+
+STRENGTH_SPORTS: Final[frozenset[str]] = _STRENGTH_SPORTS
+"""Public, immutable set of strength activity types (matched lower-case):
+``weighttraining``, ``strengthworkout``, ``workout``. See
+:func:`is_strength_sport` for the classification helper."""
+
+
+def is_strength_sport(sport: str) -> bool:
+    """True when ``sport`` is a strength session type (LOAD-10 cross-check).
+
+    Matched case-insensitively with surrounding whitespace stripped, so
+    ``"WeightTraining"``/``"STRENGTHWORKOUT"``/``" Workout "`` all classify
+    as strength. Unknown sports simply return ``False`` — this helper
+    CLASSIFIES, it does not validate the vocabulary; strict sport
+    validation stays in :func:`select_load_method` (which raises
+    ``ValueError`` for unknown sports).
+    """
+    return sport.strip().lower() in STRENGTH_SPORTS
+
+
 _KNOWN_SPORTS: Final[frozenset[str]] = (
     _CYCLING_SPORTS
     | _RUNNING_SPORTS
     | _SWIMMING_SPORTS
-    | frozenset({"weighttraining", "strengthworkout", "workout"})
+    | _WALKING_SPORTS
+    | _STRENGTH_SPORTS
 )
 """Recognised activity types (matched case-insensitively). Unknown sports raise
 ``ValueError`` rather than being silently guessed into a method bucket."""
@@ -773,8 +819,8 @@ class ActivityLoadInput:
     mark stream gaps) or ``None`` when the stream is absent entirely.
     ``sport`` is a Strava-style activity type, matched case-insensitively
     against :data:`_KNOWN_SPORTS` (e.g. ``"Ride"``, ``"Run"``, ``"Swim"``,
-    ``"WeightTraining"``); unknown sports raise ``ValueError`` so a typo
-    can never silently change the selected method.
+    ``"Walk"``, ``"WeightTraining"``); unknown sports raise ``ValueError`` so a
+    typo can never silently change the selected method.
     """
 
     sport: str
@@ -921,6 +967,11 @@ def select_load_method(
         skipped["pace_speed"] = (
             "speed is not a load method for cycling "
             "(no bike speed-based TSS exists in the brief)"
+        )
+    elif sport in _WALKING_SPORTS:
+        skipped["pace_speed"] = (
+            "no pace-based load method for walking sports "
+            "(the run threshold pace is not a walking threshold)"
         )
     elif sport in _RUNNING_SPORTS:
         if thresholds.threshold_run_speed_mps is None:
