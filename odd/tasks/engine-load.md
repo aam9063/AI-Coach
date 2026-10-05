@@ -64,7 +64,24 @@ Directly implied conditions:
 
 ## Verification evidence
 
-To be filled when the feature is implemented (commits, test runs, cross-checks).
+Independently verified by `gentle-ai-verify` (read-only) at HEAD `5e3e9ac`, 2026-10-05 — 12/12 items PASS, no blocking defect:
+
+1. **Quality gates** — ruff clean; mypy strict clean (86 source files); `uv run pytest` 438 passed, 0 failed, 0 skipped. DB tests genuinely ran against the dedicated test database and the dev database kept its rows (26 activities / 131 streams / 177 wellness) across the run.
+2. **Engine purity (§6/§7)** — `app/engine/{load,pmc,banister}.py` import only stdlib, numpy and scipy; no `app.db`/`app.ingest`/`app.core`, no I/O libraries, no settings reads. The purity test auto-discovers every module in the package via `pkgutil`.
+3. **Checklist completeness** — all of LOAD-1..LOAD-12 mapped to code and to passing tests (see the progress list above).
+4. **§12.3 cross-check** — read-only tool; verdict PASS with like-for-like statistics: CTL aerobic-only median relative deviation `0.0000%` (max 9.05%, max absolute 0.4865 points, 0 failures over 175 days), ATL all-loads median `0.0000%` (max absolute 0.3868 points, 0 failures over 176 days); three Intervals-side revisions detected and excluded (2026-07-19 ATL, 2026-08-04 CTL, 2026-08-28 CTL); the non-like-for-like views stay printed and failing (19 and 15 days). The report states on every run that Intervals values are never authoritative (§5.1).
+5. **Method selection (§7.1)** — fixed order power → pace/speed → HR → sRPE, the chosen method returned and persisted in `daily_load.methods` (verified on the real rows), and the strength-only sRPE-before-HR inversion documented as deliberate.
+6. **ACWR (§7.2)** — `AcwrResult` carries exactly `acute_ewma`/`chronic_ewma`/`ratio`; no warning/risk/flag field anywhere, and no warning logic exists in the engine or tools.
+7. **Banister (§7.2)** — the `parameters is not None ⇔ personalized` invariant holds; insufficient markers or a failed fit return `personalized=False` with a reason and no parameters, so an unfitted model cannot be presented as personalized.
+8. **`engine_version` (§6)** — non-nullable column, set from settings, present on every persisted row (verified in the database).
+9. **Configurable constants (§14)** — 20 `engine_*` fields, each with a source comment (literature reference or explicit owner choice), locked by a defaults test. Only flag: the Minetti polynomial coefficients remain inline with a citation and a note that they may move to settings later.
+10. **Owner decisions recorded** — the sRPE anchor (`100/420`, equivalent effort, with the rejected alternatives), the hybrid cross-check tolerance (10% or 0.5 points) and the deliberate strength-in-CTL choice all appear with their rationale in code and in this document.
+11. **Migration hygiene** — single head `b2f8d4c6a9e1`; the dev database is at head, chain base → `daa3ba6946b9` → `b7e4c9a1d2f3` → `e5f6a7b8c9d0` → `b2f8d4c6a9e1`.
+12. **Real-data plausibility** — `python -m app.db.daily_load --days 200` considered all 26 activities (ride 17, walk 4, weight-training 5), persisted 200 days × 4 sport keys, all through the HR method because no RPE is entered yet, with **no skipped activities**; a second run upserted the same 800 rows (idempotent).
+
+**Review findings fixed after verification** (commit `63cafcd`): the calibration tool crashed on a Windows cp1252 console (U+2248 is not representable) and now prints an ASCII-safe report; two functions gained docstrings; and `tests/test_dbsupport.py` had imported `test_database_url` under its own name, so pytest collected it as a test and warned — now aliased with an explanatory comment.
+
+Not verified (stated limitations, not passes): the strength sRPE path has no live data to exercise because no RPE is entered in Intervals.icu yet (verified by tests only), and the hand-derived reference values inside the test docstrings were accepted from the parent's independent re-derivation rather than recomputed by the verifier.
 
 ## Progress
 
