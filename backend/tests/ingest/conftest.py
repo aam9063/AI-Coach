@@ -1,28 +1,15 @@
-"""Shared fixtures for ingest tests.
+"""Ingest-specific fixtures.
 
-DB-touching tests (project convention) run against the real compose Postgres
-with a fresh schema per test (create_all/drop_all) and SKIP cleanly when
-Postgres is unreachable. SQLite is deliberately not used.
+The shared ``db_engine``/``db_session``/``anyio_backend`` fixtures live in
+``tests/conftest.py`` and target the dedicated test database (see
+``tests/dbsupport.py``); this module only holds what is specific to ingest
+tests.
 """
 
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
-from sqlalchemy.ext.asyncio import (
-    AsyncEngine,
-    AsyncSession,
-    async_sessionmaker,
-    create_async_engine,
-)
-
-from app.core.settings import get_settings
-
-
-@pytest.fixture
-def anyio_backend() -> str:
-    """Backend for the anyio pytest plugin (async tests)."""
-    return "asyncio"
 
 
 @pytest.fixture(autouse=True)
@@ -43,35 +30,3 @@ def _tmp_fit_storage_root(
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
-
-
-@pytest.fixture
-async def db_engine() -> AsyncIterator[AsyncEngine]:
-    """Engine against the configured Postgres with a fresh schema per test."""
-    engine = create_async_engine(get_settings().database_url)
-    try:
-        try:
-            async with engine.connect():
-                pass
-        except Exception:
-            pytest.skip(
-                "Postgres unreachable; DB-touching tests require the compose "
-                "Postgres: docker compose -f infra/docker-compose.yml "
-                "--env-file .env up -d postgres"
-            )
-        from app.db.models import Base
-
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.drop_all)
-            await conn.run_sync(Base.metadata.create_all)
-        yield engine
-    finally:
-        await engine.dispose()
-
-
-@pytest.fixture
-async def db_session(db_engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
-    """Session bound to the fresh-schema engine."""
-    maker = async_sessionmaker(db_engine, expire_on_commit=False)
-    async with maker() as session:
-        yield session
