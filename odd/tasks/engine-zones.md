@@ -38,15 +38,15 @@ Zones and thresholds are the reference points every other metric depends on: loa
 
 - [x] `ZON-1`: RED: unit tests for the linear 2-parameter CP/W' fit on synthetic mean-maximal power data generated with known CP and W' parameters (§12.4), asserting recovered parameters and fit error within tolerance.
 - [x] `ZON-2`: GREEN: implement mean-maximal power curve extraction and CP/W' fitting (best efforts 2–20 min, Work = CP × t + W') in `backend/app/engine/zones.py`; tests green.
-- [ ] `ZON-3`: RED+GREEN: FTP resolution with the three configurable sources (manual, CP-derived, 95% of best 20-min) and an output that always states which source is in use (§7.3).
-- [ ] `ZON-4`: RED+GREEN: power zone table tests asserting exact Coggan percentage boundaries (Z1 < 55 … Z7 > 150) (§7.3, §12.4).
-- [ ] `ZON-5`: RED+GREEN: run CS/D' fit on synthetic data with known parameters (best efforts ~3–20 min) (§7.3, §12.4).
-- [ ] `ZON-6`: RED+GREEN: VDOT formulas tested against hand-computed reference values (VO2, %VO2max, VDOT) and training-pace derivation (easy, marathon, threshold, interval, repetition) (§7.3).
-- [ ] `ZON-7`: RED+GREEN: CSS formula tested on hand-computed 400/200 time-trial examples, with pace per 100 m output and swim zones relative to CSS (§7.3).
-- [ ] `ZON-8`: RED+GREEN: heart-rate zone tables per sport asserted against the published Friel percentages for run and bike (§7.3, §12.4).
-- [ ] `ZON-9`: RED+GREEN: threshold change detection — new effort exceeding the model by a configurable margin produces a *proposal* (not an applied update); proposal object carries evidence and prior value (§7.3).
+- [x] `ZON-3`: RED+GREEN: FTP resolution with the three configurable sources (manual, CP-derived, 95% of best 20-min) and an output that always states which source is in use (§7.3).
+- [x] `ZON-4`: RED+GREEN: power zone table tests asserting exact Coggan percentage boundaries (Z1 < 55 … Z7 > 150) (§7.3, §12.4).
+- [x] `ZON-5`: RED+GREEN: run CS/D' fit on synthetic data with known parameters (best efforts ~3–20 min) (§7.3, §12.4).
+- [x] `ZON-6`: RED+GREEN: VDOT formulas tested against hand-computed reference values (VO2, %VO2max, VDOT) and training-pace derivation (easy, marathon, threshold, interval, repetition) (§7.3).
+- [x] `ZON-7`: RED+GREEN: CSS formula tested on hand-computed 400/200 time-trial examples, with pace per 100 m output and swim zones relative to CSS (§7.3).
+- [x] `ZON-8`: RED+GREEN: heart-rate zone tables per sport asserted against the published Friel percentages for run and bike (§7.3, §12.4).
+- [x] `ZON-9`: RED+GREEN: threshold change detection — new effort exceeding the model by a configurable margin produces a *proposal* (not an applied update); proposal object carries evidence and prior value (§7.3).
 - [x] `ZON-10`: Persist thresholds and their history to `athlete_profile` with `engine_version` (§6); wire athlete confirmation to record the accepted update (full WhatsApp interaction lands in Feature 6).
-- [ ] `ZON-11`: Document chosen models, configurable margins and default constants in module docstrings and config with source references (§7, §14).
+- [x] `ZON-11`: Document chosen models, configurable margins and default constants in module docstrings and config with source references (§7, §14).
 
 ## Acceptance criteria
 
