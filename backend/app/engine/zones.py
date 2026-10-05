@@ -1,5 +1,6 @@
 """Mean-maximal power/speed curves, Critical Power (CP/W'), Critical Speed
-(CS/D'), FTP resolution, power zones and VDOT training paces.
+(CS/D'), FTP resolution, power zones, VDOT training paces, swim Critical
+Swim Speed (CSS) with swim zones, and Friel heart-rate zones per sport.
 
 This module is part of the pure-function science engine (``app/engine/``):
 no I/O, no DB, no network, no imports of ``app.db`` / ``app.ingest`` /
@@ -150,6 +151,63 @@ as pace in seconds per km (exact, sortable) with a ``min:sec /km`` label
 (the display convention runners actually use); the label is derived, the
 numeric fields are authoritative.
 
+Swim Critical Swim Speed (ZON-7, PROJECT_BRIEF section 7.3)
+-----------------------------------------------------------
+The two-time-trial CSS model of Wakayoshi et al. 1992 ("Relationships
+between swimming performance, body size and aerobic/anaerobic power"),
+implemented exactly as printed in section 7.3:
+
+    CSS (m/s) = (400 - 200) / (T400 - T200)
+
+where T400 and T200 are the 400 m and 200 m time-trial durations in seconds
+(entered in the tool via WhatsApp or detected in pool sessions). The
+validation requirement (``T400 > T200``) is the formula's own: the
+denominator must be positive, and both times must be positive.
+:func:`css_from_time_trials` returns a frozen :class:`CssResult` with CSS in
+m/s, the pace per 100 m in exact seconds plus a ``min:sec /100 m`` display
+label, and the inputs. Hand-computed anchors (also the test references):
+
+- T400 = 360 s (6:00), T200 = 170 s (2:50): CSS = 200 / 190 = 1.052631... m/s
+  -> 95.0 s per 100 m = 1:35 /100 m.
+- T400 = 480 s (8:00), T200 = 240 s (4:00): CSS = 200 / 240 = 0.833333... m/s
+  -> 120.0 s per 100 m = 2:00 /100 m — exactly the CSS pace the owner has
+  configured in Intervals.icu (real-world consistency anchor).
+
+Swim zones relative to CSS: the brief NAMES swim zones relative to CSS but
+publishes NO percentage table (unlike the Coggan power and Friel HR tables),
+so the implemented table is an explicit, documented OWNER-REVIEWABLE choice
+(see :func:`swim_zones` and :data:`DEFAULT_SWIM_ZONE_BOUNDARY_PCTS`). The
+single literature-anchored point is 100% CSS = Threshold: by the
+critical-speed model CSS itself is the threshold intensity (Wakayoshi et al.
+1992). Zones are reported as paces per 100 m, and the pace axis runs OPPOSITE
+to the power/HR tables: a FASTER pace (fewer seconds per 100 m) is a HIGHER
+intensity. The same continuous-partition gap rule as the power zones applies,
+with every boundary pace joining the faster (higher-intensity) zone.
+
+Friel heart-rate zones (ZON-8, PROJECT_BRIEF sections 7.3 and 12.4)
+-------------------------------------------------------------------
+The two published Friel tables in % of LTHR, implemented EXACTLY as printed,
+as SEPARATE per-sport tables (they differ for Z1/Z2/Z3 — run 85/89/94 vs bike
+81/89/93 — and the tests assert that difference so a copy-paste mistake
+cannot pass):
+
+    Run : Z1 < 85, Z2 85-89, Z3 90-94, Z4 95-99, Z5a 100-102, Z5b 103-106, Z5c > 106
+    Bike: Z1 < 81, Z2 81-89, Z3 90-93, Z4 94-99, Z5a 100-102, Z5b 103-106, Z5c > 106
+
+(LITERATURE: Friel, "The Triathlete's Training Bible" / section 7.3; zone
+keys as printed — the zone NAME labels are an OWNER CHOICE, the brief
+publishes only the keys and percentages.) Absolute bpm bounds are
+pct x LTHR / 100, reported unrounded, for the athlete's per-sport LTHR (the
+owner's run/bike LTHR of record is 169 bpm). The SAME documented
+continuous-partition gap rule as the Coggan power zones resolves fractional
+percentages: each zone spans from its printed lower boundary (inclusive) to
+the next zone's boundary (exclusive); Z1 stays strictly below its first
+printed boundary and Z5c strictly above its last, exactly as printed — so
+Z2 = [85, 90) for run, Z5b = [103, 106] (the printed 106 stays in Z5b
+because Z5c is strictly > 106), and 89.5% is Z2. A per-sport classifier
+(:func:`hr_zone_for`) matches an absolute bpm against the same table; a
+non-positive LTHR raises ``ValueError``.
+
 Purity: all functions are pure and fully typed; validation errors raise
 ``ValueError`` rather than clamping or silently defaulting.
 
@@ -230,8 +288,23 @@ purity):
   the band MIDPOINT — OWNER-REVIEWABLE choice, explicit per-call
   parameters of :func:`training_paces`
   (:data:`DEFAULT_EASY_PCT_VO2MAX` and siblings).
+- Swim zone boundaries (% CSS speed: Recovery < 85, Aerobic 85-95,
+  Tempo 95-100, Threshold 100-105, VO2 max >= 105,
+  :data:`DEFAULT_SWIM_ZONE_BOUNDARY_PCTS`): the brief publishes no swim
+  percentage table, so the five-band structure, zone names and ALL
+  boundary percentages are an OWNER-REVIEWABLE choice — EXCEPT the 100%
+  anchor, which is LITERATURE-grounded (critical speed IS the threshold
+  intensity, Wakayoshi et al. 1992). Boundaries are per-call
+  configurable (``boundary_pcts_css``).
+- Friel heart-rate zone percentages (:data:`_RUN_FRIEL_ZONE_SPECS` /
+  :data:`_BIKE_FRIEL_ZONE_SPECS`): LITERATURE, exactly as printed in
+  section 7.3 (section 12.4 acceptance), as separate per-sport tables;
+  the zone NAME labels are an OWNER CHOICE (the brief publishes only the
+  keys and percentages); the fractional-gap rule is the same documented
+  implementation choice as for the power zones.
 """
 
+import itertools
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -250,27 +323,37 @@ __all__ = [
     "DEFAULT_MMP_DURATIONS_S",
     "DEFAULT_MMS_DURATIONS_S",
     "DEFAULT_REPETITION_PCT_VO2MAX",
+    "DEFAULT_SWIM_ZONE_BOUNDARY_PCTS",
     "DEFAULT_THRESHOLD_PCT_VO2MAX",
     "FTP_SOURCE_CP_DERIVED",
     "FTP_SOURCE_KEYS",
     "FTP_SOURCE_MANUAL",
     "FTP_SOURCE_TWENTY_MIN_POWER",
     "FTP_TWENTY_MIN_DURATION_S",
+    "HR_SPORT_KEYS",
     "TWENTY_MIN_TO_FTP_FACTOR",
     "CriticalPowerFit",
     "CriticalSpeedFit",
+    "CssResult",
     "FtpResolution",
+    "HrZone",
     "PowerZone",
+    "SwimZone",
     "TrainingPace",
     "VdotPaces",
+    "css_from_time_trials",
     "fit_critical_power",
     "fit_critical_speed",
+    "hr_zone_for",
+    "hr_zones",
     "mean_maximal_power_curve",
     "mean_maximal_speed_curve",
     "percent_vo2max",
     "power_zone_for",
     "power_zones",
     "resolve_ftp",
+    "swim_zone_for",
+    "swim_zones",
     "training_paces",
     "vdot_from_effort",
     "velocity_from_vo2",
@@ -1335,3 +1418,564 @@ def training_paces(
         repetition=paces[4],
     )
 
+
+
+# ---------------------------------------------------------------------------
+# Swim Critical Swim Speed and swim zones (ZON-7, PROJECT_BRIEF section 7.3)
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True, slots=True)
+class CssResult:
+    """Result of the two-time-trial CSS calculation (ZON-7, section 7.3).
+
+    ``css_mps`` is the Critical Swim Speed in m/s (Wakayoshi et al. 1992),
+    ``pace_sec_per_100m`` the exact pace per 100 m in seconds (the
+    authoritative numeric field, sortable) and ``pace_per_100m`` a derived
+    ``min:sec /100 m`` display label (the convention swimmers actually use).
+    ``t400_s`` / ``t200_s`` echo the inputs the result was computed from.
+    Frozen and slotted, consistent with the other engine result conventions.
+    """
+
+    css_mps: float
+    t400_s: float
+    t200_s: float
+    pace_sec_per_100m: float
+    pace_per_100m: str
+
+
+def css_from_time_trials(t400_s: float, t200_s: float) -> CssResult:
+    """Critical Swim Speed from 400 m and 200 m time trials (ZON-7, section 7.3).
+
+    The two-time-trial CSS model (Wakayoshi et al. 1992), exactly as printed
+    in section 7.3:
+
+        CSS (m/s) = (400 - 200) / (T400 - T200)
+
+    where T400 and T200 are the time-trial durations in seconds. The pace per
+    100 m is ``100 / CSS`` seconds (exact, plus a derived ``min:sec /100 m``
+    display label).
+
+    Hand-computed anchors (also the test references):
+
+    - T400 = 360 s (6:00), T200 = 170 s (2:50):
+          CSS = (400 - 200) / (360 - 170) = 200 / 190 = 1.052631... m/s
+          pace per 100 m = 100 * 190 / 200 = 95.0 s = 1:35 /100 m
+    - T400 = 480 s (8:00), T200 = 240 s (4:00):
+          CSS = (400 - 200) / (480 - 240) = 200 / 240 = 0.833333... m/s
+          pace per 100 m = 100 * 240 / 200 = 120.0 s = 2:00 /100 m
+          (exactly the CSS pace the owner has configured in Intervals.icu —
+          a real-world consistency anchor)
+
+    Validation (``ValueError``, never silent): both times must be positive
+    and ``T400 > T200`` — the formula's denominator ``(T400 - T200)`` must be
+    positive for a meaningful speed; equal or inverted times raise.
+
+    Reference: Wakayoshi et al. 1992 (CSS from 400/200 m time trials);
+    PROJECT_BRIEF section 7.3.
+    """
+    if t400_s <= 0.0 or t200_s <= 0.0:
+        raise ValueError(
+            "both time-trial durations must be positive, got "
+            f"T400={t400_s!r} s, T200={t200_s!r} s"
+        )
+    if t400_s <= t200_s:
+        raise ValueError(
+            "T400 must be greater than T200 (the CSS denominator "
+            f"T400 - T200 = {t400_s - t200_s!r} s must be positive), got "
+            f"T400={t400_s!r} s, T200={t200_s!r} s"
+        )
+    css_mps = 200.0 / (t400_s - t200_s)
+    pace_sec_per_100m = 100.0 / css_mps
+    label_seconds = round(pace_sec_per_100m)  # whole-second display label
+    label = f"{label_seconds // 60}:{label_seconds % 60:02d} /100 m"
+    return CssResult(
+        css_mps=css_mps,
+        t400_s=t400_s,
+        t200_s=t200_s,
+        pace_sec_per_100m=pace_sec_per_100m,
+        pace_per_100m=label,
+    )
+
+
+DEFAULT_SWIM_ZONE_BOUNDARY_PCTS: Final[tuple[float, float, float, float]] = (
+    85.0,
+    95.0,
+    100.0,
+    105.0,
+)
+"""Swim-zone boundaries in % of CSS SPEED: Recovery < 85, Aerobic 85-95,
+Tempo 95-100, Threshold 100-105, VO2 max >= 105.
+
+OWNER-REVIEWABLE CHOICE: PROJECT_BRIEF section 7.3 names swim zones relative
+to CSS but publishes NO percentage table (unlike the Coggan power and Friel
+HR tables), so the five-band structure, zone names and these boundary
+percentages are the owner's documented choice — EXCEPT the 100% anchor,
+which is LITERATURE-grounded (critical speed IS the threshold intensity,
+Wakayoshi et al. 1992). Configurable per call via ``swim_zones`` /
+``swim_zone_for`` parameter ``boundary_pcts_css``. May move to Settings with
+ZON-11.
+"""
+
+_SWIM_ZONE_KEYS: Final[tuple[str, ...]] = ("Z1", "Z2", "Z3", "Z4", "Z5")
+"""Swim zone keys, in ascending intensity order (OWNER CHOICE — the brief
+publishes no swim zone table)."""
+
+_SWIM_ZONE_NAMES: Final[tuple[str, ...]] = (
+    "Recovery",
+    "Aerobic",
+    "Tempo",
+    "Threshold",
+    "VO2 max",
+)
+"""Swim zone names, in ascending intensity order (OWNER CHOICE)."""
+
+
+@dataclass(frozen=True, slots=True)
+class SwimZone:
+    """One swim zone around CSS, in % CSS speed AND pace per 100 m (ZON-7).
+
+    ``min_pct_css`` / ``max_pct_css`` are the EFFECTIVE speed-percentage
+    bounds of the zone (fraction of CSS speed) under the documented
+    continuous-partition rule; ``*_inclusive`` state whether each bound
+    belongs to the zone (Z1's upper edge is exclusive — strictly below the
+    first boundary — and Z5's lower edge is inclusive: each boundary value
+    joins the higher-intensity zone adjoining it).
+
+    ``min_pace_sec_per_100m`` / ``max_pace_sec_per_100m`` are the SAME bounds
+    on the pace-per-100 m axis for the CSS the table was built from. The pace
+    axis INVERTS the speed axis: a faster pace (FEWER seconds per 100 m) is a
+    HIGHER intensity — the opposite direction from the power (watts) and
+    heart-rate (bpm) tables. So a zone's slower pace edge (larger seconds,
+    ``max_pace_sec_per_100m``) mirrors its speed minimum and its faster pace
+    edge (``min_pace_sec_per_100m``) mirrors its speed maximum, with the
+    inclusivity flags inverted accordingly. ``None`` means unbounded on that
+    side. Frozen and slotted, consistent with :class:`PowerZone` and the
+    other engine result conventions.
+    """
+
+    key: str
+    name: str
+    min_pct_css: float | None
+    min_pct_inclusive: bool
+    max_pct_css: float | None
+    max_pct_inclusive: bool
+    min_pace_sec_per_100m: float | None
+    min_pace_inclusive: bool
+    max_pace_sec_per_100m: float | None
+    max_pace_inclusive: bool
+
+    def contains_pct(self, pct: float) -> bool:
+        """Whether a % CSS speed value falls inside this zone (speed axis)."""
+        below_min = self.min_pct_css is not None and (
+            pct < self.min_pct_css
+            or (not self.min_pct_inclusive and pct == self.min_pct_css)
+        )
+        if below_min:
+            return False
+        above_max = self.max_pct_css is not None and (
+            pct > self.max_pct_css
+            or (not self.max_pct_inclusive and pct == self.max_pct_css)
+        )
+        return not above_max
+
+    def contains_pace(self, pace_sec_per_100m: float) -> bool:
+        """Whether a pace per 100 m falls inside this zone (pace axis).
+
+        The pace axis is the speed axis inverted (faster pace = higher
+        intensity), so the bounds and inclusivity flags are mirrored: this is
+        the comparison :func:`swim_zone_for` uses, and it is exact for the
+        table's own boundary paces (no percentage round-trip).
+        """
+        too_slow = self.max_pace_sec_per_100m is not None and (
+            pace_sec_per_100m > self.max_pace_sec_per_100m
+            or (
+                not self.max_pace_inclusive
+                and pace_sec_per_100m == self.max_pace_sec_per_100m
+            )
+        )
+        if too_slow:
+            return False
+        too_fast = self.min_pace_sec_per_100m is not None and (
+            pace_sec_per_100m < self.min_pace_sec_per_100m
+            or (
+                not self.min_pace_inclusive
+                and pace_sec_per_100m == self.min_pace_sec_per_100m
+            )
+        )
+        return not too_fast
+
+
+def _swim_pace_at_pct(pct: float, css_mps: float) -> float:
+    """Pace per 100 m (s) at ``pct`` % of CSS speed (the pace-axis mapping)."""
+    return 100.0 / (pct / 100.0 * css_mps)
+
+
+def swim_zones(
+    css_mps: float,
+    *,
+    boundary_pcts_css: tuple[float, float, float, float] = (
+        DEFAULT_SWIM_ZONE_BOUNDARY_PCTS
+    ),
+) -> tuple[SwimZone, ...]:
+    """The swim zone table (paces per 100 m) for a CSS of ``css_mps`` (ZON-7).
+
+    The brief (section 7.3) names swim zones relative to CSS but publishes NO
+    percentage table (unlike Coggan power / Friel HR), so this table is an
+    explicit, documented OWNER-REVIEWABLE choice — see
+    :data:`DEFAULT_SWIM_ZONE_BOUNDARY_PCTS`. Default bands in % of CSS speed:
+
+        Z1 Recovery  < 85     Z4 Threshold  100-105
+        Z2 Aerobic   85-95    Z5 VO2 max    >= 105
+        Z3 Tempo     95-100
+
+    The single LITERATURE-anchored point is 100% CSS = Threshold: by the
+    critical-speed model, CSS itself is the threshold intensity (Wakayoshi et
+    al. 1992). The remaining boundaries and the band structure are owner
+    choices, configurable per call via ``boundary_pcts_css`` (four strictly
+    increasing positive boundaries defining five zones).
+
+    DIRECTION NOTE: zones are reported as paces per 100 m, and a FASTER pace
+    (fewer seconds per 100 m) is a HIGHER intensity — the opposite direction
+    from the power (watts) and heart-rate (bpm) tables. Each zone's pace
+    bounds mirror its speed bounds with inclusivity inverted
+    (:class:`SwimZone`).
+
+    Gap rule (same continuous-partition rule as the Coggan power zones): the
+    zones partition the percentage space at the boundary values themselves,
+    each zone spanning from its lower boundary (inclusive) to the next
+    boundary (exclusive). On the pace axis every boundary pace therefore
+    joins the FASTER (higher-intensity) zone adjoining it — e.g. at the
+    anchor-(a) CSS the boundary pace 100.0 s /100 m (exactly 95% CSS speed)
+    is Z3, and the CSS pace itself (100% CSS) is Z4 Threshold.
+
+    ``css_mps`` must be positive (``ValueError``); an invalid boundary tuple
+    (not exactly four strictly increasing positive values) raises
+    ``ValueError``.
+    """
+    if css_mps <= 0.0:
+        raise ValueError(f"css_mps must be positive, got {css_mps!r}")
+    boundaries = tuple(boundary_pcts_css)
+    if len(boundaries) != 4:
+        raise ValueError(
+            "boundary_pcts_css must be exactly four strictly increasing "
+            f"positive boundaries defining five zones, got {boundaries!r}"
+        )
+    if any(b <= 0.0 for b in boundaries) or not all(
+        lo < hi for lo, hi in itertools.pairwise(boundaries)
+    ):
+        raise ValueError(
+            "boundary_pcts_css must be strictly increasing and positive, got "
+            f"{boundaries!r}"
+        )
+
+    # (key, name, min_pct, min_inclusive, max_pct, max_inclusive) — the same
+    # continuous-partition shape as the Coggan power specs.
+    specs: Final[
+        tuple[tuple[str, str, float | None, bool, float | None, bool], ...]
+    ] = (
+        (_SWIM_ZONE_KEYS[0], _SWIM_ZONE_NAMES[0], None, False, boundaries[0], False),
+        (
+            _SWIM_ZONE_KEYS[1],
+            _SWIM_ZONE_NAMES[1],
+            boundaries[0],
+            True,
+            boundaries[1],
+            False,
+        ),
+        (
+            _SWIM_ZONE_KEYS[2],
+            _SWIM_ZONE_NAMES[2],
+            boundaries[1],
+            True,
+            boundaries[2],
+            False,
+        ),
+        (
+            _SWIM_ZONE_KEYS[3],
+            _SWIM_ZONE_NAMES[3],
+            boundaries[2],
+            True,
+            boundaries[3],
+            False,
+        ),
+        (_SWIM_ZONE_KEYS[4], _SWIM_ZONE_NAMES[4], boundaries[3], True, None, False),
+    )
+    return tuple(
+        SwimZone(
+            key=key,
+            name=name,
+            min_pct_css=min_pct,
+            min_pct_inclusive=min_inclusive,
+            max_pct_css=max_pct,
+            max_pct_inclusive=max_inclusive,
+            # Pace axis mirrors the speed axis: the slower pace edge
+            # (max_pace) comes from the speed minimum, the faster pace edge
+            # (min_pace) from the speed maximum, inclusivity inverted.
+            min_pace_sec_per_100m=(
+                None if max_pct is None else _swim_pace_at_pct(max_pct, css_mps)
+            ),
+            min_pace_inclusive=max_inclusive,
+            max_pace_sec_per_100m=(
+                None if min_pct is None else _swim_pace_at_pct(min_pct, css_mps)
+            ),
+            max_pace_inclusive=min_inclusive,
+        )
+        for key, name, min_pct, min_inclusive, max_pct, max_inclusive in specs
+    )
+
+
+def swim_zone_for(
+    pace_sec_per_100m: float,
+    css_mps: float,
+    *,
+    boundary_pcts_css: tuple[float, float, float, float] = (
+        DEFAULT_SWIM_ZONE_BOUNDARY_PCTS
+    ),
+) -> SwimZone:
+    """Classify a pace per 100 m into its swim zone for ``css_mps`` (ZON-7).
+
+    Consistent with :func:`swim_zones`: the pace is matched against the same
+    table via :meth:`SwimZone.contains_pace` (the pace axis, exact for the
+    table's own boundary paces). DIRECTION NOTE: a FASTER pace (fewer seconds
+    per 100 m) is a HIGHER intensity — e.g. at the anchor-(a) CSS, 92.0 s
+    /100 m is Threshold (Z4) while 105.0 s /100 m is Aerobic (Z2), and the
+    CSS pace itself is exactly the Threshold boundary.
+
+    ``pace_sec_per_100m`` and ``css_mps`` must be positive (``ValueError``);
+    the boundary table is validated like :func:`swim_zones`.
+    """
+    if css_mps <= 0.0:
+        raise ValueError(f"css_mps must be positive, got {css_mps!r}")
+    if pace_sec_per_100m <= 0.0:
+        raise ValueError(
+            f"pace_sec_per_100m must be positive, got {pace_sec_per_100m!r}"
+        )
+    for zone in swim_zones(css_mps, boundary_pcts_css=boundary_pcts_css):
+        if zone.contains_pace(pace_sec_per_100m):
+            return zone
+    raise ValueError(  # pragma: no cover - the table covers (0, inf) exactly
+        f"no swim zone covers {pace_sec_per_100m!r} s /100 m at CSS "
+        f"{css_mps!r} m/s; this should be unreachable"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Friel heart-rate zones per sport (ZON-8, PROJECT_BRIEF sections 7.3/12.4)
+# ---------------------------------------------------------------------------
+
+HrSportKey = Literal["run", "bike"]
+"""Stable machine-readable keys of the two sports with Friel HR tables (§7.3)."""
+
+HR_SPORT_KEYS: Final[tuple[HrSportKey, ...]] = ("run", "bike")
+"""All heart-rate-zone sport keys (run and bike have separate Friel tables)."""
+
+_HR_ZONE_NAMES: Final[tuple[str, str, str, str, str, str, str]] = (
+    "Recovery",
+    "Aerobic",
+    "Tempo",
+    "Sub-threshold",
+    "VO2 max",
+    "Anaerobic",
+    "Maximum",
+)
+"""HR zone name labels, shared by both sports (OWNER CHOICE — the brief
+publishes only the zone KEYS and percentages, not names)."""
+
+
+_BOUNDARY_REL_TOL: Final = 1e-12
+_BOUNDARY_ABS_TOL: Final = 1e-9
+
+
+def _same_boundary(a: float, b: float) -> bool:
+    """Whether two heart-rate bounds are the same boundary value.
+
+    The zone tables round their absolute bpm bounds to two decimals, so a
+    caller who computes a boundary himself (``0.95 * 169`` = 160.549999…)
+    ends up one ULP away from the table's rounded literal (``160.55``).
+    Comparing exactly made the classifier contradict its own table at
+    95% and 106% of LTHR; the tolerances below treat those as equal while
+    staying far tighter than any real heart-rate difference (1e-9 bpm).
+    """
+    return math.isclose(a, b, rel_tol=_BOUNDARY_REL_TOL, abs_tol=_BOUNDARY_ABS_TOL)
+
+
+@dataclass(frozen=True, slots=True)
+class HrZone:
+    """One Friel heart-rate zone, printed percentages plus absolute bpm bounds.
+
+    ``min_pct_lthr`` / ``max_pct_lthr`` are the EFFECTIVE percentage bounds
+    of the zone under the documented continuous-partition gap rule (same rule
+    as the Coggan power zones: see the module docstring); ``*_inclusive``
+    state whether each bound belongs to the zone (Z1's top edge and Z5c's
+    bottom edge are exclusive, exactly as printed: Z1 < first boundary,
+    Z5c > last boundary). ``min_bpm`` / ``max_bpm`` are the same bounds in
+    absolute bpm for the LTHR the table was built from (pct x LTHR / 100,
+    unrounded). ``None`` means unbounded on that side. Frozen and slotted,
+    consistent with :class:`PowerZone` and the other engine result
+    conventions.
+    """
+
+    key: str
+    name: str
+    min_pct_lthr: float | None
+    min_pct_inclusive: bool
+    max_pct_lthr: float | None
+    max_pct_inclusive: bool
+    min_bpm: float | None
+    max_bpm: float | None
+
+    def contains_pct(self, pct: float) -> bool:
+        """Whether a %LTHR value falls inside this zone under the gap rule."""
+        below_min = self.min_pct_lthr is not None and (
+            pct < self.min_pct_lthr
+            or (not self.min_pct_inclusive and pct == self.min_pct_lthr)
+        )
+        if below_min:
+            return False
+        above_max = self.max_pct_lthr is not None and (
+            pct > self.max_pct_lthr
+            or (not self.max_pct_inclusive and pct == self.max_pct_lthr)
+        )
+        return not above_max
+
+    def contains_bpm(self, bpm: float) -> bool:
+        """Whether an absolute bpm value falls inside this zone (bpm axis).
+
+        The comparison :func:`hr_zone_for` uses: matching against the table's
+        own absolute bounds is exact for the table's boundary bpm values (no
+        percentage round-trip), so a hand-exact printed boundary such as
+        143.65 bpm at LTHR 169 classifies deterministically. Boundary values
+        are compared tolerantly (:func:`_same_boundary`), so a caller who
+        computes the boundary as ``0.95 * lthr`` instead of reading the
+        rounded literal lands on the same zone.
+        """
+        at_min = self.min_bpm is not None and _same_boundary(bpm, self.min_bpm)
+        if at_min:
+            return self.min_pct_inclusive
+        if self.min_bpm is not None and bpm < self.min_bpm:
+            return False
+
+        at_max = self.max_bpm is not None and _same_boundary(bpm, self.max_bpm)
+        if at_max:
+            return self.max_pct_inclusive
+        above_max = self.max_bpm is not None and bpm > self.max_bpm
+        return not above_max
+
+
+# The two published Friel tables, exactly as printed in section 7.3 (% LTHR),
+# as SEPARATE per-sport tables (they differ for Z1/Z2/Z3: run 85/89/94 vs
+# bike 81/89/93). Effective bounds under the documented continuous-partition
+# gap rule: each zone spans from its printed lower boundary value (inclusive)
+# to the next zone's boundary value (exclusive); Z1 stays strictly below its
+# first printed boundary and Z5c strictly above its last printed boundary
+# (the printed 106 stays in Z5b because Z5c is strictly > 106).
+# (key, name, min_pct, min_inclusive, max_pct, max_inclusive)
+# LITERATURE: Friel, "The Triathlete's Training Bible" (zone names OWNER CHOICE).
+_RunFrielSpec = tuple[str, str, float | None, bool, float | None, bool]
+_RUN_FRIEL_ZONE_SPECS: Final[tuple[_RunFrielSpec, ...]] = (
+    ("Z1", _HR_ZONE_NAMES[0], None, False, 85.0, False),
+    ("Z2", _HR_ZONE_NAMES[1], 85.0, True, 90.0, False),
+    ("Z3", _HR_ZONE_NAMES[2], 90.0, True, 95.0, False),
+    ("Z4", _HR_ZONE_NAMES[3], 95.0, True, 100.0, False),
+    ("Z5a", _HR_ZONE_NAMES[4], 100.0, True, 103.0, False),
+    ("Z5b", _HR_ZONE_NAMES[5], 103.0, True, 106.0, True),
+    ("Z5c", _HR_ZONE_NAMES[6], 106.0, False, None, False),
+)
+_BIKE_FRIEL_ZONE_SPECS: Final[tuple[_RunFrielSpec, ...]] = (
+    ("Z1", _HR_ZONE_NAMES[0], None, False, 81.0, False),
+    ("Z2", _HR_ZONE_NAMES[1], 81.0, True, 90.0, False),
+    ("Z3", _HR_ZONE_NAMES[2], 90.0, True, 94.0, False),
+    ("Z4", _HR_ZONE_NAMES[3], 94.0, True, 100.0, False),
+    ("Z5a", _HR_ZONE_NAMES[4], 100.0, True, 103.0, False),
+    ("Z5b", _HR_ZONE_NAMES[5], 103.0, True, 106.0, True),
+    ("Z5c", _HR_ZONE_NAMES[6], 106.0, False, None, False),
+)
+
+
+def _hr_zones_for_specs(
+    specs: tuple[_RunFrielSpec, ...], lthr_bpm: float
+) -> tuple[HrZone, ...]:
+    """Build absolute-bpm HrZone results from one sport's Friel spec table."""
+    return tuple(
+        HrZone(
+            key=key,
+            name=name,
+            min_pct_lthr=min_pct,
+            min_pct_inclusive=min_inclusive,
+            max_pct_lthr=max_pct,
+            max_pct_inclusive=max_inclusive,
+            min_bpm=None if min_pct is None else min_pct * lthr_bpm / 100.0,
+            max_bpm=None if max_pct is None else max_pct * lthr_bpm / 100.0,
+        )
+        for key, name, min_pct, min_inclusive, max_pct, max_inclusive in specs
+    )
+
+
+def hr_zones(sport: HrSportKey, lthr_bpm: float) -> tuple[HrZone, ...]:
+    """The Friel heart-rate zone table for ``sport`` with absolute bpm bounds.
+
+    The published percentages are reproduced EXACTLY (section 7.3, section
+    12.4 acceptance) as SEPARATE per-sport tables in % of LTHR:
+
+        Run : Z1 < 85, Z2 85-89, Z3 90-94, Z4 95-99,
+              Z5a 100-102, Z5b 103-106, Z5c > 106
+        Bike: Z1 < 81, Z2 81-89, Z3 90-93, Z4 94-99,
+              Z5a 100-102, Z5b 103-106, Z5c > 106
+
+    The tables differ for Z1/Z2/Z3 (run 85/89/94 vs bike 81/89/93) — see the
+    test asserting that difference so a copy-paste mistake cannot pass.
+    Absolute bpm bounds are pct x LTHR / 100, reported unrounded, from the
+    athlete's per-sport LTHR (the owner's run/bike LTHR of record is
+    169 bpm: 85% -> 143.65, 89% -> 150.41, 90% -> 152.10, 94% -> 158.86,
+    95% -> 160.55, 99% -> 167.31, 100% -> 169.00, 102% -> 172.38,
+    103% -> 174.07, 106% -> 179.14, plus the bike-only 81% -> 136.89 and
+    93% -> 157.17).
+
+    Gap rule for fractional percentages (the SAME documented
+    continuous-partition rule as the Coggan power zones): the printed bounds
+    leave gaps for values strictly between whole numbers (e.g. 89.5%). The
+    implemented rule partitions the percentage space at the printed boundary
+    values themselves: each zone spans from its printed lower boundary value
+    (inclusive) to the next zone's boundary value (exclusive), while Z1 stays
+    strictly below its first printed boundary and Z5c strictly above its last,
+    exactly as printed — so Z2 = [85, 90) for run, Z5b = [103, 106] (the
+    printed 106 stays in Z5b because Z5c is strictly > 106), and 89.5% is Z2.
+
+    ``lthr_bpm`` must be positive (``ValueError``); an unknown ``sport``
+    raises ``ValueError`` (defensive — the type limits it statically).
+
+    Reference: Friel, "The Triathlete's Training Bible" (section 7.3,
+    % LTHR tables per sport).
+    """
+    if sport not in HR_SPORT_KEYS:
+        raise ValueError(
+            f"unknown heart-rate sport {sport!r}; expected one of {HR_SPORT_KEYS}"
+        )
+    if lthr_bpm <= 0.0:
+        raise ValueError(f"lthr_bpm must be positive, got {lthr_bpm!r}")
+    specs = _RUN_FRIEL_ZONE_SPECS if sport == "run" else _BIKE_FRIEL_ZONE_SPECS
+    return _hr_zones_for_specs(specs, lthr_bpm)
+
+
+def hr_zone_for(sport: HrSportKey, bpm: float, lthr_bpm: float) -> HrZone:
+    """Classify an absolute heart rate into its Friel zone for ``sport``.
+
+    Consistent with :func:`hr_zones`: the bpm is matched against the same
+    table via :meth:`HrZone.contains_bpm` (the absolute-bpm axis, exact for
+    the table's boundary bpm values — e.g. at LTHR 169, 143.65 bpm is Z2,
+    169.0 bpm is Z5a and 179.14 bpm is still Z5b because Z5c is strictly
+    > 106% of LTHR).
+
+    ``lthr_bpm`` must be positive and ``bpm`` non-negative (``ValueError``);
+    an unknown ``sport`` raises ``ValueError`` (defensive — the type limits it
+    statically).
+    """
+    if bpm < 0.0:
+        raise ValueError(f"bpm must not be negative, got {bpm!r}")
+    for zone in hr_zones(sport, lthr_bpm):
+        if zone.contains_bpm(bpm):
+            return zone
+    raise ValueError(  # pragma: no cover - the table covers [0, inf) exactly
+        f"no heart-rate zone covers {bpm!r} bpm at LTHR {lthr_bpm!r} for "
+        f"sport {sport!r}; this should be unreachable"
+    )
