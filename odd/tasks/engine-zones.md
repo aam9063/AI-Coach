@@ -1,6 +1,6 @@
 # ODD Feature: engine-zones
 
-Status: pending | Feature 4 of 11 (brief section 12) | Source: PROJECT_BRIEF.md
+Status: in progress | Feature 4 of 11 (brief section 12) | Source: PROJECT_BRIEF.md
 
 ## Objective
 
@@ -65,6 +65,10 @@ To be filled when the feature is implemented (commits, test runs, cross-checks).
 
 ## Progress
 
-Not started.
+In progress (Feature 4/11) on branch `feat/engine-zones`, branched from `dev` (which already carries Features 1-3, verified and merged).
 
-Commits: (none yet)
+Owner decisions taken before starting (§15 and sequencing): the WhatsApp agent (Feature 6) uses **OpenAI** as the LLM provider, **voice notes / STT are postponed** (WA-10 deferred), the webhook will be exposed through a **dev tunnel** rather than a deploy, and Features 4-5 are implemented **before** Feature 6 so the agent's `get_zones` / `get_readiness` tools are real instead of stubbed.
+
+Data note: the owner has **no power meter**, so the mean-maximal power curve and the CP/W' fit are validated on synthetic data with known parameters (§12.4 requires exactly that); the athlete's FTP stays a manual value (180 W) and the resolution output must state that source. Run threshold pace is still missing in Intervals.icu, which blocks the CS/V-DOT pace side until it is filled in.
+
+Commits: (pending)
