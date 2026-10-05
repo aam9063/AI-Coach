@@ -8,8 +8,8 @@ RPE and an HR stream.
 This number is INFORMATIONAL EVIDENCE, not the configured factor. The
 configured factor (``engine_srpe_tss_equivalent_factor``, settings) comes
 from the owner-agreed equivalent-effort anchor (1 h at RPE 7 = 420 Foster
-AU ≡ 1 h at threshold = 100 TSS, so 100/420 ≈ 0.2381; see
-``app.engine.load``). The hrTSS-implied value (≈ 0.024 in practice) was
+AU = 1 h at threshold = 100 TSS, so 100/420 ~= 0.2381; see
+``app.engine.load``). The hrTSS-implied value (~= 0.024 in practice) was
 considered and explicitly rejected: it reproduces heart rate's systematic
 undervaluation of strength work. This tool exists to keep that comparison
 reviewable — it shows what the hrTSS anchor would have been, and why it
@@ -274,8 +274,8 @@ def format_report(report: CalibrationReport) -> str:
         "  implied factor = median of hrTSS / sRPE_AU over sessions with",
         "  BOTH a stored owner-entered RPE and an HR stream. The configured",
         "  engine_srpe_tss_equivalent_factor comes from the owner-agreed",
-        "  equivalent-effort anchor (1 h at RPE 7 = 420 AU ≡ 1 h at",
-        "  threshold = 100 TSS, so 100/420 ≈ 0.2381), not from this report.",
+        "  equivalent-effort anchor (1 h at RPE 7 = 420 AU, i.e. 1 h at",
+        "  threshold = 100 TSS, so 100/420 ~= 0.2381), not from this report.",
     ]
     if not report.sessions:
         lines.append(

@@ -393,6 +393,13 @@ def fit_banister(
         )
 
     def residual(params: NDArray[numpy.float64]) -> list[float]:
+        """Model-minus-measured residuals for ``least_squares``.
+
+        ``params`` holds p0, k1, k2 and, when ``fit_time_constants`` is set,
+        tau1 and tau2 (annotated as an ndarray because that is what scipy's
+        ``least_squares`` passes; the missing annotation here once hid a real
+        call-overload error behind an import ``type: ignore``).
+        """
         p0, k1, k2 = params[0], params[1], params[2]
         t1 = params[3] if fit_time_constants else tau1_days
         t2 = params[4] if fit_time_constants else tau2_days

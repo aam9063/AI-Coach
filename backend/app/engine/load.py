@@ -246,6 +246,11 @@ def hr_ratio(hr_avg_bpm: float, hr_rest_bpm: float, hr_max_bpm: float) -> float:
 
 
 def _validate_duration(duration_min: float) -> float:
+    """Return ``duration_min`` unchanged, rejecting non-positive durations.
+
+    Shared guard for every duration-driven formula in this module so the
+    error message and the accepted domain stay identical across methods.
+    """
     if duration_min <= 0.0:
         raise ValueError(f"duration must be positive, got {duration_min!r} minutes")
     return duration_min

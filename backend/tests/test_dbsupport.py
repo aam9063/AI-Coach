@@ -16,12 +16,17 @@ from __future__ import annotations
 
 import pytest
 
+# ``test_database_url`` is imported under an alias on purpose: a name starting
+# with ``test_`` would be collected by pytest as a test function in this module
+# (it returns a string, which pytest reports as PytestReturnNotNoneWarning).
 from tests.dbsupport import (
     ALLOW_DEV_DATABASE_ENV,
     DevDatabaseRefusedError,
     assert_is_test_database,
     database_name,
-    test_database_url,
+)
+from tests.dbsupport import (
+    test_database_url as derive_test_database_url,
 )
 
 DEV = "postgresql+asyncpg://tri_coach:devpass@localhost:5432/tri_coach"
@@ -33,7 +38,7 @@ def test_database_name_reads_the_path_component() -> None:
 
 
 def test_test_database_is_derived_without_touching_credentials() -> None:
-    url = test_database_url(DEV)
+    url = derive_test_database_url(DEV)
 
     assert url == "postgresql+asyncpg://tri_coach:devpass@localhost:5432/tri_coach_test"
 
@@ -45,7 +50,7 @@ def test_refuses_when_the_configured_database_is_already_the_test_one(
     monkeypatch.delenv(ALLOW_DEV_DATABASE_ENV, raising=False)
 
     with pytest.raises(DevDatabaseRefusedError):
-        test_database_url(ALREADY_TEST)
+        derive_test_database_url(ALREADY_TEST)
 
 
 def test_explicit_opt_in_allows_a_configured_test_database(
@@ -53,11 +58,11 @@ def test_explicit_opt_in_allows_a_configured_test_database(
 ) -> None:
     monkeypatch.setenv(ALLOW_DEV_DATABASE_ENV, "1")
 
-    assert test_database_url(ALREADY_TEST) == ALREADY_TEST
+    assert derive_test_database_url(ALREADY_TEST) == ALREADY_TEST
 
 
 def test_guard_never_returns_the_configured_url_by_accident() -> None:
-    assert test_database_url(DEV) != DEV
+    assert derive_test_database_url(DEV) != DEV
 
 
 def test_rejects_an_unsafe_database_identifier() -> None:
