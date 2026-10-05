@@ -61,7 +61,21 @@ Directly implied conditions:
 
 ## Verification evidence
 
-To be filled when the feature is implemented (commits, test runs, cross-checks).
+Independently verified by `gentle-ai-verify` (read-only) at HEAD `2393c00`, 2026-10-07 — **11/11 items PASS, no blockers**, dev database provably untouched (26 activities / 131 streams / 177 wellness / 800 daily_load before and after, `alembic current` unchanged at `c4d5e6f7a8b9`).
+
+1. **Quality gates** — ruff clean; mypy strict clean (102 source files); `uv run pytest` **703 passed, 0 skipped**, with the DB tests genuinely running against `tri_coach_test` (verified live via `current_database()`), and `assert_is_test_database` guarding schema-mutating infrastructure.
+2. **Engine purity** — every import in `app/engine/{zones,load,pmc,banister}.py` is stdlib, numpy or scipy; no `app.db`/`app.ingest`/`app.core`, no I/O library, no settings read; the purity test discovers modules dynamically via `pkgutil`; persistence and the flow live in `app/services/` and `app/db/`.
+3. **Checklist** — all eleven items mapped to code and to passing tests (engine suite 420 tests).
+4. **§12.4 synthetic fits, reproduced independently by the verifier** (not via the repo's tests): `Work = 250·t + 18000` over ten durations → CP **250.0** and W' **18 000.0** with relative error `0.0`, R² 1.0; with ±2 W seeded noise → CP 249.25 / W' 17 989.7 / R² 0.99997. `v = 4.0 + 200/t` → CS **4.0 m/s**, D' **200 m**, RMSE 4.3e-14.
+5. **§12.4 published tables** — Coggan, Friel-run and Friel-bike all honour every printed boundary (no printed boundary dishonoured), the continuous-partition rule for the printed gaps is documented and tested, and `power_zones(180)` bounds equal `pct × 1.8` exactly.
+6. **VDOT** — the verifier's own Daniels–Gilbert arithmetic for 5 km in 20:00 gives VDOT **49.806233428066335**, identical to the implementation (absolute difference `0.0`), with T pace 4:21/km at VDOT 50.
+7. **Proposals never apply** — no apply/commit/persist/save/write symbol in the engine; results frozen; status single-valued. The service flow was exercised on the test database: a `NoThresholdChange`, a runtime-crafted `status="applied"`, an unknown source key and a **stale** proposal (prior 180 vs profile 190) are all refused, and declining left the profile value and source unchanged while appending a `declined` history row with `new_value = NULL`.
+8. **Migration hygiene** — single head `c4d5e6f7a8b9`, full chain verified, dev DB at head, both tables present, and the previous head `b2f8d4c6a9e1` proven **not** modified in place (its only "athlete" occurrences are comments; the schema change is the new revision with `down_revision = "b2f8d4c6a9e1"`).
+9. **Configurable constants** — sixteen `engine_*` fields, each with a literature reference or an owner-choice marker, mirrored in both `.env.example` files. Owner-reviewable: swim boundaries, Daniels midpoints and the threshold-change margin. One documented residual: the speed ladder `DEFAULT_MMS_DURATIONS_S` is deliberately not mirrored into Settings yet (no consumer until Feature 6).
+10. **Boundary precision** — 14 regression tests pass; the verifier's independent probes confirm a computed `0.95 × 169` now classifies as Z4 (was Z3) and `1.06 × 169` as Z5b (was Z5c), that values just inside each boundary are unaffected, and that the bike table behaves the same.
+11. **Cross-document consistency** — no contradictions found; every anchor recorded in this document reproduces live.
+
+Minor observations from the verifier, not defects and deliberately left as follow-ups: the purity test bans import *prefixes* rather than naming I/O libraries (the actual imports were verified clean by inspection), one internal `assert` sits in the service happy path, and the speed ladder awaits a consumer before being mirrored into Settings.
 
 ## Progress
 
