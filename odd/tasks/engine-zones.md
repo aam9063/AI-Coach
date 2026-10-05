@@ -36,8 +36,8 @@ Zones and thresholds are the reference points every other metric depends on: loa
 
 ## Checklist
 
-- [ ] `ZON-1`: RED: unit tests for the linear 2-parameter CP/W' fit on synthetic mean-maximal power data generated with known CP and W' parameters (§12.4), asserting recovered parameters and fit error within tolerance.
-- [ ] `ZON-2`: GREEN: implement mean-maximal power curve extraction and CP/W' fitting (best efforts 2–20 min, Work = CP × t + W') in `backend/app/engine/zones.py`; tests green.
+- [x] `ZON-1`: RED: unit tests for the linear 2-parameter CP/W' fit on synthetic mean-maximal power data generated with known CP and W' parameters (§12.4), asserting recovered parameters and fit error within tolerance.
+- [x] `ZON-2`: GREEN: implement mean-maximal power curve extraction and CP/W' fitting (best efforts 2–20 min, Work = CP × t + W') in `backend/app/engine/zones.py`; tests green.
 - [ ] `ZON-3`: RED+GREEN: FTP resolution with the three configurable sources (manual, CP-derived, 95% of best 20-min) and an output that always states which source is in use (§7.3).
 - [ ] `ZON-4`: RED+GREEN: power zone table tests asserting exact Coggan percentage boundaries (Z1 < 55 … Z7 > 150) (§7.3, §12.4).
 - [ ] `ZON-5`: RED+GREEN: run CS/D' fit on synthetic data with known parameters (best efforts ~3–20 min) (§7.3, §12.4).
@@ -71,4 +71,6 @@ Owner decisions taken before starting (§15 and sequencing): the WhatsApp agent 
 
 Data note: the owner has **no power meter**, so the mean-maximal power curve and the CP/W' fit are validated on synthetic data with known parameters (§12.4 requires exactly that); the athlete's FTP stays a manual value (180 W) and the resolution output must state that source. Run threshold pace is still missing in Intervals.icu, which blocks the CS/V-DOT pace side until it is filled in.
 
-Commits: (pending)
+- ZON-1/2 done at `4edad90`: `app/engine/zones.py` with `mean_maximal_power_curve` (rolling sums, O(k·n), documented) and `fit_critical_power` (closed-form least squares on `Work = CP·t + W'` over the 2–20 min window, reporting CP/W'/R²/RMSE/n_points in `CriticalPowerFit`). Gap rule mirrors `load.py` (`valid_count/width ≥ min_valid_fraction`, default 1.0 = complete windows only; a duration with no qualifying window is absent, never zero). Parent-verified: a synthetic curve from CP 250 W / W' 18,000 J is recovered **exactly** (rel_err `0.00e+00`, R² 1.0, RMSE 0.0); hand-computed OLS on two exact points matches; MMP on a constant 200 W stream gives 200 for every duration and on a 300 s@250 W + 300 s@150 W step gives 250 (300 s) and 200 (600 s) as computed by hand; empty / all-`None` / single-point / zero-interval inputs raise `ValueError`. Real-data limitation: no power meter, so this is validated synthetically (§12.4) and FTP remains a manual value.
+
+Commits: 4edad90 (ZON-1/2)
