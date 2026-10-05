@@ -10,6 +10,12 @@ Tables (brief §6 data model minimum, ingest subset):
   plus a ``combined`` sport row per day (LOAD-10, brief §6); the unique key
   makes the recomputation upserts idempotent.
 
+Owner-entered input (§5.1, LOAD-12): ``activity.rpe`` stores the athlete's
+own session RPE as entered in Intervals.icu (``icu_rpe``, scale 1-10). It is
+INPUT data the engine consumes (sRPE method for strength sports), unlike the
+non-authoritative Intervals cross-check columns, which our engine never
+reads as truth.
+
 Non-authoritative cross-checks (§5.1): ``activity.intervals_icu_load`` stores
 Intervals.icu's own load metric purely for cross-checking against our engine
 (Feature 3). It must never be consumed as the authoritative load value; our
@@ -61,6 +67,16 @@ class ActivityRow(Base):
 
     # Raw FIT file storage path; nullable until stored (ING-6).
     raw_file_path: Mapped[str | None] = mapped_column(String(512), default=None)
+
+    # OWNER-ENTERED INPUT DATA (LOAD-12, §5.1): the athlete's own RPE for
+    # the session, as entered in Intervals.icu (``icu_rpe``, integer scale
+    # 1-10; payload aliases ``session_rpe``/``perceived_exertion``). This
+    # is reported INPUT, like duration or distance — NOT a computed metric
+    # and NOT one of the non-authoritative Intervals cross-check values
+    # (§5.1): the engine CONSUMES it (sRPE method for strength sports).
+    # Nullable: NULL means "not entered", never a silent 0. Values outside
+    # 1-10 are rejected at ingest with a reportable reason, never stored.
+    rpe: Mapped[float | None] = mapped_column(Float, default=None)
 
     # NON-AUTHORITATIVE (§5.1): Intervals.icu's own load metric, kept only as
     # a cross-check value for tests/verification. Our engine computes the

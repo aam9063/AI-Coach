@@ -149,7 +149,8 @@ effective values — this module never imports settings (§6 purity):
   settings ``engine_trimp_reference_minutes``.
 - sRPE TSS-equivalent factor 1.0 — PLACEHOLDER, raw Foster AU, NOT
   calibrated (Foster et al. 2001); calibration method in the module text
-  above; settings ``engine_srpe_tss_equivalent_factor``.
+  above (measured by ``app.tools.calibrate_srpe`` once RPE data exists,
+  LOAD-12); settings ``engine_srpe_tss_equivalent_factor``.
 - NP rolling window 30 samples (Coggan NP definition, 1 Hz stream):
   :data:`NP_WINDOW_SAMPLES`; settings ``engine_np_window_samples``.
 - NP minimum valid fraction 1.0 (owner choice, strict windows):
@@ -1098,7 +1099,20 @@ def select_load_method(
                 return LoadSelection("pace_speed", swim_load.tss, swim_load, skipped)
 
     # --- 3. HR -------------------------------------------------------------
-    if activity.hr_avg_bpm is None:
+    # LOAD-12 explicit decision: for STRENGTH sports an owner-entered RPE
+    # selects sRPE BEFORE the generic HR step — the brief assigns the sRPE
+    # method to strength (§7.1) and HR is not a valid strength-load proxy
+    # (the owner's real gym sessions average 81-103 bpm, so TRIMP/hrTSS
+    # would rate a hard lift as near-rest). The generic power -> pace/
+    # speed -> HR -> sRPE chain is therefore INVERTED for strength sports
+    # only; every other sport keeps the fixed order. The bypass stays
+    # traceable in ``skipped``.
+    if sport in _STRENGTH_SPORTS and activity.rpe is not None:
+        skipped["hr"] = (
+            "bypassed: strength sport with an owner-entered RPE uses the "
+            "sRPE method (HR is not a valid strength-load proxy; LOAD-12)"
+    )
+    elif activity.hr_avg_bpm is None:
         skipped["hr"] = "no average HR recorded"
     elif (
         thresholds.lthr_bpm is None

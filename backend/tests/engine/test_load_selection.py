@@ -486,3 +486,84 @@ class TestStrengthSportClassification:
         # The strength types must stay recognised sports (a typo here would
         # silently make select_load_method reject real strength sessions).
         assert {"weighttraining", "strengthworkout", "workout"} == STRENGTH_SPORTS
+
+
+class TestStrengthSrpePreference:
+    """LOAD-12: for strength sports an owner-entered RPE chooses sRPE
+    BEFORE the generic HR step.
+
+    Explicit decision (brief §7.1 assigns sRPE to strength; HR is not a
+    valid strength-load proxy — the owner's real gym sessions average
+    81-103 bpm, so TRIMP/hrTSS would rate a hard lift as near-rest):
+    the generic power -> pace/speed -> HR -> sRPE chain is INVERTED for
+    strength sports only: sRPE wins whenever an RPE is recorded, and HR
+    is only the fallback when no RPE exists. Every other sport's order is
+    untouched, and the bypass stays traceable in ``skipped``.
+    """
+
+    def test_strength_with_rpe_and_full_hr_data_selects_srpe(self) -> None:
+        # HR alone would be applicable (150 bpm, thresholds configured);
+        # the RPE must win anyway for strength sports.
+        activity = ActivityLoadInput(
+            sport="WeightTraining",
+            duration_s=3600.0,
+            hr_avg_bpm=150.0,
+            rpe=7.0,
+        )
+        selection = select_load_method(activity, FULL_THRESHOLDS, coefficients=COEFF)
+        assert selection.method == "srpe"
+        assert selection.tss == pytest.approx(210.0)  # 7 x 60 min x 0.5
+
+    def test_strength_with_rpe_and_no_hr_selects_srpe(self) -> None:
+        activity = ActivityLoadInput(
+            sport="StrengthWorkout",
+            duration_s=3600.0,
+            rpe=7.0,
+        )
+        selection = select_load_method(activity, FULL_THRESHOLDS, coefficients=COEFF)
+        assert selection.method == "srpe"
+        assert selection.tss == pytest.approx(210.0)
+
+    def test_srpe_bypass_is_traceable_in_skipped(self) -> None:
+        """The HR step the strength session bypassed (and the inapplicable
+        power/pace methods) appear in ``skipped`` with a reason naming the
+        bypass, so the choice is diagnosable and persistable."""
+        activity = ActivityLoadInput(
+            sport="WeightTraining",
+            duration_s=3600.0,
+            hr_avg_bpm=95.0,  # real gym-level HR: applicable but bypassed
+            rpe=7.0,
+        )
+        selection = select_load_method(activity, FULL_THRESHOLDS, coefficients=COEFF)
+        assert selection.method == "srpe"
+        assert "bypass" in selection.skipped["hr"]
+        assert "power" in selection.skipped
+
+    def test_strength_without_rpe_still_falls_through_to_hr(self) -> None:
+        # No RPE: the existing order applies and HR (when available) wins.
+        activity = ActivityLoadInput(
+            sport="WeightTraining",
+            duration_s=3600.0,
+            hr_avg_bpm=150.0,
+        )
+        selection = select_load_method(activity, FULL_THRESHOLDS, coefficients=COEFF)
+        assert selection.method == "hr"
+        assert selection.tss == pytest.approx(60.4576391242)
+
+    def test_non_strength_sport_with_rpe_still_prefers_hr(self) -> None:
+        # The inversion is for strength ONLY: a ride with HR and an RPE
+        # keeps the generic order (hr beats srpe).
+        activity = ActivityLoadInput(
+            sport="Ride",
+            duration_s=3600.0,
+            hr_avg_bpm=150.0,
+            rpe=7.0,
+        )
+        selection = select_load_method(activity, FULL_THRESHOLDS, coefficients=COEFF)
+        assert selection.method == "hr"
+        assert selection.tss == pytest.approx(60.4576391242)
+
+    def test_strength_with_neither_rpe_nor_hr_is_undecidable(self) -> None:
+        activity = ActivityLoadInput(sport="Workout", duration_s=3600.0)
+        with pytest.raises(ValueError, match="no applicable load method"):
+            select_load_method(activity, FULL_THRESHOLDS, coefficients=COEFF)

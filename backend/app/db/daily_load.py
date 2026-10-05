@@ -46,6 +46,11 @@ __all__ = [
     "trimp_coefficients_from_settings",
 ]
 
+# LOAD-12 note: with an owner-entered RPE stored on strength activities,
+# this CLI's report shows the sRPE method under "load methods used" and
+# the calibration tool (app.tools.calibrate_srpe) reads the same data to
+# replace the placeholder factor. Nothing else changes for other sports.
+
 
 def thresholds_from_settings(settings: Settings) -> ThresholdBundle:
     """Map the settings' athlete thresholds onto the engine's bundle (§14).
@@ -58,7 +63,8 @@ def thresholds_from_settings(settings: Settings) -> ThresholdBundle:
     anywhere to calibrate against. Documented calibration method: once gym
     sessions record an RPE, compare their sRPE AU against the hrTSS of the
     same sessions (gym sessions carry HR) and set the factor so the two
-    agree on average.
+    agree on average — measured by the read-only tool
+    ``python -m app.tools.calibrate_srpe`` (LOAD-12).
     """
     return ThresholdBundle(
         ftp_watts=settings.athlete_ftp_w,
@@ -138,6 +144,13 @@ def format_report(report: DailyLoadReport) -> str:
         lines.append("persisted rows, per sport:")
         lines.extend(
             f"  {sport}: {count} row(s)" for sport, count in report.per_sport_rows.items()
+        )
+    if report.methods_used:
+        # LOAD-12: the chosen methods are visible per window, so the new
+        # strength-sRPE path (owner-entered RPE) is traceable in the report.
+        lines.append("load methods used (chosen method per activity, window total):")
+        lines.extend(
+            f"  {method}: {count}" for method, count in report.methods_used.items()
         )
     lines.append(f"rows upserted: {report.rows_upserted}")
     if report.skipped:

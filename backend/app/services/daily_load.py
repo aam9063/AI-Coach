@@ -20,7 +20,12 @@ Pipeline of :func:`recompute_daily_load` over a trailing window of
    thresholds (built from settings by the CLI; §14 owner configuration),
    TRIMP coefficients and engine constants (NP window/valid fraction,
    hrTSS reference duration — settings-sourced, LOAD-11), honoring the
-   fixed method order power -> pace/speed -> HR -> sRPE.
+   fixed method order power -> pace/speed -> HR -> sRPE with the one
+   LOAD-12 exception: for strength sports an owner-entered RPE
+   (``activity.rpe``, owner-entered INPUT, §5.1) selects sRPE BEFORE the
+   HR step, because HR is not a valid strength-load proxy. The chosen
+   method is counted in ``DailyLoadReport.methods_used`` and persisted in
+   the ``daily_load.methods`` trace.
 4. Aggregate the chosen TSS per (day, sport) — the sport key is the
    engine-normalized lower-case activity type (e.g. ``"ride"``) — and run
    :func:`app.engine.pmc.compute_pmc_per_sport` over the contiguous window
@@ -121,7 +126,9 @@ class DailyLoadReport:
     ``rows_upserted`` counts persisted ``daily_load`` rows (per-sport plus
     combined rows); ``per_sport_rows`` breaks that down per sport key.
     ``per_sport_activities`` counts the activities that contributed load per
-    sport, ``per_day_activities`` per calendar day. ``skipped`` lists every
+    sport, ``per_day_activities`` per calendar day. ``methods_used`` counts
+    the chosen load methods across the window (LOAD-12: makes the new
+    strength-sRPE path visible in the CLI report). ``skipped`` lists every
     considered-but-undecidable activity with its reason.
     """
 
@@ -133,6 +140,7 @@ class DailyLoadReport:
     per_day_activities: dict[dt.date, int] = field(default_factory=dict)
     per_sport_rows: dict[str, int] = field(default_factory=dict)
     per_sport_activities: dict[str, int] = field(default_factory=dict)
+    methods_used: dict[str, int] = field(default_factory=dict)
     skipped: tuple[SkippedActivity, ...] = ()
 
 
@@ -164,9 +172,12 @@ def build_activity_load_input(
     missing or non-positive ``duration_s``). The average HR comes from the
     ``hr`` payload via :func:`average_hr_bpm`; power/speed/distance/
     altitude streams are passed through where present (see
-    :data:`_STREAM_ALIASES` for the stored stream-type names). RPE is not
-    stored yet, so ``rpe`` stays ``None`` (the sRPE method is then reported
-    as skipped by the engine, never guessed).
+    :data:`_STREAM_ALIASES` for the stored stream-type names). The stored
+    owner-entered ``activity.rpe`` (LOAD-12, §5.1: INPUT data, not a
+    computed metric) is passed through as-is: a strength session with an
+    RPE then gets a real sRPE load, and ``None`` (not entered) stays
+    ``None`` — the sRPE method is then reported as skipped by the engine,
+    never guessed.
     """
     if activity.duration_s is None or activity.duration_s <= 0:
         return None, (
@@ -188,7 +199,7 @@ def build_activity_load_input(
             distance_samples=_stream(_STREAM_ALIASES["distance"]),
             altitude_samples=_stream(_STREAM_ALIASES["altitude"]),
             hr_avg_bpm=average_hr_bpm(_stream(_STREAM_ALIASES["hr"])),
-            rpe=None,
+            rpe=activity.rpe,
         ),
         None,
     )
@@ -292,6 +303,7 @@ async def recompute_daily_load(
         session, window_start=window_start, window_end=window_end
     )
 
+    method_totals: Counter[str] = Counter()
     sport_loads: dict[str, dict[dt.date, float]] = {}
     method_usage: dict[tuple[str, dt.date], Counter[str]] = {}
     per_day_activities: Counter[dt.date] = Counter()
@@ -330,6 +342,7 @@ async def recompute_daily_load(
         method_usage.setdefault((sport, day), Counter())[selection.method] += 1
         per_day_activities[day] += 1
         per_sport_activities[sport] += 1
+        method_totals[selection.method] += 1
 
     rows_upserted = 0
     per_sport_rows: dict[str, int] = {}
@@ -393,5 +406,6 @@ async def recompute_daily_load(
         per_day_activities=dict(sorted(per_day_activities.items())),
         per_sport_rows=dict(sorted(per_sport_rows.items())),
         per_sport_activities=dict(sorted(per_sport_activities.items())),
+        methods_used=dict(sorted(method_totals.items())),
         skipped=tuple(skipped),
     )

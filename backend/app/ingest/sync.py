@@ -13,6 +13,13 @@ upsert repositories for one date range:
 - Intervals.icu's own load metric, when present in the activity payload, is
   stored ONLY in the explicitly non-authoritative cross-check column
   ``activity.intervals_icu_load`` (§5.1) — it is never engine truth;
+- the owner-entered session RPE (``icu_rpe``/``session_rpe``/
+  ``perceived_exertion``, LOAD-12) IS stored as input data in
+  ``activity.rpe``: unlike the cross-check value it is consumed by the
+  engine (sRPE method for strength sports). Values outside the 1-10 scale
+  or non-numeric are rejected with a reportable reason (``SyncResult.
+  rpe_rejected``/``rpe_rejection_reasons``), never stored silently; a
+  missing or null RPE stays ``None``;
 - a configurable minimum interval between client calls
   (``Settings.intervals_min_request_interval_s``, default 0.1s => at most
   10 requests/second) is enforced via an injected clock/sleep pair so the
@@ -41,7 +48,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Protocol, cast
 
@@ -70,6 +77,47 @@ class IntervalsClientProtocol(Protocol):
     def download_fit_file(self, activity_id: str) -> bytes: ...
 
 
+RPE_ALIASES: tuple[str, ...] = ("icu_rpe", "session_rpe", "perceived_exertion")
+"""Activity-payload fields carrying the owner-entered session RPE (LOAD-12).
+
+``icu_rpe`` is the canonical Intervals.icu field (integer scale 1-10,
+editable on the activity page); ``session_rpe`` and ``perceived_exertion``
+are accepted aliases. The first alias with a non-null value wins. The
+separate ``feel`` field (1-5) is returned INVERTED by the API and is
+deliberately IGNORED here.
+"""
+
+
+def extract_activity_rpe(activity: Activity) -> tuple[float | None, str | None]:
+    """Extract the owner-entered session RPE from an activity payload.
+
+    Returns ``(rpe, None)`` when a valid value is present, ``(None, None)``
+    when no alias carries a value (missing or null stays None — never
+    invented), or ``(None, reason)`` when a value is present but INVALID:
+    non-numeric or outside the 1-10 scale. A rejected value is NEVER
+    stored silently — the caller reports the reason (LOAD-12 contract).
+    """
+    extras = activity.model_extra or {}
+    for key in RPE_ALIASES:
+        raw = extras.get(key)
+        if raw is None:
+            continue
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            return None, (
+                f"owner-entered RPE from payload field {key!r} is not a "
+                f"number ({raw!r}); rejected — nothing stored (valid scale: "
+                "1-10)"
+            )
+        value = float(raw)
+        if not 1.0 <= value <= 10.0:
+            return None, (
+                f"owner-entered RPE from payload field {key!r} is outside "
+                f"the 1-10 scale ({value!r}); rejected — nothing stored"
+            )
+        return value, None
+    return None, None
+
+
 @dataclass
 class SyncResult:
     """Per-endpoint/per-item counts for one sync run.
@@ -86,6 +134,11 @@ class SyncResult:
     streams_failed: int = 0
     wellness_synced: int = 0
     wellness_failed: int = 0
+    # LOAD-12: owner-entered RPE values rejected at ingest (outside the
+    # 1-10 scale or non-numeric). The value is never stored silently —
+    # each rejection carries a reportable reason naming the bad value.
+    rpe_rejected: int = 0
+    rpe_rejection_reasons: list[str] = field(default_factory=list)
 
 
 class Pacer:
@@ -172,6 +225,15 @@ async def _sync_activity(
     """
     activity_id = activity.id
 
+    # OWNER-ENTERED INPUT (LOAD-12): extract before the session opens so a
+    # rejected value is attributable to the item and never stored silently.
+    rpe, rpe_rejection = extract_activity_rpe(activity)
+    if rpe_rejection is not None:
+        result.rpe_rejected += 1
+        result.rpe_rejection_reasons.append(
+            f"activity {activity_id}: {rpe_rejection}"
+        )
+
     # Preferred source: the per-second FIT file (ING-4 parser); fall back to
     # the streams endpoint when no FIT bytes are available/parseable.
     fit_streams: dict[str, list[float | None]] | None = None
@@ -216,6 +278,7 @@ async def _sync_activity(
                 elevation_m=_numeric_extra(activity, "total_elevation_gain"),
                 raw_file_path=raw_file_path,
                 intervals_icu_load=_load_metric(activity),
+                rpe=rpe,
             )
             if fit_streams is not None:
                 await _persist_fit_streams(session, row.id, fit_streams, result)
@@ -342,4 +405,11 @@ def _numeric(value: object) -> float | None:
     return float(value)
 
 
-__all__ = ["IntervalsClientProtocol", "Pacer", "SyncResult", "sync_date_range"]
+__all__ = [
+    "RPE_ALIASES",
+    "IntervalsClientProtocol",
+    "Pacer",
+    "SyncResult",
+    "extract_activity_rpe",
+    "sync_date_range",
+]

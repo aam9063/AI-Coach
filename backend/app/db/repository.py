@@ -38,6 +38,10 @@ async def upsert_activity(
     raw_file_path: str | None = None,
     # Non-authoritative cross-check value only (§5.1); never engine truth.
     intervals_icu_load: float | None = None,
+    # OWNER-ENTERED INPUT (LOAD-12, §5.1): the athlete's own session RPE
+    # (Intervals.icu ``icu_rpe``, scale 1-10). Unlike the cross-check value
+    # above, the engine CONSUMES this (sRPE method for strength sports).
+    rpe: float | None = None,
 ) -> ActivityRow:
     """Insert or update one activity keyed by (source, source_id)."""
     values: dict[str, Any] = {
@@ -52,6 +56,7 @@ async def upsert_activity(
         "elevation_m": elevation_m,
         "raw_file_path": raw_file_path,
         "intervals_icu_load": intervals_icu_load,
+        "rpe": rpe,
     }
     stmt = (
         pg_insert(ActivityRow)
