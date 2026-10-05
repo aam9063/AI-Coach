@@ -15,6 +15,11 @@ from typing import Any
 import pytest
 
 from app.core.settings import Settings
+from app.db.zones_config import (
+    parse_ftp_precedence,
+    parse_int_ladder,
+    parse_swim_boundaries,
+)
 from app.engine.banister import (
     DEFAULT_MIN_MARKERS,
     DEFAULT_TAU1_DAYS,
@@ -27,6 +32,23 @@ from app.engine.pmc import (
     DEFAULT_MIN_HISTORY_DAYS,
     DEFAULT_TAU_ATL_DAYS,
     DEFAULT_TAU_CTL_DAYS,
+)
+from app.engine.zones import (
+    CP_MAX_DURATION_S,
+    CP_MIN_DURATION_S,
+    CS_MAX_DURATION_S,
+    CS_MIN_DURATION_S,
+    DEFAULT_CP_TO_FTP_FACTOR,
+    DEFAULT_EASY_PCT_VO2MAX,
+    DEFAULT_FTP_PRECEDENCE,
+    DEFAULT_INTERVAL_PCT_VO2MAX,
+    DEFAULT_MARATHON_PCT_VO2MAX,
+    DEFAULT_MMP_DURATIONS_S,
+    DEFAULT_REPETITION_PCT_VO2MAX,
+    DEFAULT_SWIM_ZONE_BOUNDARY_PCTS,
+    DEFAULT_THRESHOLD_CHANGE_MARGIN,
+    DEFAULT_THRESHOLD_PCT_VO2MAX,
+    TWENTY_MIN_TO_FTP_FACTOR,
 )
 from app.tools.cross_check_pmc import (
     DEFAULT_ABSOLUTE_TOLERANCE,
@@ -118,3 +140,105 @@ class TestSrpeOwnerChoiceDocumented:
         assert "anchor" in description
         assert "420" in description
         assert "hrtss" in description  # the rejected alternative is named
+
+
+class TestZoneSettingsDefaultsMatchEngineConstants:
+    """Every zone/threshold constant is a sourced, configurable field (ZON-11).
+
+    Contract: the Settings defaults are EXACTLY the pure engine's documented
+    module constants in ``app.engine.zones`` (the fallbacks); the mapping
+    helper ``app.db.zones_config.zone_constants_from_settings`` passes them
+    into the engine, which never imports settings (§6).
+    """
+
+    def test_cp_fit_window(self) -> None:
+        # LITERATURE: 2-20 min linear CP window (Jones et al. 2019; §7.3).
+        assert _settings().engine_cp_fit_window_min_s == CP_MIN_DURATION_S == 120.0
+        assert _settings().engine_cp_fit_window_max_s == CP_MAX_DURATION_S == 1200.0
+
+    def test_mmp_duration_ladder(self) -> None:
+        # OWNER CHOICE: chart-friendly ladder; parsed from a comma-separated
+        # env string into the engine's tuple.
+        mmp_ladder = parse_int_ladder(
+            _settings().engine_mmp_durations_s, field="ENGINE_MMP_DURATIONS_S"
+        )
+        assert mmp_ladder == DEFAULT_MMP_DURATIONS_S
+
+    def test_cs_fit_window(self) -> None:
+        # LITERATURE: best run efforts "roughly 3 and 20 minutes" (§7.3).
+        assert _settings().engine_cs_fit_window_min_s == CS_MIN_DURATION_S == 180.0
+        assert _settings().engine_cs_fit_window_max_s == CS_MAX_DURATION_S == 1200.0
+
+    def test_ftp_precedence_and_factors(self) -> None:
+        # Precedence: OWNER CHOICE (manual FTP is the value of record).
+        # CP-to-FTP factor 1.0: standard convention + OWNER CHOICE.
+        # 0.95 of best 20-min power: LITERATURE (Allen & Coggan).
+        assert parse_ftp_precedence(_settings().engine_ftp_precedence) == DEFAULT_FTP_PRECEDENCE
+        assert _settings().engine_cp_to_ftp_factor == DEFAULT_CP_TO_FTP_FACTOR == 1.0
+        assert (
+            _settings().engine_twenty_min_to_ftp_factor
+            == TWENTY_MIN_TO_FTP_FACTOR
+            == 0.95
+        )
+
+    def test_daniels_band_midpoints(self) -> None:
+        # Bands LITERATURE (Daniels' Running Formula, 3rd ed., 2013);
+        # midpoints OWNER-REVIEWABLE choices inside the bands.
+        assert _settings().engine_daniels_easy_pct_vo2max == DEFAULT_EASY_PCT_VO2MAX == 66.5
+        assert _settings().engine_daniels_marathon_pct_vo2max == DEFAULT_MARATHON_PCT_VO2MAX == 79.5
+        assert (
+            _settings().engine_daniels_threshold_pct_vo2max
+            == DEFAULT_THRESHOLD_PCT_VO2MAX
+            == 85.5
+        )
+        assert _settings().engine_daniels_interval_pct_vo2max == DEFAULT_INTERVAL_PCT_VO2MAX == 97.5
+        assert (
+            _settings().engine_daniels_repetition_pct_vo2max
+            == DEFAULT_REPETITION_PCT_VO2MAX
+            == 112.5
+        )
+
+    def test_swim_zone_boundaries(self) -> None:
+        # OWNER-REVIEWABLE boundaries (§7.3 publishes no swim table); the
+        # 100% anchor is LITERATURE (Wakayoshi et al. 1992).
+        assert (
+            parse_swim_boundaries(_settings().engine_swim_zone_boundary_pcts)
+            == DEFAULT_SWIM_ZONE_BOUNDARY_PCTS
+            == (85.0, 95.0, 100.0, 105.0)
+        )
+
+    def test_threshold_change_margin(self) -> None:
+        # ZON-9 margin: OWNER CHOICE (pending owner confirmation).
+        assert _settings().engine_threshold_change_margin == DEFAULT_THRESHOLD_CHANGE_MARGIN == 0.05
+
+
+class TestZoneSettingsAreConfigurableFromEnvironment:
+    def test_zone_constants_parse_from_env(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ENGINE_CP_FIT_WINDOW_MIN_S", "90")
+        monkeypatch.setenv("ENGINE_MMP_DURATIONS_S", "60,300,600")
+        monkeypatch.setenv("ENGINE_FTP_PRECEDENCE", "twenty_min_power,manual,cp_derived")
+        monkeypatch.setenv("ENGINE_TWENTY_MIN_TO_FTP_FACTOR", "0.90")
+        monkeypatch.setenv("ENGINE_DANIELS_EASY_PCT_VO2MAX", "65.0")
+        monkeypatch.setenv("ENGINE_SWIM_ZONE_BOUNDARY_PCTS", "80,90,100,110")
+        monkeypatch.setenv("ENGINE_THRESHOLD_CHANGE_MARGIN", "0.08")
+        settings = _settings()
+        assert settings.engine_cp_fit_window_min_s == 90.0
+        assert parse_int_ladder(
+            settings.engine_mmp_durations_s, field="ENGINE_MMP_DURATIONS_S"
+        ) == (60, 300, 600)
+        assert parse_ftp_precedence(settings.engine_ftp_precedence) == (
+            "twenty_min_power",
+            "manual",
+            "cp_derived",
+        )
+        assert settings.engine_twenty_min_to_ftp_factor == 0.90
+        assert settings.engine_daniels_easy_pct_vo2max == 65.0
+        assert parse_swim_boundaries(settings.engine_swim_zone_boundary_pcts) == (
+            80.0,
+            90.0,
+            100.0,
+            110.0,
+        )
+        assert settings.engine_threshold_change_margin == 0.08

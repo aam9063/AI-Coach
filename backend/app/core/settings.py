@@ -170,6 +170,63 @@ class Settings(BaseSettings):
     # measured real-data Intervals revisions (0.4462 ATL, 0.4982 CTL).
     engine_cross_check_revision_threshold: float = 0.25
 
+    # --- Engine zone/threshold constants (ZON-11; §7.3, §14) ----------------
+    # Every zone/threshold constant of the science engine is explicit,
+    # sourced and configurable, mirroring the documented module constants
+    # in app/engine/zones.py (which remain the engine's fallbacks; the
+    # engine never imports settings, §6). The settings→engine mapping
+    # helper app.db.zones_config.zone_constants_from_settings follows the
+    # LOAD-11 pattern of app.db.daily_load; nothing in app/ consumes zones
+    # yet (Feature 6 will wire the get_zones tool and the proposal flow),
+    # so the helper has no caller by design today.
+    # Critical Power fit window in seconds (Jones et al. 2019; §7.3): the
+    # published 2-20 min window for the linear CP model. LITERATURE.
+    engine_cp_fit_window_min_s: float = 120.0
+    engine_cp_fit_window_max_s: float = 1200.0
+    # Mean-maximal power duration ladder in seconds, comma-separated
+    # (1 s, 1, 2, 5, 8, 10, 20, 30, 60 min). OWNER CHOICE: a fixed,
+    # chart-friendly ladder; the 20 min point feeds the FTP rule and the
+    # 2-20 min points the CP fit.
+    engine_mmp_durations_s: str = "1,60,120,300,480,600,1200,1800,3600"
+    # Critical Speed fit window in seconds (§7.3: best run efforts between
+    # "roughly 3 and 20 minutes"). LITERATURE.
+    engine_cs_fit_window_min_s: float = 180.0
+    engine_cs_fit_window_max_s: float = 1200.0
+    # FTP source precedence, comma-separated permutation of
+    # manual,cp_derived,twenty_min_power. OWNER CHOICE: the owner has no
+    # power meter; the manually confirmed FTP is the value of record
+    # (human-in-the-loop, §7.3).
+    engine_ftp_precedence: str = "manual,cp_derived,twenty_min_power"
+    # CP-to-FTP factor. STANDARD CONVENTION (the linear-form CP
+    # approximates FTP) and documented OWNER CHOICE: 1.0, kept explicit,
+    # never buried in the arithmetic.
+    engine_cp_to_ftp_factor: float = 1.0
+    # FTP = 95% of best 20-minute power. LITERATURE (Allen & Coggan FTP
+    # convention; §7.3 fixes the 95%).
+    engine_twenty_min_to_ftp_factor: float = 0.95
+    # Daniels training-pace intensities, % VO2max. The five published
+    # intensity BANDS are LITERATURE (Daniels' Running Formula, 3rd ed.,
+    # Human Kinetics 2013: Easy 59-74, Marathon 75-84, Threshold 83-88,
+    # Interval 95-100, Repetition 105-120); each default below is the band
+    # MIDPOINT — an OWNER-REVIEWABLE choice inside the band.
+    engine_daniels_easy_pct_vo2max: float = 66.5
+    engine_daniels_marathon_pct_vo2max: float = 79.5
+    engine_daniels_threshold_pct_vo2max: float = 85.5
+    engine_daniels_interval_pct_vo2max: float = 97.5
+    engine_daniels_repetition_pct_vo2max: float = 112.5
+    # Swim zone boundaries, % of CSS SPEED, comma-separated (Recovery < 85,
+    # Aerobic 85-95, Tempo 95-100, Threshold 100-105, VO2 max >= 105).
+    # OWNER-REVIEWABLE CHOICE: §7.3 publishes no swim percentage table
+    # (unlike the Coggan power and Friel HR tables); only the 100% anchor
+    # is LITERATURE (critical speed IS the threshold intensity,
+    # Wakayoshi et al. 1992). The owner should confirm the other three
+    # boundaries.
+    engine_swim_zone_boundary_pcts: str = "85,95,100,105"
+    # Threshold-change detection margin (ZON-9): a proposal requires the
+    # new effort to exceed the current model value by strictly more than
+    # this RELATIVE fraction. OWNER CHOICE (pending owner confirmation).
+    engine_threshold_change_margin: float = 0.05
+
     # WhatsApp via Twilio (§5.1).
     twilio_account_sid: str = ""
     twilio_auth_token: str = ""

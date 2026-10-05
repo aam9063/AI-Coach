@@ -128,6 +128,23 @@ class TestTwentyMinPowerSource:
         with pytest.raises(ValueError):
             resolve_ftp(curve={600: -265.0})
 
+    def test_twenty_min_factor_is_configurable(self) -> None:
+        # ZON-11: the 0.95 Allen & Coggan constant is an explicit parameter
+        # (settings-mirrored as ENGINE_TWENTY_MIN_TO_FTP_FACTOR); the
+        # module constant stays the documented fallback.
+        result = resolve_ftp(
+            twenty_min_power_watts=265.0, twenty_min_to_ftp_factor=0.90
+        )
+        assert result.source == "twenty_min_power"
+        assert result.ftp_watts == pytest.approx(238.5)  # 0.90 * 265.0
+        assert "0.9" in result.detail
+
+    def test_non_positive_twenty_min_factor_raises(self) -> None:
+        with pytest.raises(ValueError, match="factor"):
+            resolve_ftp(
+                twenty_min_power_watts=265.0, twenty_min_to_ftp_factor=0.0
+            )
+
 
 class TestPrecedence:
     def test_all_three_available_manual_wins_by_default(self) -> None:

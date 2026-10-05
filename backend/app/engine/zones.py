@@ -1,6 +1,7 @@
 """Mean-maximal power/speed curves, Critical Power (CP/W'), Critical Speed
 (CS/D'), FTP resolution, power zones, VDOT training paces, swim Critical
-Swim Speed (CSS) with swim zones, and Friel heart-rate zones per sport.
+Swim Speed (CSS) with swim zones, Friel heart-rate zones per sport, and
+threshold change detection that PROPOSES and never applies (ZON-9).
 
 This module is part of the pure-function science engine (``app/engine/``):
 no I/O, no DB, no network, no imports of ``app.db`` / ``app.ingest`` /
@@ -237,13 +238,59 @@ Complexity: for a stream of ``n`` samples and ``k`` requested durations,
 duration). A 3-hour 1 Hz stream (~10,800 samples) with the default 9
 durations is ~97,000 window evaluations and completes in milliseconds.
 
+Threshold change detection (ZON-9, PROJECT_BRIEF section 7.3)
+-------------------------------------------------------------
+When a new effort exceeds the current model value for a threshold metric by
+MORE than a configurable relative margin, :func:`propose_threshold_change`
+returns a typed PROPOSAL — never an applied update. The proposal
+(:class:`ThresholdChangeProposal`) carries everything needed to justify it
+(section 7.3: "proposal object carries evidence and prior value"): the
+proposed value, the prior (current) value, the delta and relative delta,
+the margin used, the caller-supplied effort evidence and the explicit
+non-applied status marker ``"proposal_not_applied"``. When the margin is
+NOT exceeded (no increase over the current value, or an increase at or
+below the margin — the comparison is strict), the function returns an
+explicit :class:`NoThresholdChange` outcome with a machine-readable reason
+(``"no_improvement"`` / ``"margin_not_exceeded"``) — never ``None``
+silently and never a raise.
+
+The function is INCAPABLE of applying anything: it is pure (no I/O, no DB,
+section 6 purity), its result types are frozen dataclasses with no
+mutating capability, and the engine module defines no apply / commit /
+persist entry point at all. The athlete-confirmed application and the
+history write belong to the CALLER layer (ZON-10 persistence, with the
+WhatsApp confirmation flow landing in Feature 6) — never here.
+
+Metrics are the thresholds the model actually produces, with stable
+machine-readable keys (:data:`THRESHOLD_METRIC_KEYS`): ``ftp_watts``,
+``cp_watts``, ``cs_mps`` and ``css_mps``. All four are natively
+"higher exceeds" quantities (watts, m/s), so the comparison runs in native
+units. EXTENSIBILITY: a new metric is one new key in the
+``ThresholdMetricKey`` Literal plus one entry in
+:data:`THRESHOLD_METRIC_UNITS` (its display unit) — the comparison, margin
+semantics and outcome types are metric-agnostic. (A future inverted-axis
+metric such as a pace in s/km would need an explicit direction flag in the
+registry; deliberately not invented until such a metric exists.)
+
+Margin semantics: RELATIVE to the current value — a proposal requires
+``relative_delta = (new - current) / current`` to be strictly greater than
+the margin (default :data:`DEFAULT_THRESHOLD_CHANGE_MARGIN` = 0.05, an
+OWNER CHOICE pending confirmation, mirrored in Settings as
+``ENGINE_THRESHOLD_CHANGE_MARGIN``, ZON-11). The exact-boundary comparison
+goes through :func:`_same_boundary` (the same tolerant rule as the HR zone
+bounds), so float noise at the boundary cannot flip the outcome.
+
 Configurable constants (ZON-11, §7/§14)
 ---------------------------------------
 Every constant below is a function parameter whose default is the
-documented module constant (the documented fallback); ZON-11 will move the
-effective values to Settings (``app.core.settings`` fields ``engine_*``)
-like the load constants were — this module never imports settings (§6
-purity):
+documented module constant (the documented fallback). ZON-11 mirrored the
+effective values into Settings (``app.core.settings`` fields ``engine_*``,
+each with its source/owner-choice comment) and added the settings→engine
+mapping helper ``app.db.zones_config.zone_constants_from_settings``
+(following the LOAD-11 pattern of ``app.db.daily_load``). NOTHING in
+``app/`` consumes zones yet (Feature 6 will wire the ``get_zones`` tool
+and the proposal flow), so that helper deliberately has NO caller today.
+This module still never imports settings (§6 purity):
 
 - CP fit window bounds 2 min (120 s) and 20 min (1200 s): the published
   recommendation for the linear CP model (Jones et al. 2019; PROJECT_BRIEF
@@ -324,6 +371,7 @@ __all__ = [
     "DEFAULT_MMS_DURATIONS_S",
     "DEFAULT_REPETITION_PCT_VO2MAX",
     "DEFAULT_SWIM_ZONE_BOUNDARY_PCTS",
+    "DEFAULT_THRESHOLD_CHANGE_MARGIN",
     "DEFAULT_THRESHOLD_PCT_VO2MAX",
     "FTP_SOURCE_CP_DERIVED",
     "FTP_SOURCE_KEYS",
@@ -331,14 +379,19 @@ __all__ = [
     "FTP_SOURCE_TWENTY_MIN_POWER",
     "FTP_TWENTY_MIN_DURATION_S",
     "HR_SPORT_KEYS",
+    "THRESHOLD_METRIC_KEYS",
+    "THRESHOLD_METRIC_UNITS",
+    "THRESHOLD_NO_PROPOSAL_REASONS",
     "TWENTY_MIN_TO_FTP_FACTOR",
     "CriticalPowerFit",
     "CriticalSpeedFit",
     "CssResult",
     "FtpResolution",
     "HrZone",
+    "NoThresholdChange",
     "PowerZone",
     "SwimZone",
+    "ThresholdChangeProposal",
     "TrainingPace",
     "VdotPaces",
     "css_from_time_trials",
@@ -351,6 +404,7 @@ __all__ = [
     "percent_vo2max",
     "power_zone_for",
     "power_zones",
+    "propose_threshold_change",
     "resolve_ftp",
     "swim_zone_for",
     "swim_zones",
@@ -364,14 +418,15 @@ __all__ = [
 CP_MIN_DURATION_S: Final[float] = 120.0
 """Lower bound of the CP fit window: 2 minutes (Jones et al. 2019).
 
-LITERATURE constant (the 2-20 min window for the linear CP model); may move
-to Settings with ZON-11.
+LITERATURE constant (the 2-20 min window for the linear CP model);
+mirrored in Settings as ``ENGINE_CP_FIT_WINDOW_MIN_S`` (ZON-11).
 """
 
 CP_MAX_DURATION_S: Final[float] = 1200.0
 """Upper bound of the CP fit window: 20 minutes (Jones et al. 2019).
 
-LITERATURE constant; may move to Settings with ZON-11.
+LITERATURE constant; mirrored in Settings as
+``ENGINE_CP_FIT_WINDOW_MAX_S`` (ZON-11).
 """
 
 DEFAULT_MMP_DURATIONS_S: Final[tuple[int, ...]] = (
@@ -389,7 +444,8 @@ DEFAULT_MMP_DURATIONS_S: Final[tuple[int, ...]] = (
 
 OWNER CHOICE — a fixed chart-friendly ladder spanning sprint to hour power;
 the 20 min point feeds the FTP-as-95%-of-best-20-min rule (ZON-3) and the
-2-20 min points feed the CP fit. May move to Settings with ZON-11.
+2-20 min points feed the CP fit. Mirrored in Settings as
+``ENGINE_MMP_DURATIONS_S`` (comma-separated; ZON-11).
 """
 
 
@@ -516,7 +572,9 @@ DEFAULT_MMS_DURATIONS_S: Final[tuple[int, ...]] = (
 
 OWNER CHOICE — a fixed chart-friendly ladder spanning sprint to hour pace;
 the 180-1200 s points feed the CS fit (ZON-5), mirroring the bike ladder's
-role for CP. May move to Settings with ZON-11.
+role for CP. Documented engine-side fallback only — NOT part of the ZON-11
+mirrored settings set (Feature 6 may mirror it later if a consumer needs
+it).
 """
 
 
@@ -687,13 +745,15 @@ CS_MIN_DURATION_S: Final[float] = 180.0
 """Lower bound of the CS fit window: 3 minutes (section 7.3, running).
 
 LITERATURE constant ("best efforts between roughly 3 and 20 minutes",
-section 7.3); may move to Settings with ZON-11.
+section 7.3); mirrored in Settings as ``ENGINE_CS_FIT_WINDOW_MIN_S``
+(ZON-11).
 """
 
 CS_MAX_DURATION_S: Final[float] = 1200.0
 """Upper bound of the CS fit window: 20 minutes (section 7.3, running).
 
-LITERATURE constant; may move to Settings with ZON-11.
+LITERATURE constant; mirrored in Settings as ``ENGINE_CS_FIT_WINDOW_MAX_S``
+(ZON-11).
 """
 
 
@@ -826,7 +886,9 @@ FTP_TWENTY_MIN_DURATION_S: Final[int] = 600
 
 TWENTY_MIN_TO_FTP_FACTOR: Final[float] = 0.95
 """FTP = 95% of best 20-minute power. LITERATURE (Allen & Coggan FTP
-convention; section 7.3 fixes the 95%)."""
+convention; section 7.3 fixes the 95%). An explicit parameter of
+:func:`resolve_ftp` and mirrored in Settings as
+``ENGINE_TWENTY_MIN_TO_FTP_FACTOR`` (ZON-11)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -862,6 +924,7 @@ def resolve_ftp(
     curve: Mapping[int, float] | None = None,
     twenty_min_power_watts: float | None = None,
     precedence: Sequence[FtpSourceKey] = DEFAULT_FTP_PRECEDENCE,
+    twenty_min_to_ftp_factor: float = TWENTY_MIN_TO_FTP_FACTOR,
 ) -> FtpResolution:
     """Resolve FTP from up to three configurable sources, stating the source.
 
@@ -878,8 +941,10 @@ def resolve_ftp(
     - best 20-minute power: ``twenty_min_power_watts`` directly, or the
       :data:`FTP_TWENTY_MIN_DURATION_S` (600 s) point of ``curve`` when the
       direct value is not given (a curve without a 600 s point leaves the
-      source unavailable). The candidate is 95% of that power
-      (:data:`TWENTY_MIN_TO_FTP_FACTOR`, LITERATURE). The value must be
+      source unavailable). The candidate is
+      ``twenty_min_to_ftp_factor`` times that power (default 0.95,
+      :data:`TWENTY_MIN_TO_FTP_FACTOR`, LITERATURE — ZON-11 mirrors it in
+      Settings as ``ENGINE_TWENTY_MIN_TO_FTP_FACTOR``). The value must be
       positive.
 
     When several sources are available, the first one in ``precedence`` (a
@@ -902,6 +967,11 @@ def resolve_ftp(
     if cp_to_ftp_factor <= 0.0:
         raise ValueError(
             f"cp_to_ftp_factor must be positive, got {cp_to_ftp_factor!r}"
+        )
+    if twenty_min_to_ftp_factor <= 0.0:
+        raise ValueError(
+            "twenty_min_to_ftp_factor must be positive, got "
+            f"{twenty_min_to_ftp_factor!r}"
         )
 
     candidates: dict[FtpSourceKey, float] = {}
@@ -928,7 +998,7 @@ def resolve_ftp(
                 f"{twenty_min!r} W (source {FTP_SOURCE_TWENTY_MIN_POWER!r})"
             )
         candidates[FTP_SOURCE_TWENTY_MIN_POWER] = (
-            TWENTY_MIN_TO_FTP_FACTOR * twenty_min
+            twenty_min_to_ftp_factor * twenty_min
         )
 
     if not candidates:
@@ -966,7 +1036,7 @@ def resolve_ftp(
     else:
         assert twenty_min is not None  # the candidate could only come from here
         detail = (
-            f"{TWENTY_MIN_TO_FTP_FACTOR:g} x best 20-minute power "
+            f"{twenty_min_to_ftp_factor:g} x best 20-minute power "
             f"({FTP_TWENTY_MIN_DURATION_S} s MMP point) {twenty_min:.1f} W = "
             f"{ftp_watts:.2f} W FTP (Allen & Coggan FTP convention)"
         )
@@ -1512,8 +1582,8 @@ HR tables), so the five-band structure, zone names and these boundary
 percentages are the owner's documented choice — EXCEPT the 100% anchor,
 which is LITERATURE-grounded (critical speed IS the threshold intensity,
 Wakayoshi et al. 1992). Configurable per call via ``swim_zones`` /
-``swim_zone_for`` parameter ``boundary_pcts_css``. May move to Settings with
-ZON-11.
+``swim_zone_for`` parameter ``boundary_pcts_css`` and mirrored in Settings
+as ``ENGINE_SWIM_ZONE_BOUNDARY_PCTS`` (comma-separated; ZON-11).
 """
 
 _SWIM_ZONE_KEYS: Final[tuple[str, ...]] = ("Z1", "Z2", "Z3", "Z4", "Z5")
@@ -1978,4 +2048,218 @@ def hr_zone_for(sport: HrSportKey, bpm: float, lthr_bpm: float) -> HrZone:
     raise ValueError(  # pragma: no cover - the table covers [0, inf) exactly
         f"no heart-rate zone covers {bpm!r} bpm at LTHR {lthr_bpm!r} for "
         f"sport {sport!r}; this should be unreachable"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Threshold change detection: propose, never apply (ZON-9, §7.3)
+# ---------------------------------------------------------------------------
+
+ThresholdMetricKey = Literal["ftp_watts", "cp_watts", "cs_mps", "css_mps"]
+"""Stable machine-readable keys of the threshold metrics the model produces
+(section 7.3): FTP, CP, run CS and swim CSS. All four are natively
+"higher exceeds" quantities (watts, m/s), so a new effort "exceeds" the
+model exactly when its native-unit value is greater. EXTENSIBILITY: add one
+key here and one :data:`THRESHOLD_METRIC_UNITS` entry — the comparison,
+margin semantics and outcome types below are metric-agnostic."""
+
+THRESHOLD_METRIC_KEYS: Final[tuple[ThresholdMetricKey, ...]] = (
+    "ftp_watts",
+    "cp_watts",
+    "cs_mps",
+    "css_mps",
+)
+"""All threshold metric keys (the stable, validated metric namespace)."""
+
+THRESHOLD_METRIC_UNITS: Final[Mapping[ThresholdMetricKey, str]] = {
+    "ftp_watts": "W",
+    "cp_watts": "W",
+    "cs_mps": "m/s",
+    "css_mps": "m/s",
+}
+"""Display unit per threshold metric (used in the evidence/detail text)."""
+
+DEFAULT_THRESHOLD_CHANGE_MARGIN: Final[float] = 0.05
+"""Default threshold-change margin: +5% RELATIVE to the current value.
+
+OWNER CHOICE (pending owner confirmation), mirrored in Settings as
+``ENGINE_THRESHOLD_CHANGE_MARGIN`` (ZON-11). A proposal requires the new
+effort to exceed the current model value by STRICTLY more than this
+fraction; the exact boundary is compared tolerantly (:func:`_same_boundary`)
+so float noise cannot flip the outcome."""
+
+NoProposalReason = Literal["no_improvement", "margin_not_exceeded"]
+"""Machine-readable reasons of an explicit no-proposal outcome.
+
+- ``"no_improvement"``: the new effort does not exceed the current value at
+  all (``new <= current``).
+- ``"margin_not_exceeded"``: the new effort is higher, but not by MORE than
+  the margin (at or below the margin, boundary inclusive)."""
+
+THRESHOLD_NO_PROPOSAL_REASONS: Final[tuple[NoProposalReason, ...]] = (
+    "no_improvement",
+    "margin_not_exceeded",
+)
+"""All machine-readable no-proposal reasons (stable keys for callers)."""
+
+ThresholdProposalStatus = Literal["proposal_not_applied"]
+"""The only status a proposal can carry: NOT applied (section 7.3).
+
+A proposal is a SUGGESTION for the athlete to confirm (ZON-10 / Feature 6);
+this module has no ability — and no entry point — to apply one."""
+
+
+@dataclass(frozen=True, slots=True)
+class ThresholdChangeProposal:
+    """A PROPOSAL to raise a threshold, never an applied update (ZON-9).
+
+    §7.3: "when a new effort exceeds the model by a configurable margin,
+    propose (not apply) an update ... proposal object carries evidence and
+    prior value". Accordingly this frozen result carries the proposed
+    value, the prior (current) value, the delta and relative delta, the
+    margin used, the evidence (the caller-supplied effort description plus
+    the computed arithmetic) and the explicit ``status``
+    ``"proposal_not_applied"`` — the type system's marker that nothing has
+    been applied. There is no apply/commit capability on this type or
+    anywhere in the engine; the athlete-confirmed application lives in the
+    caller layer (ZON-10 / Feature 6).
+
+    Frozen and slotted, consistent with the other engine result
+    conventions.
+    """
+
+    metric: ThresholdMetricKey
+    unit: str
+    prior_value: float
+    proposed_value: float
+    delta: float
+    relative_delta: float
+    margin: float
+    evidence: str
+    status: ThresholdProposalStatus = "proposal_not_applied"
+
+
+@dataclass(frozen=True, slots=True)
+class NoThresholdChange:
+    """Explicit "no proposal" outcome with a machine-readable reason (ZON-9).
+
+    Returned (instead of ``None`` or an exception) whenever the new effort
+    does NOT warrant a threshold proposal: no increase over the current
+    value (``reason "no_improvement"``) or an increase at or below the
+    margin (``reason "margin_not_exceeded"``; the exact boundary counts as
+    not exceeded). Carries the same metric/prior/proposed/margin context as
+    a proposal so callers can log or display the outcome uniformly. Frozen
+    and slotted.
+    """
+
+    metric: ThresholdMetricKey
+    prior_value: float
+    proposed_value: float
+    relative_delta: float
+    margin: float
+    reason: NoProposalReason
+    detail: str
+
+
+def propose_threshold_change(
+    *,
+    metric: ThresholdMetricKey,
+    current_value: float,
+    new_value: float,
+    margin: float = DEFAULT_THRESHOLD_CHANGE_MARGIN,
+    evidence: str = "",
+) -> ThresholdChangeProposal | NoThresholdChange:
+    """Compare a new effort against the current model value: propose or not.
+
+    ZON-9 (section 7.3): returns a :class:`ThresholdChangeProposal` when
+    ``new_value`` exceeds ``current_value`` by STRICTLY more than the
+    relative ``margin`` (``(new - current) / current > margin``), and an
+    explicit :class:`NoThresholdChange` otherwise (machine-readable reason,
+    never ``None``, never a raise). The function is pure and INCAPABLE of
+    applying anything — it computes a typed suggestion, nothing more (see
+    the module docstring, "Threshold change detection").
+
+    ``metric`` is one of :data:`THRESHOLD_METRIC_KEYS` (``ftp_watts``,
+    ``cp_watts``, ``cs_mps``, ``css_mps``; unknown keys raise
+    ``ValueError``). ``current_value`` and ``new_value`` must be positive
+    and ``margin`` non-negative (``ValueError``). ``evidence`` is the
+    caller's description of the effort that produced ``new_value`` (e.g.
+    "best 20-min effort 275 W on 2026-03-01"); it is echoed into the
+    proposal's ``evidence`` together with the computed arithmetic, so the
+    §7.3 proposal object carries its justification.
+
+    The margin is RELATIVE to the current value (default
+    :data:`DEFAULT_THRESHOLD_CHANGE_MARGIN` = 5%, an OWNER CHOICE mirrored
+    in Settings as ``ENGINE_THRESHOLD_CHANGE_MARGIN``). The exact boundary
+    is compared tolerantly (:func:`_same_boundary`): a relative delta equal
+    to the margin — even to float noise — is "margin_not_exceeded"; only a
+    delta beyond the tolerance proposes.
+    """
+    if metric not in THRESHOLD_METRIC_KEYS:
+        raise ValueError(
+            f"unknown threshold metric {metric!r}; expected one of "
+            f"{THRESHOLD_METRIC_KEYS}"
+        )
+    if current_value <= 0.0:
+        raise ValueError(
+            f"current_value must be positive, got {current_value!r} "
+            f"({THRESHOLD_METRIC_UNITS[metric]} {metric!r})"
+        )
+    if new_value <= 0.0:
+        raise ValueError(
+            f"new_value must be positive, got {new_value!r} "
+            f"({THRESHOLD_METRIC_UNITS[metric]} {metric!r})"
+        )
+    if margin < 0.0:
+        raise ValueError(f"margin must not be negative, got {margin!r}")
+
+    unit = THRESHOLD_METRIC_UNITS[metric]
+    delta = new_value - current_value
+    relative_delta = delta / current_value
+
+    if delta <= 0.0:
+        return NoThresholdChange(
+            metric=metric,
+            prior_value=current_value,
+            proposed_value=new_value,
+            relative_delta=relative_delta,
+            margin=margin,
+            reason="no_improvement",
+            detail=(
+                f"no threshold proposal for {metric!r}: the new effort "
+                f"{new_value!r} {unit} does not exceed the current model "
+                f"value {current_value!r} {unit} (relative delta "
+                f"{relative_delta:+.1%})"
+            ),
+        )
+    if relative_delta <= margin or _same_boundary(relative_delta, margin):
+        return NoThresholdChange(
+            metric=metric,
+            prior_value=current_value,
+            proposed_value=new_value,
+            relative_delta=relative_delta,
+            margin=margin,
+            reason="margin_not_exceeded",
+            detail=(
+                f"no threshold proposal for {metric!r}: the new effort "
+                f"{new_value!r} {unit} exceeds the current model value "
+                f"{current_value!r} {unit} by {relative_delta:+.1%}, within "
+                f"the {margin:.1%} margin (strictly more required)"
+            ),
+        )
+    arithmetic = (
+        f"{new_value!r} {unit} vs prior {current_value!r} {unit} "
+        f"(+{relative_delta:.1%} > {margin:.1%} margin)"
+    )
+    evidence_text = f"{evidence}: {arithmetic}" if evidence else arithmetic
+    return ThresholdChangeProposal(
+        metric=metric,
+        unit=unit,
+        prior_value=current_value,
+        proposed_value=new_value,
+        delta=delta,
+        relative_delta=relative_delta,
+        margin=margin,
+        evidence=evidence_text,
+        status="proposal_not_applied",
     )
