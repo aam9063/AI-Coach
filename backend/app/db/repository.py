@@ -6,17 +6,20 @@ unique constraints from §6:
 - ``activity``: ``(source, source_id)`` — the idempotency anchor.
 - ``activity_stream``: ``(activity_id, stream_type)`` — replaces the payload.
 - ``wellness``: ``(athlete_id, date)``.
+- ``daily_load``: ``(athlete_id, date, sport)`` — recomputations update the
+  existing per-sport/combined rows instead of duplicating them (LOAD-10).
 
 Functions flush but do not commit; callers own transaction boundaries.
 """
 
+from collections.abc import Mapping
 from datetime import date, datetime
 from typing import Any
 
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import ActivityRow, ActivityStreamRow, WellnessRow
+from app.db.models import ActivityRow, ActivityStreamRow, DailyLoadRow, WellnessRow
 
 
 async def upsert_activity(
@@ -85,6 +88,53 @@ async def upsert_activity_stream(
             set_=values,
         )
         .returning(ActivityStreamRow)
+    )
+    result = await session.execute(stmt)
+    await session.flush()
+    return result.scalar_one()
+
+
+async def upsert_daily_load(
+    session: AsyncSession,
+    *,
+    athlete_id: int = 1,
+    date: date,
+    sport: str,
+    tss: float,
+    ctl: float,
+    atl: float,
+    tsb: float,
+    methods: Mapping[str, int] | None = None,
+    engine_version: str,
+    computed_at: datetime,
+) -> DailyLoadRow:
+    """Insert or update one daily-load row keyed by (athlete_id, date, sport).
+
+    Idempotent per the ``uq_daily_load_athlete_date_sport`` unique key:
+    recomputing a window replaces the engine outputs (and the method-usage
+    trace, and ``computed_at``) on the existing row. Flushes without
+    committing; the caller owns the transaction.
+    """
+    values: dict[str, Any] = {
+        "athlete_id": athlete_id,
+        "date": date,
+        "sport": sport,
+        "tss": tss,
+        "ctl": ctl,
+        "atl": atl,
+        "tsb": tsb,
+        "methods": dict(methods) if methods is not None else None,
+        "engine_version": engine_version,
+        "computed_at": computed_at,
+    }
+    stmt = (
+        pg_insert(DailyLoadRow)
+        .values(**values)
+        .on_conflict_do_update(
+            index_elements=[DailyLoadRow.athlete_id, DailyLoadRow.date, DailyLoadRow.sport],
+            set_=values,
+        )
+        .returning(DailyLoadRow)
     )
     result = await session.execute(stmt)
     await session.flush()

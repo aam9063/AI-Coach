@@ -6,6 +6,9 @@ Tables (brief §6 data model minimum, ingest subset):
 - ``activity_stream``: per-second data arrays (JSONB payload) linked to the
   activity, unique per ``(activity_id, stream_type)``.
 - ``wellness``: one daily record per (athlete, date), unique.
+- ``daily_load``: one engine-computed load row per (athlete, date, sport),
+  plus a ``combined`` sport row per day (LOAD-10, brief §6); the unique key
+  makes the recomputation upserts idempotent.
 
 Non-authoritative cross-checks (§5.1): ``activity.intervals_icu_load`` stores
 Intervals.icu's own load metric purely for cross-checking against our engine
@@ -101,3 +104,49 @@ class WellnessRow(Base):
     sleep_minutes: Mapped[int | None] = mapped_column(Integer, default=None)
     sleep_score: Mapped[float | None] = mapped_column(Float, default=None)
     weight: Mapped[float | None] = mapped_column(Float, default=None)  # kg
+
+
+class DailyLoadRow(Base):
+    """One day of engine-computed training load per sport (LOAD-10, brief §6).
+
+    Row shape decision: **per-sport rows plus one ``combined`` row per day**
+    (``sport = "combined"``) — the natural shape given the pure engine's
+    :func:`app.engine.pmc.compute_pmc_per_sport`, which produces exactly a
+    per-sport series and a combined series. The sport key is the engine's
+    normalized (lower-case) activity type, e.g. ``"ride"``/``"run"``/
+    ``"swim"``.
+
+    The unique key ``(athlete_id, date, sport)`` is the idempotency anchor:
+    recomputing a window upserts the existing rows instead of duplicating
+    them.
+
+    Every row carries ``engine_version`` (§6: every persisted engine output
+    carries the engine version) and ``computed_at`` (recomputation stamp).
+    ``methods`` maps the load method key (``power``/``pace_speed``/``hr``/
+    ``srpe``; §7.1 fixed selection order) to the number of activities that
+    day+sport used it — the persisted "which method was used" trace;
+    ``None`` on days with no contributing activity (rest days).
+    """
+
+    __tablename__ = "daily_load"
+    __table_args__ = (
+        UniqueConstraint("athlete_id", "date", "sport", name="uq_daily_load_athlete_date_sport"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # Plain integer matching wellness.athlete_id (no athlete_profile table yet).
+    athlete_id: Mapped[int] = mapped_column(Integer, default=1)
+    date: Mapped[date] = mapped_column(Date)
+    # Normalized engine sport key, or "combined" for the all-sports row.
+    sport: Mapped[str] = mapped_column(String(32))
+
+    tss: Mapped[float] = mapped_column(Float)
+    ctl: Mapped[float] = mapped_column(Float)
+    atl: Mapped[float] = mapped_column(Float)
+    tsb: Mapped[float] = mapped_column(Float)
+
+    # Load-method usage trace: {"power"/"pace_speed"/"hr"/"srpe": count}.
+    methods: Mapped[dict[str, int] | None] = mapped_column(JSONB, default=None)
+
+    engine_version: Mapped[str] = mapped_column(String(32))
+    computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
