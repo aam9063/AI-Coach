@@ -10,6 +10,12 @@ unique constraints from §6:
   existing per-sport/combined rows instead of duplicating them (LOAD-10).
 
 Functions flush but do not commit; callers own transaction boundaries.
+
+ZON-10 additions: ``athlete_profile`` (idempotent upsert keyed by
+``athlete_id``, the single-athlete integer shared with
+``wellness``/``daily_load``) and ``athlete_threshold_history`` (an
+APPEND-ONLY plain insert — history rows are never updated or deleted,
+brief §6/§7.3).
 """
 
 from collections.abc import Mapping
@@ -19,7 +25,14 @@ from typing import Any
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import ActivityRow, ActivityStreamRow, DailyLoadRow, WellnessRow
+from app.db.models import (
+    ActivityRow,
+    ActivityStreamRow,
+    AthleteProfileRow,
+    AthleteThresholdHistoryRow,
+    DailyLoadRow,
+    WellnessRow,
+)
 
 
 async def upsert_activity(
@@ -140,6 +153,109 @@ async def upsert_daily_load(
             set_=values,
         )
         .returning(DailyLoadRow)
+    )
+    result = await session.execute(stmt)
+    await session.flush()
+    return result.scalar_one()
+
+
+async def upsert_athlete_profile(
+    session: AsyncSession,
+    *,
+    athlete_id: int = 1,
+    intervals_athlete_id: str | None = None,
+    ftp_watts: float | None = None,
+    ftp_source: str | None = None,
+    cp_watts: float | None = None,
+    cp_source: str | None = None,
+    w_prime_joules: float | None = None,
+    cs_mps: float | None = None,
+    cs_source: str | None = None,
+    d_prime_meters: float | None = None,
+    css_mps: float | None = None,
+    css_source: str | None = None,
+    engine_version: str,
+    updated_at: datetime,
+) -> AthleteProfileRow:
+    """Insert or update the athlete's current thresholds keyed by athlete_id.
+
+    ZON-10 (brief §6/§7.3). Idempotent per the ``athlete_profile.athlete_id``
+    unique key. Mirroring the ``upsert_wellness`` convention, passing no
+    value for a metric CLEARS it on conflict — callers that want to change
+    only some fields must load the current row first and pass the full set
+    (:func:`app.services.athlete_profile.record_threshold_acceptance` does
+    exactly that). ``*_source`` columns hold the engine's machine-readable
+    source keys (ZON-3/ZON-10 provenance). Flushes without committing.
+    """
+    values: dict[str, Any] = {
+        "athlete_id": athlete_id,
+        "intervals_athlete_id": intervals_athlete_id,
+        "ftp_watts": ftp_watts,
+        "ftp_source": ftp_source,
+        "cp_watts": cp_watts,
+        "cp_source": cp_source,
+        "w_prime_joules": w_prime_joules,
+        "cs_mps": cs_mps,
+        "cs_source": cs_source,
+        "d_prime_meters": d_prime_meters,
+        "css_mps": css_mps,
+        "css_source": css_source,
+        "engine_version": engine_version,
+        "updated_at": updated_at,
+    }
+    stmt = (
+        pg_insert(AthleteProfileRow)
+        .values(**values)
+        .on_conflict_do_update(
+            index_elements=[AthleteProfileRow.athlete_id],
+            set_=values,
+        )
+        .returning(AthleteProfileRow)
+    )
+    result = await session.execute(stmt)
+    await session.flush()
+    return result.scalar_one()
+
+
+async def append_threshold_history(
+    session: AsyncSession,
+    *,
+    athlete_id: int = 1,
+    metric: str,
+    decision: str,
+    proposed_value: float,
+    prior_value: float | None = None,
+    new_value: float | None = None,
+    evidence: str = "",
+    confirmed_by: str,
+    source: str | None = None,
+    engine_version: str,
+    recorded_at: datetime,
+) -> AthleteThresholdHistoryRow:
+    """APPEND one decision row to ``athlete_threshold_history`` (ZON-10).
+
+    Plain insert, never an upsert: history rows are immutable (brief §6
+    "thresholds and their history", §7.3). Callers are the confirmation
+    flow :mod:`app.services.athlete_profile`, which validates ``metric``,
+    ``decision`` and the proposal before calling. Flushes without
+    committing.
+    """
+    stmt = (
+        pg_insert(AthleteThresholdHistoryRow)
+        .values(
+            athlete_id=athlete_id,
+            metric=metric,
+            decision=decision,
+            prior_value=prior_value,
+            new_value=new_value,
+            proposed_value=proposed_value,
+            evidence=evidence,
+            confirmed_by=confirmed_by,
+            source=source,
+            engine_version=engine_version,
+            recorded_at=recorded_at,
+        )
+        .returning(AthleteThresholdHistoryRow)
     )
     result = await session.execute(stmt)
     await session.flush()

@@ -29,7 +29,16 @@ column exists now so the migration and model are stable.
 from datetime import date, datetime
 from typing import Any
 
-from sqlalchemy import Date, DateTime, Float, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import (
+    Date,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -173,3 +182,120 @@ class DailyLoadRow(Base):
 
     engine_version: Mapped[str] = mapped_column(String(32))
     computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class AthleteProfileRow(Base):
+    """The athlete's current thresholds with per-metric provenance (ZON-10).
+
+    Brief §6 ``athlete_profile`` ("thresholds and their history"): the
+    CURRENT threshold values live here, one row per athlete (unique
+    ``athlete_id``); every change is recorded in the append-only
+    :class:`AthleteThresholdHistoryRow`, never by editing history.
+
+    Provenance (§7.3 "FTP source must always be stated", ZON-3/ZON-10):
+    every threshold value carries a ``*_source`` column holding the
+    machine-readable key of the source that produced it. The keys REUSE the
+    engine's own vocabulary: the three :data:`app.engine.zones.FTP_SOURCE_KEYS`
+    (``manual`` / ``cp_derived`` / ``twenty_min_power``) for FTP, plus the
+    name of the engine function that produced a fitted value
+    (``fit_critical_power`` / ``fit_critical_speed`` /
+    ``css_from_time_trials``). ``manual`` is valid for every metric (an
+    owner-entered value). Nullable per metric: NULL means "not yet
+    established", never a silent 0.
+
+    Athlete identity (ZON-10 decision, documented):
+    - ``athlete_id`` is the LOCAL single-athlete integer used by the
+      existing ``wellness.athlete_id`` and ``daily_load.athlete_id``
+      columns (default 1). Those pre-existing integer columns are NOT
+      rewritten and get no FK (the owner's Intervals athlete id is the
+      string ``i555003``, not an integer); this row is the profile they
+      refer to.
+    - ``intervals_athlete_id`` maps that local integer to the EXTERNAL
+      Intervals.icu identity (the string ``"i555003"`` — real Intervals
+      ids carry an ``i`` prefix, live-verified at ingest, ING-2). It is
+      the join key for future Intervals-side lookups, unique, nullable
+      until set (tests and seeded rows may exist without it).
+    """
+
+    __tablename__ = "athlete_profile"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # Local single-athlete integer, matching the wellness/daily_load
+    # convention (default 1). Unique: exactly one profile row per athlete.
+    athlete_id: Mapped[int] = mapped_column(Integer, default=1, unique=True)
+    # External Intervals.icu athlete id (string, e.g. "i555003"); see the
+    # identity decision in the class docstring.
+    intervals_athlete_id: Mapped[str | None] = mapped_column(
+        String(32), default=None, unique=True
+    )
+
+    # Current thresholds, each with the source that produced it.
+    ftp_watts: Mapped[float | None] = mapped_column(Float, default=None)
+    ftp_source: Mapped[str | None] = mapped_column(String(32), default=None)
+    cp_watts: Mapped[float | None] = mapped_column(Float, default=None)
+    cp_source: Mapped[str | None] = mapped_column(String(32), default=None)
+    # Auxiliary CP-fit output (no proposal flow of its own; informational).
+    w_prime_joules: Mapped[float | None] = mapped_column(Float, default=None)
+    cs_mps: Mapped[float | None] = mapped_column(Float, default=None)
+    cs_source: Mapped[str | None] = mapped_column(String(32), default=None)
+    # Auxiliary CS-fit output.
+    d_prime_meters: Mapped[float | None] = mapped_column(Float, default=None)
+    css_mps: Mapped[float | None] = mapped_column(Float, default=None)
+    css_source: Mapped[str | None] = mapped_column(String(32), default=None)
+
+    # §6: every persisted engine output carries the engine version.
+    engine_version: Mapped[str] = mapped_column(String(32))
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class AthleteThresholdHistoryRow(Base):
+    """APPEND-ONLY history of threshold proposals and decisions (ZON-10).
+
+    Brief §6 ("thresholds and their history") / §7.3 ("propose (not apply)
+    an update; athlete confirms via WhatsApp; store history"): one row per
+    recorded decision, written by the confirmation flow
+    (:mod:`app.services.athlete_profile`) when the athlete accepts or
+    declines a :class:`app.engine.zones.ThresholdChangeProposal`.
+
+    Rows are never updated or deleted (append-only audit trail):
+
+    - ``decision = "accepted"``: the profile was updated to ``new_value``
+      (== ``proposed_value``); ``source`` names the provenance of the
+      accepted value.
+    - ``decision = "declined"``: the profile was left untouched;
+      ``new_value`` is NULL and ``proposed_value`` records what was
+      refused.
+
+    Every row carries the prior value, the evidence (the proposal's
+    justification text), the confirming actor (``confirmed_by`` — the
+    WhatsApp channel lands in Feature 6; until then the thin flow records
+    the actor it is told to), the ``engine_version`` (§6) and the
+    ``recorded_at`` timestamp.
+
+    ``athlete_id`` is the same local single-athlete integer as on
+    :class:`AthleteProfileRow` (no FK — same convention as
+    ``wellness``/``daily_load``, whose pre-existing integer columns this
+    feature deliberately does not rewrite).
+    """
+
+    __tablename__ = "athlete_threshold_history"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    athlete_id: Mapped[int] = mapped_column(Integer, default=1, index=True)
+    # One of app.engine.zones.THRESHOLD_METRIC_KEYS (validated by the flow).
+    metric: Mapped[str] = mapped_column(String(32))
+    # "accepted" or "declined" (validated by the flow).
+    decision: Mapped[str] = mapped_column(String(16))
+    prior_value: Mapped[float | None] = mapped_column(Float, default=None)
+    # The value actually applied (accepted); NULL when declined.
+    new_value: Mapped[float | None] = mapped_column(Float, default=None)
+    # The proposal's proposed value — what was asked for (always present).
+    proposed_value: Mapped[float] = mapped_column(Float)
+    # The proposal's evidence text (the §7.3 justification).
+    evidence: Mapped[str] = mapped_column(Text, default="")
+    # The confirming actor (e.g. "owner_whatsapp" once Feature 6 lands).
+    confirmed_by: Mapped[str] = mapped_column(String(64))
+    # Provenance of the accepted value (NULL for declined proposals).
+    source: Mapped[str | None] = mapped_column(String(32), default=None)
+    engine_version: Mapped[str] = mapped_column(String(32))
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
