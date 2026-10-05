@@ -177,24 +177,36 @@ class TestSrpeLoad:
 class TestPurity:
     """The engine stays pure (PROJECT_BRIEF sections 6/14): no I/O layer imports."""
 
-    def test_load_module_imports_no_io_layers_or_settings(self) -> None:
+    def test_engine_modules_import_no_io_layers_or_settings(self) -> None:
         import ast
+        import importlib
         import inspect
+        import pkgutil
 
-        from app.engine import load
+        import app.engine
 
-        tree = ast.parse(inspect.getsource(load))
-        imported = {
-            node.module or ""
-            for node in ast.walk(tree)
-            if isinstance(node, ast.ImportFrom)
-        }
-        imported |= {
-            alias.name.split(".")[0]
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Import)
-            for alias in node.names
-        }
         banned = ("app.db", "app.ingest", "app.core")
-        offenders = [name for name in imported if name.startswith(banned)]
-        assert offenders == [], f"engine purity violated by imports: {offenders}"
+        module_names = {
+            info.name for info in pkgutil.iter_modules(app.engine.__path__)
+        }
+        assert {"load", "pmc"} <= module_names, (
+            f"engine package contents changed unexpectedly: {sorted(module_names)}"
+        )
+        for name in sorted(module_names):
+            module = importlib.import_module(f"app.engine.{name}")
+            tree = ast.parse(inspect.getsource(module))
+            imported = {
+                node.module or ""
+                for node in ast.walk(tree)
+                if isinstance(node, ast.ImportFrom)
+            }
+            imported |= {
+                alias.name.split(".")[0]
+                for node in ast.walk(tree)
+                if isinstance(node, ast.Import)
+                for alias in node.names
+            }
+            offenders = [n for n in imported if n.startswith(banned)]
+            assert offenders == [], (
+                f"engine purity violated by imports in app.engine.{name}: {offenders}"
+            )
