@@ -83,6 +83,25 @@ def test_database_url(database_url: str | None = None) -> str:
     return candidate
 
 
+def assert_is_test_database(database_url: str) -> str:
+    """Fail closed unless ``database_url`` is a dedicated test database.
+
+    Used by infrastructure that mutates schema (migration round-trips,
+    ``create_all``/``drop_all`` fixtures): the database name must end with
+    ``_test`` unless the operator explicitly opts in with
+    ``TESTS_ALLOW_DEV_DATABASE=1``. Returning the URL makes it usable inline,
+    e.g. ``cfg.set_main_option("sqlalchemy.url", assert_is_test_database(url))``.
+    """
+    name = database_name(database_url)
+    if name.endswith("_test") or os.environ.get(ALLOW_DEV_DATABASE_ENV) == "1":
+        return database_url
+    raise DevDatabaseRefusedError(
+        f"refusing to run schema-mutating test infrastructure against {name!r}: "
+        "it is not a dedicated test database. Set "
+        f"{ALLOW_DEV_DATABASE_ENV}=1 only if you really mean it."
+    )
+
+
 def maintenance_url(database_url: str) -> str:
     """URL of the maintenance database used only to CREATE the test one."""
     return _replace_database(database_url, DEFAULT_MAINTENANCE_DATABASE)

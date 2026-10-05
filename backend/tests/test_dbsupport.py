@@ -19,6 +19,7 @@ import pytest
 from tests.dbsupport import (
     ALLOW_DEV_DATABASE_ENV,
     DevDatabaseRefusedError,
+    assert_is_test_database,
     database_name,
     test_database_url,
 )
@@ -63,3 +64,25 @@ def test_rejects_an_unsafe_database_identifier() -> None:
     """The name is interpolated into DDL, so it must be a plain identifier."""
     with pytest.raises(ValueError):
         database_name("postgresql+asyncpg://u:p@h:5432/tri_coach;drop")
+
+
+def test_assert_is_test_database_accepts_a_test_database() -> None:
+    assert assert_is_test_database(ALREADY_TEST) == ALREADY_TEST
+
+
+def test_assert_is_test_database_refuses_a_development_database(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Migration round-trips mutate schema, so this must fail closed."""
+    monkeypatch.delenv(ALLOW_DEV_DATABASE_ENV, raising=False)
+
+    with pytest.raises(DevDatabaseRefusedError):
+        assert_is_test_database(DEV)
+
+
+def test_assert_is_test_database_honours_the_explicit_opt_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(ALLOW_DEV_DATABASE_ENV, "1")
+
+    assert assert_is_test_database(DEV) == DEV
