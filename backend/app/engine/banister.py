@@ -75,6 +75,21 @@ held at the supplied (default 42/7) values.
 
 All functions are pure and fully typed.
 
+Configurable constants (LOAD-11, §7/§14)
+----------------------------------------
+Every constant below is a function parameter whose default is the
+documented module constant (the documented fallback); the Settings/read
+layer supplies the effective values (this module never imports settings,
+§6):
+
+- Banister time constants tau1 42 d / tau2 7 d (Banister 1991; Morton,
+  Fitz-Clarke & Banister 1990): ``evaluate_banister``/``fit_banister``
+  parameters; settings ``engine_banister_tau1_days`` /
+  ``engine_banister_tau2_days``.
+- Minimum performance markers for a fit, 10 (owner choice, 2 x 5 free
+  parameters): ``fit_banister`` ``min_markers`` parameter; settings
+  ``engine_banister_min_markers``.
+
 Reference: Banister 1991; Morton, Fitz-Clarke & Banister 1990.
 """
 
@@ -84,10 +99,13 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final
 
-# scipy ships incomplete inline typing; mypy asks for the external
-# ``scipy-stubs`` package, which is a dependency decision owned by LOAD-11,
-# so the import is ignored here instead of adding a dev dependency.
-from scipy.optimize import least_squares  # type: ignore[import-untyped]
+import numpy
+from numpy.typing import NDArray
+
+# scipy ships incomplete inline typing; the external ``scipy-stubs`` dev
+# dependency (added in LOAD-11) provides the type information mypy strict
+# needs, so the import needs no ignore comment.
+from scipy.optimize import least_squares
 
 __all__ = [
     "DEFAULT_MIN_MARKERS",
@@ -374,7 +392,7 @@ def fit_banister(
             "(all measured values identical)"
         )
 
-    def residual(params: Sequence[float]) -> list[float]:
+    def residual(params: NDArray[numpy.float64]) -> list[float]:
         p0, k1, k2 = params[0], params[1], params[2]
         t1 = params[3] if fit_time_constants else tau1_days
         t2 = params[4] if fit_time_constants else tau2_days

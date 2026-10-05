@@ -17,17 +17,21 @@ Pipeline of :func:`recompute_daily_load` over a trailing window of
    comes from ``activity.duration_s``, and power/speed/distance/altitude
    streams are passed through where present.
 3. Call :func:`app.engine.load.select_load_method` with the caller-supplied
-   thresholds (built from settings by the CLI; §14 owner configuration) and
-   TRIMP coefficients, honoring the fixed method order power ->
-   pace/speed -> HR -> sRPE.
+   thresholds (built from settings by the CLI; §14 owner configuration),
+   TRIMP coefficients and engine constants (NP window/valid fraction,
+   hrTSS reference duration — settings-sourced, LOAD-11), honoring the
+   fixed method order power -> pace/speed -> HR -> sRPE.
 4. Aggregate the chosen TSS per (day, sport) — the sport key is the
    engine-normalized lower-case activity type (e.g. ``"ride"``) — and run
    :func:`app.engine.pmc.compute_pmc_per_sport` over the contiguous window
    (rest days as explicit ``0.0``) to get per-sport and combined
    CTL/ATL/TSB.
 5. Upsert one ``daily_load`` row per (athlete, date, sport) plus one
-   ``sport="combined"`` row per day, each stamped with ``engine_version``
-   (§6) and ``computed_at``.
+   ``(sport="combined"`` row per day, each stamped with ``engine_version``
+   (§6) and ``computed_at``. The PMC recursions run with the
+   caller-supplied time constants and confidence threshold
+   (``engine_tau_ctl_days``/``engine_tau_atl_days``/
+   ``engine_min_history_days`` in settings; LOAD-11).
 
 Skipped/undecidable contract (never silent): an activity that cannot
 contribute load — missing/non-positive duration, an unknown sport, or no
@@ -56,12 +60,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.models import ActivityRow, ActivityStreamRow
 from app.db.repository import upsert_daily_load
 from app.engine.load import (
+    NP_WINDOW_SAMPLES,
     ActivityLoadInput,
     ThresholdBundle,
     TrimpCoefficients,
     select_load_method,
 )
-from app.engine.pmc import compute_pmc_per_sport
+from app.engine.pmc import (
+    DEFAULT_MIN_HISTORY_DAYS,
+    DEFAULT_TAU_ATL_DAYS,
+    DEFAULT_TAU_CTL_DAYS,
+    compute_pmc_per_sport,
+)
 
 __all__ = [
     "COMBINED_SPORT_KEY",
@@ -247,6 +257,12 @@ async def recompute_daily_load(
     coefficients: TrimpCoefficients,
     engine_version: str,
     athlete_id: int = 1,
+    tau_ctl_days: float = DEFAULT_TAU_CTL_DAYS,
+    tau_atl_days: float = DEFAULT_TAU_ATL_DAYS,
+    min_history_days: int = DEFAULT_MIN_HISTORY_DAYS,
+    np_window_samples: int = NP_WINDOW_SAMPLES,
+    np_min_valid_fraction: float = 1.0,
+    trimp_reference_minutes: float = 60.0,
 ) -> DailyLoadReport:
     """Recompute and persist ``daily_load`` rows for a trailing window.
 
@@ -255,6 +271,14 @@ async def recompute_daily_load(
     calendar days ending at (and including) ``window_end``. The PMC
     recursions start from zero seeds at ``window_start`` — continuing prior
     history (explicit seeds) belongs to a later incremental recompute.
+
+    The engine constants are explicit parameters (LOAD-11, §14) whose
+    defaults are the pure engine's documented module constants; the CLI
+    read layer (``app.db.daily_load``) supplies the effective values from
+    Settings: ``tau_ctl_days``/``tau_atl_days``/``min_history_days`` for
+    the PMC recursions, ``np_window_samples``/``np_min_valid_fraction``
+    for the Normalized Power path and ``trimp_reference_minutes`` for the
+    hrTSS reference duration.
 
     Upserts are idempotent per ``(athlete_id, date, sport)``; the function
     flushes without committing.
@@ -284,7 +308,14 @@ async def recompute_daily_load(
             )
             continue
         try:
-            selection = select_load_method(load_input, thresholds, coefficients=coefficients)
+            selection = select_load_method(
+                load_input,
+                thresholds,
+                coefficients=coefficients,
+                np_window_samples=np_window_samples,
+                np_min_valid_fraction=np_min_valid_fraction,
+                trimp_reference_minutes=trimp_reference_minutes,
+            )
         except ValueError as exc:
             # Undecidable: the engine lists every rejected method and why.
             skipped.append(
@@ -308,7 +339,10 @@ async def recompute_daily_load(
             {
                 sport: {date: series.get(date, 0.0) for date in window_dates}
                 for sport, series in sport_loads.items()
-            }
+            },
+            tau_ctl_days=tau_ctl_days,
+            tau_atl_days=tau_atl_days,
+            min_history_days=min_history_days,
         )
         for sport, series in per_sport.per_sport.items():
             for pmc_day in series.days:

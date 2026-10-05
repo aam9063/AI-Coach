@@ -7,6 +7,7 @@ no real secrets live in this file.
 
 from functools import lru_cache
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -83,6 +84,83 @@ class Settings(BaseSettings):
     athlete_threshold_run_speed_mps: float | None = None
     # Body weight in kg (athlete profile weight; null for this owner).
     athlete_weight_kg: float | None = None
+
+    # --- Engine constants (LOAD-11; §7, §14) --------------------------------
+    # Every constant of the deterministic load engine is explicit, sourced
+    # and configurable. The pure engine functions in ``app/engine`` keep the
+    # same values as their documented module-constant defaults (the
+    # fallback); the read layer (``app.db.daily_load``,
+    # ``app.services.daily_load``, ``app.tools.cross_check_pmc``) reads them
+    # HERE and passes them in — the engine never imports settings (§6).
+    # Performance Manager time constants (Allen & Coggan, "Training and
+    # Racing with a Power Meter", Performance Manager Chart).
+    # Chronic training load time constant, days.
+    engine_tau_ctl_days: float = 42.0
+    # Acute training load time constant, days.
+    engine_tau_atl_days: float = 7.0
+    # Minimum PMC history (days) before the series is flagged confident.
+    # OWNER CHOICE: ~2 chronic time constants (2 x 42 d); below it CTL is
+    # seed-dominated (§7.2 low-confidence flag).
+    engine_min_history_days: int = 90
+    # ACWR EWMA time constants (Williams, Trewartha, Cross, Kemp & Stokes
+    # 2017): acute 7 days, chronic 28 days.
+    engine_acwr_tau_acute_days: float = 7.0
+    engine_acwr_tau_chronic_days: float = 28.0
+    # Normalized Power rolling window, samples (Coggan NP definition: 30 s
+    # on the 1 Hz per-second power stream).
+    engine_np_window_samples: int = 30
+    # Minimum fraction of valid samples a rolling NP window needs to
+    # qualify. OWNER CHOICE: 1.0 (strict — only fully complete windows
+    # count); relax explicitly for gap-heavy streams.
+    engine_min_valid_fraction: float = 1.0
+    # Banister TRIMP exponent coefficients a * e^(b * dHRr) (Banister 1991,
+    # "Modeling elite athletic performance"): male 0.64/1.92,
+    # female 0.86/1.67.
+    engine_trimp_male_a: float = 0.64
+    engine_trimp_male_b: float = 1.92
+    engine_trimp_female_a: float = 0.86
+    engine_trimp_female_b: float = 1.67
+    # Which sexed coefficient set the read layer selects; OWNER CHOICE
+    # ("male" is today's effective default).
+    engine_trimp_sex: str = "male"
+    # hrTSS reference duration in minutes (Coggan hrTSS convention: one
+    # hour at LTHR = 100 hrTSS).
+    engine_trimp_reference_minutes: float = 60.0
+    # Strength sRPE TSS-equivalent factor (Foster et al. 2001 session-RPE).
+    # PLACEHOLDER: 1.0 = raw Foster arbitrary units, NOT calibrated to the
+    # TSS scale — there is no RPE data anywhere to calibrate against.
+    # Calibration method (owner-agreed plan): once gym sessions record RPE,
+    # compare their sRPE AU against the hrTSS of the SAME sessions (the
+    # owner's gym sessions do carry HR) and set this factor so the two
+    # agree on average.
+    engine_srpe_tss_equivalent_factor: float = Field(
+        default=1.0,
+        description=(
+            "PLACEHOLDER (raw Foster AU, not TSS-calibrated; Foster et al. "
+            "2001). Calibration method: once gym sessions record RPE, "
+            "compare their sRPE AU against the hrTSS of the same sessions "
+            "(gym sessions carry HR) and set the factor so the two agree on "
+            "average."
+        ),
+    )
+    # Banister impulse-response time constants (Banister 1991; Morton,
+    # Fitz-Clarke & Banister 1990): fitness tau1, fatigue tau2, days.
+    engine_banister_tau1_days: float = 42.0
+    engine_banister_tau2_days: float = 7.0
+    # Minimum performance markers before a Banister fit is attempted.
+    # OWNER CHOICE: 10 = 2 x 5 free parameters (p0, k1, k2, tau1, tau2),
+    # guaranteeing >= 5 residual degrees of freedom in the richest fit.
+    engine_banister_min_markers: int = 10
+    # Intervals.icu PMC cross-check tolerances (§12.3; cross-check only,
+    # §5.1). Relative ±10% OR absolute ±0.5 CTL/ATL points: OWNER-AGREED
+    # hybrid rule (relative alone is unusable for a decaying series near
+    # zero). Both bounds are inclusive.
+    engine_cross_check_relative_tolerance: float = 0.10
+    engine_cross_check_absolute_tolerance: float = 0.5
+    # Their-side revision-detection threshold in CTL/ATL points. OWNER
+    # CHOICE: above the float noise of exact-decay days, below the
+    # measured real-data Intervals revisions (0.4462 ATL, 0.4982 CTL).
+    engine_cross_check_revision_threshold: float = 0.25
 
     # WhatsApp via Twilio (§5.1).
     twilio_account_sid: str = ""

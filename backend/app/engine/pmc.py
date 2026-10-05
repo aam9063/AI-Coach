@@ -58,6 +58,22 @@ constants all raise ``ValueError`` instead of degrading silently.
 
 All functions are pure and fully typed.
 
+Configurable constants (LOAD-11, §7/§14)
+----------------------------------------
+Every constant below is a function parameter whose default is the
+documented module constant (the documented fallback); the Settings/read
+layer supplies the effective values (this module never imports settings,
+§6):
+
+- PMC time constants tau_ctl 42 d / tau_atl 7 d (Allen & Coggan):
+  ``compute_pmc``/``compute_pmc_per_sport`` parameters; settings
+  ``engine_tau_ctl_days`` / ``engine_tau_atl_days``.
+- PMC confidence threshold 90 days (owner choice, ~2 tau_ctl):
+  ``min_history_days`` parameter; settings ``engine_min_history_days``.
+- ACWR EWMA time constants acute 7 d / chronic 28 d (Williams et al.
+  2017): ``acwr_ewma`` parameters; settings ``engine_acwr_tau_acute_days``
+  / ``engine_acwr_tau_chronic_days``.
+
 Reference: Allen & Coggan, "Training and Racing with a Power Meter"
 (Performance Manager); Williams et al. 2017 (EWMA ACWR).
 """
@@ -87,9 +103,8 @@ __all__ = [
 DEFAULT_TAU_CTL_DAYS: Final[float] = 42.0
 """Default chronic-load time constant: tau_ctl = 42 days (Allen & Coggan).
 
-Module-level constant so tests and callers can reference it; LOAD-11 owns
-moving engine constants into settings with source comments.
-"""
+Documented module fallback; the effective value is the settings field
+``engine_tau_ctl_days`` (LOAD-11), supplied by the read layer."""
 
 DEFAULT_TAU_ATL_DAYS: Final[float] = 7.0
 """Default acute-load time constant: tau_atl = 7 days (Allen & Coggan)."""

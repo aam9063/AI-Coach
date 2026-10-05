@@ -13,9 +13,14 @@ and reported, never defaulted), derives the engine inputs from the stored
 and per-sport activity counts, persisted row counts per sport, and every
 skipped activity with its reason.
 
-TRIMP coefficients: the documented male Banister 1991 set (0.64/1.92) is
-used as the default — settings has no sex field yet; a configurable sex /
-coefficient set lands with LOAD-11's configurable-constants work.
+TRIMP coefficients (LOAD-11): selected from settings via
+``engine_trimp_sex`` (owner choice, default "male") with the Banister 1991
+exponent values ``engine_trimp_male_a/b`` and ``engine_trimp_female_a/b``
+overridable — see :func:`trimp_coefficients_from_settings`. All remaining
+engine constants (PMC time constants, confidence threshold, NP window,
+minimum valid fraction, hrTSS reference duration, sRPE factor) are also
+settings-sourced and passed into the pure engine — never re-hardcoded
+here.
 """
 
 from __future__ import annotations
@@ -25,13 +30,21 @@ import asyncio
 import datetime as dt
 import sys
 from collections.abc import Sequence
+from typing import Any
 
 from app.core.settings import Settings, get_settings
 from app.db.session import create_db_engine, make_session_factory
 from app.engine.load import ThresholdBundle, TrimpCoefficients
 from app.services.daily_load import DailyLoadReport, recompute_daily_load
 
-__all__ = ["build_parser", "format_report", "main", "thresholds_from_settings"]
+__all__ = [
+    "build_parser",
+    "engine_constants_from_settings",
+    "format_report",
+    "main",
+    "thresholds_from_settings",
+    "trimp_coefficients_from_settings",
+]
 
 
 def thresholds_from_settings(settings: Settings) -> ThresholdBundle:
@@ -39,8 +52,13 @@ def thresholds_from_settings(settings: Settings) -> ThresholdBundle:
 
     Missing values stay ``None`` — the engine then reports the affected
     method as skipped instead of silently defaulting (§5.1). The sRPE
-    TSS-equivalent factor keeps the engine default 1.0 (raw Foster load);
-    a calibrated, configurable factor is LOAD-11 scope.
+    TSS-equivalent factor comes from settings (LOAD-11): its shipped value
+    1.0 is a documented PLACEHOLDER — the raw Foster load in arbitrary
+    units, NOT calibrated to the TSS scale, because there is no RPE data
+    anywhere to calibrate against. Documented calibration method: once gym
+    sessions record an RPE, compare their sRPE AU against the hrTSS of the
+    same sessions (gym sessions carry HR) and set the factor so the two
+    agree on average.
     """
     return ThresholdBundle(
         ftp_watts=settings.athlete_ftp_w,
@@ -49,7 +67,51 @@ def thresholds_from_settings(settings: Settings) -> ThresholdBundle:
         lthr_bpm=settings.athlete_lthr_bpm,
         hr_max_bpm=settings.athlete_hr_max_bpm,
         hr_rest_bpm=settings.athlete_hr_rest_bpm,
+        srpe_tss_equivalent_factor=settings.engine_srpe_tss_equivalent_factor,
     )
+
+
+def trimp_coefficients_from_settings(settings: Settings) -> TrimpCoefficients:
+    """Build the TRIMP coefficient set selected by settings (LOAD-11).
+
+    ``engine_trimp_sex`` (owner choice, default ``"male"``) selects the
+    Banister 1991 exponent set; the coefficient values themselves are
+    overridable via ``engine_trimp_male_a/b`` and
+    ``engine_trimp_female_a/b``. An unknown sex raises ``ValueError`` —
+    never silently defaulted.
+    """
+    sex = settings.engine_trimp_sex.strip().lower()
+    if sex == "male":
+        return TrimpCoefficients(
+            a=settings.engine_trimp_male_a, b=settings.engine_trimp_male_b
+        )
+    if sex == "female":
+        return TrimpCoefficients(
+            a=settings.engine_trimp_female_a, b=settings.engine_trimp_female_b
+        )
+    raise ValueError(
+        f"unknown engine_trimp_sex {settings.engine_trimp_sex!r}: "
+        "expected 'male' or 'female'"
+    )
+
+
+def engine_constants_from_settings(settings: Settings) -> dict[str, Any]:
+    """Engine constants passed into :func:`recompute_daily_load` (LOAD-11).
+
+    Pure mapping from the sourced settings fields onto the service's
+    keyword parameters (``**``-unpacked at the call site); the service
+    defaults are the pure engine's documented fallbacks and are never
+    re-hardcoded here. The key names are pinned by the mapping test and
+    the service signature accepts exactly these parameters.
+    """
+    return {
+        "tau_ctl_days": settings.engine_tau_ctl_days,
+        "tau_atl_days": settings.engine_tau_atl_days,
+        "min_history_days": settings.engine_min_history_days,
+        "np_window_samples": settings.engine_np_window_samples,
+        "np_min_valid_fraction": settings.engine_min_valid_fraction,
+        "trimp_reference_minutes": settings.engine_trimp_reference_minutes,
+    }
 
 
 def format_report(report: DailyLoadReport) -> str:
@@ -140,7 +202,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 1
 
     thresholds = thresholds_from_settings(settings)
-    coefficients = TrimpCoefficients.from_sex("male")  # documented default; see module docstring
+    coefficients = trimp_coefficients_from_settings(settings)
+    engine_constants = engine_constants_from_settings(settings)
 
     async def _run() -> DailyLoadReport:
         engine = create_db_engine(settings.database_url)
@@ -155,6 +218,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     thresholds=thresholds,
                     coefficients=coefficients,
                     engine_version=settings.engine_version,
+                    **engine_constants,
                 )
                 await session.commit()
                 return report

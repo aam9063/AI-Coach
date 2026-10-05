@@ -40,8 +40,16 @@ monitoring exercise training", J Strength Cond Res 15(1):109-115):
     TSS-equivalent     = Foster load * tss_equivalent_factor
 
 The ``tss_equivalent_factor`` maps Foster arbitrary units (AU) onto the
-TSS scale; it is an explicit, caller-supplied parameter (engine constants
-are owned by LOAD-11), documented here as the single scaling knob.
+TSS scale. **PLACEHOLDER (LOAD-11): the shipped value is 1.0 — the raw
+Foster load, NOT calibrated to the TSS scale**, because there is no RPE
+data anywhere to calibrate against. Calibration method (owner-agreed
+plan): once gym sessions record an RPE, compare their sRPE AU against the
+hrTSS of the SAME sessions (the owner's gym sessions do carry HR) and set
+the factor so the two agree on average. Until then every sRPE load is a
+raw AU value and must not be read as TSS. The factor is an explicit,
+caller-supplied parameter (settings field
+``engine_srpe_tss_equivalent_factor``), documented here as the single
+scaling knob.
 
 Bike power-based load (Coggan; Allen & Coggan, "Training and Racing with
 a Power Meter"):
@@ -122,6 +130,33 @@ Documented semantics (see :func:`normalized_swim_speed` for details):
 All functions are pure and fully typed; validation errors raise
 ``ValueError`` rather than clamping or silently defaulting, except the
 documented clamping of ``dHRr`` to [0, 1].
+
+Configurable constants (LOAD-11, §7/§14)
+----------------------------------------
+Every constant below is a function parameter whose default is the
+documented module constant (the documented fallback); the Settings/read
+layer (``app.core.settings`` fields ``engine_*``, wired through
+``app.db.daily_load`` and ``app.services.daily_load``) supplies the
+effective values — this module never imports settings (§6 purity):
+
+- TRIMP coefficients male 0.64/1.92, female 0.86/1.67 (Banister 1991):
+  :class:`TrimpCoefficients`; settings ``engine_trimp_male_a``/
+  ``engine_trimp_male_b``/``engine_trimp_female_a``/``engine_trimp_female_b``,
+  selected by ``engine_trimp_sex`` (owner choice).
+- hrTSS reference duration 60 min (Coggan hrTSS convention, 1 h at LTHR
+  = 100): ``trimp_at_lthr_reference(duration_min=...)`` and the
+  ``trimp_reference_minutes`` parameter of :func:`select_load_method`;
+  settings ``engine_trimp_reference_minutes``.
+- sRPE TSS-equivalent factor 1.0 — PLACEHOLDER, raw Foster AU, NOT
+  calibrated (Foster et al. 2001); calibration method in the module text
+  above; settings ``engine_srpe_tss_equivalent_factor``.
+- NP rolling window 30 samples (Coggan NP definition, 1 Hz stream):
+  :data:`NP_WINDOW_SAMPLES`; settings ``engine_np_window_samples``.
+- NP minimum valid fraction 1.0 (owner choice, strict windows):
+  settings ``engine_min_valid_fraction``.
+- Minetti et al. 2002 grade model: the Cr polynomial and its flat cost
+  ``Cr(0) = 3.6`` (:data:`MINETTI_CR_FLAT`) are the published model and
+  stay fixed engine constants (not owner configuration).
 """
 
 import math
@@ -274,6 +309,14 @@ def srpe_load(rpe: float, duration_min: float, *, tss_equivalent_factor: float) 
     TSS scale; pass 1.0 for the raw Foster load. RPE outside [0, 10],
     non-positive duration, or a negative factor raise ``ValueError``.
 
+    PLACEHOLDER (LOAD-11): the shipped setting value is 1.0 — the raw
+    Foster load in arbitrary units, NOT calibrated to the TSS scale,
+    because there is no RPE data anywhere to calibrate against. Documented
+    calibration method: once gym sessions record an RPE, compare their
+    sRPE AU against the hrTSS of the SAME sessions (the owner's gym
+    sessions do carry HR) and set the factor so the two agree on average.
+    Until then, sRPE output must not be read as a TSS value.
+
     Reference: Foster et al. 2001.
     """
     if not 0.0 <= rpe <= 10.0:
@@ -304,29 +347,33 @@ def normalized_power(
     power_samples: Sequence[float | None],
     *,
     min_valid_fraction: float = 1.0,
+    window_samples: int = NP_WINDOW_SAMPLES,
 ) -> float:
     """Coggan Normalized Power of a per-second power stream.
 
-    Formula: NP = (mean over rolling 30 s windows of (window mean)^4)^(1/4),
-    where windows are 30 consecutive samples (:data:`NP_WINDOW_SAMPLES`,
-    1 Hz stream) advanced one sample at a time.
+    Formula: NP = (mean over rolling windows of (window mean)^4)^(1/4),
+    where windows are ``window_samples`` consecutive samples (default
+    :data:`NP_WINDOW_SAMPLES` = 30, the Coggan definition on a 1 Hz
+    stream) advanced one sample at a time.
 
     Missing samples: ``None`` entries mark stream gaps. Each window's mean
     is computed over its valid (non-``None``) samples only; the window
-    contributes to NP only when ``valid_count / 30 >= min_valid_fraction``.
-    The default ``min_valid_fraction=1.0`` is strict (only fully complete
-    windows count); pass e.g. ``0.9`` for gap-heavy streams. Values outside
-    ``(0, 1]`` raise ``ValueError``.
+    contributes to NP only when ``valid_count / window_samples >=
+    min_valid_fraction``. The default ``min_valid_fraction=1.0`` is strict
+    (only fully complete windows count); pass e.g. ``0.9`` for gap-heavy
+    streams. Values outside ``(0, 1]`` and non-positive ``window_samples``
+    raise ``ValueError``.
 
-    Short files: fewer samples than the 30 s window means the smoothing
-    window never fills, so NP falls back to the average of the valid
-    samples (NP degenerates to average power for short files).
+    Short files: fewer samples than the window means the smoothing window
+    never fills, so NP falls back to the average of the valid samples (NP
+    degenerates to average power for short files).
 
     No silent nonsense: zero valid samples raises ``ValueError``
-    ("no usable power data"), and a series of at least 30 samples with no
-    qualifying window at the given ``min_valid_fraction`` raises
-    ``ValueError`` ("no qualifying rolling window") rather than returning
-    a degraded value — relax ``min_valid_fraction`` explicitly instead.
+    ("no usable power data"), and a series of at least ``window_samples``
+    samples with no qualifying window at the given ``min_valid_fraction``
+    raises ``ValueError`` ("no qualifying rolling window") rather than
+    returning a degraded value — relax ``min_valid_fraction`` explicitly
+    instead.
 
     Reference: Allen & Coggan, "Training and Racing with a Power Meter".
     """
@@ -334,26 +381,29 @@ def normalized_power(
         raise ValueError(
             f"min_valid_fraction must be within (0, 1], got {min_valid_fraction!r}"
         )
+    if window_samples <= 0:
+        raise ValueError(f"window_samples must be positive, got {window_samples!r}")
     samples = list(power_samples)
     if not any(s is not None for s in samples):
         raise ValueError(
             "no usable power data: samples sequence is empty or all missing"
         )
-    if len(samples) < NP_WINDOW_SAMPLES:
+    if len(samples) < window_samples:
         # Documented short-file fallback: NP -> average of valid samples.
         return _window_mean(samples)
     fourth_powers: list[float] = []
-    for start in range(len(samples) - NP_WINDOW_SAMPLES + 1):
-        window = samples[start : start + NP_WINDOW_SAMPLES]
+    for start in range(len(samples) - window_samples + 1):
+        window = samples[start : start + window_samples]
         valid_count = sum(1 for s in window if s is not None)
-        if valid_count / NP_WINDOW_SAMPLES < min_valid_fraction:
+        if valid_count / window_samples < min_valid_fraction:
             continue  # window lacks enough valid samples: skipped
         fourth_powers.append(_window_mean(window) ** 4)
     if not fourth_powers:
         raise ValueError(
-            "no qualifying rolling window: every 30 s window has fewer valid "
-            f"samples than min_valid_fraction={min_valid_fraction!r} allows; "
-            "relax min_valid_fraction or provide more complete data"
+            "no qualifying rolling window: every rolling window has fewer "
+            "valid samples than "
+            f"min_valid_fraction={min_valid_fraction!r} allows; relax "
+            "min_valid_fraction or provide more complete data"
         )
     mean_fourth = math.fsum(fourth_powers) / len(fourth_powers)
     return math.pow(mean_fourth, 0.25)
@@ -411,22 +461,29 @@ def bike_power_load(
     *,
     duration_s: float,
     ftp: float,
+    window_samples: int = NP_WINDOW_SAMPLES,
+    min_valid_fraction: float = 1.0,
 ) -> BikePowerLoad:
     """Convenience entry point: NP, IF and TSS for one bike session.
 
     Combines :func:`normalized_power` (missing-sample and short-file
-    semantics documented there), :func:`intensity_factor` and
-    :func:`power_tss`. ``duration_s`` is the session wall-clock duration in
-    seconds (explicit, because a gapped per-second stream has fewer valid
-    samples than seconds elapsed); non-positive durations raise
-    ``ValueError``. Returns a :class:`BikePowerLoad` for downstream method
-    selection.
+    semantics documented there; ``window_samples`` defaults to the Coggan
+    30-sample window, ``min_valid_fraction`` to the strict 1.0),
+    :func:`intensity_factor` and :func:`power_tss`. ``duration_s`` is the
+    session wall-clock duration in seconds (explicit, because a gapped
+    per-second stream has fewer valid samples than seconds elapsed);
+    non-positive durations raise ``ValueError``. Returns a
+    :class:`BikePowerLoad` for downstream method selection.
 
     Reference: Allen & Coggan, "Training and Racing with a Power Meter".
     """
     if duration_s <= 0.0:
         raise ValueError(f"duration must be positive, got {duration_s!r} seconds")
-    np_value = normalized_power(power_samples)
+    np_value = normalized_power(
+        power_samples,
+        min_valid_fraction=min_valid_fraction,
+        window_samples=window_samples,
+    )
     if_value = intensity_factor(np_value, ftp)
     return BikePowerLoad(
         normalized_power=np_value,
@@ -838,12 +895,15 @@ class ThresholdBundle:
     """Athlete thresholds used by method selection.
 
     Every field is an explicit owner configuration (loaded from settings by
-    the caller; LOAD-11 owns the wiring — nothing is read from settings
-    here). ``None`` means "not configured" and makes the corresponding
-    method inapplicable (reported as a skip reason), never silently
-    defaulted. ``srpe_tss_equivalent_factor`` defaults to 1.0 (the raw
-    Foster load); it is the single documented knob mapping Foster AU onto
-    the TSS scale (Foster et al. 2001; see :func:`srpe_load`).
+    the caller; nothing is read from settings here). ``None`` means "not
+    configured" and makes the corresponding method inapplicable (reported
+    as a skip reason), never silently defaulted. ``srpe_tss_equivalent_factor``
+    defaults to 1.0: a documented PLACEHOLDER (raw Foster AU, NOT
+    calibrated to the TSS scale — no RPE data exists to calibrate
+    against). Calibration method: once gym sessions record an RPE,
+    compare their sRPE AU against the hrTSS of the same sessions (gym
+    sessions carry HR) and set the factor so the two agree on average
+    (Foster et al. 2001; see :func:`srpe_load`).
     """
 
     ftp_watts: float | None = None
@@ -891,6 +951,9 @@ def select_load_method(
     thresholds: ThresholdBundle,
     *,
     coefficients: TrimpCoefficients,
+    np_window_samples: int = NP_WINDOW_SAMPLES,
+    np_min_valid_fraction: float = 1.0,
+    trimp_reference_minutes: float = 60.0,
 ) -> LoadSelection:
     """Select the best available load method in the fixed order (section 7.1).
 
@@ -923,7 +986,13 @@ def select_load_method(
     every skip reason — it never returns 0 or ``None`` silently.
 
     Thresholds and coefficients are parameters; nothing is read from
-    settings here (LOAD-11 owns the wiring).
+    settings here (the read layer supplies them). The engine constants of
+    the power and HR paths are parameters too: ``np_window_samples``
+    (default the Coggan 30-sample window, :data:`NP_WINDOW_SAMPLES`) and
+    ``np_min_valid_fraction`` (default strict 1.0) flow into
+    :func:`bike_power_load`; ``trimp_reference_minutes`` (default the
+    hrTSS convention of 60 minutes at LTHR) flows into
+    :func:`trimp_at_lthr_reference`.
 
     Reference: PROJECT_BRIEF section 7.1 (fixed selection order, persisted
     method); per-method formulas and references in the respective
@@ -956,6 +1025,8 @@ def select_load_method(
                 activity.power_samples,
                 duration_s=activity.duration_s,
                 ftp=thresholds.ftp_watts,
+                window_samples=np_window_samples,
+                min_valid_fraction=np_min_valid_fraction,
             )
         except ValueError as exc:
             skipped["power"] = f"power data unusable: {exc}"
@@ -1057,6 +1128,7 @@ def select_load_method(
                 thresholds.hr_rest_bpm,
                 thresholds.hr_max_bpm,
                 thresholds.lthr_bpm,
+                duration_min=trimp_reference_minutes,
                 coefficients=coefficients,
             )
             hr_tss = hrtss(trimp_value, reference)

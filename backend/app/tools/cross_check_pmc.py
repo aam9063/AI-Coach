@@ -71,11 +71,16 @@ so the residual seed error stays far inside the tolerance. Windows shorter
 than ~180 days are seed-dominated and will overstate real deviations.
 
 Tolerance: relative deviation ``|ours - theirs| / |theirs|``, default
-``±10%`` (:data:`DEFAULT_TOLERANCE`), OR absolute deviation
+``±10%%`` (:data:`DEFAULT_TOLERANCE`), OR absolute deviation
 ``|ours - theirs|`` within :data:`DEFAULT_ABSOLUTE_TOLERANCE` (0.5 points).
-The boundaries are inclusive. Missing cross-check values (no wellness row,
-or a NULL column) are REPORTED per date — never silently skipped and never
-invented. The tool is strictly read-only.
+The boundaries are inclusive. Since LOAD-11 the defaults are
+SETTINGS-SOURCED (§14): ``engine_cross_check_relative_tolerance``,
+``engine_cross_check_absolute_tolerance`` and
+``engine_cross_check_revision_threshold`` (all owner-agreed/owner-choice,
+see ``app.core.settings``); the module constants remain the documented
+fallback and an explicit CLI flag wins over both. Missing cross-check
+values (no wellness row, or a NULL column) are REPORTED per date — never
+silently skipped and never invented. The tool is strictly read-only.
 
 Entry points:
 
@@ -934,6 +939,43 @@ def _positive_int(value: str) -> int:
     return parsed
 
 
+def _resolve_tolerances(
+    args: argparse.Namespace, config: Settings
+) -> tuple[float, float, float]:
+    """Resolve (relative, absolute, revision) thresholds: CLI flag > Settings.
+
+    The CLI flags default to ``None`` and fall back to the settings-sourced
+    engine constants (LOAD-11, §14; module constants are the documented
+    fallback). Non-positive resolved values raise ``ValueError`` — an
+    "always-pass" check would be worse than no check (same rule as
+    :func:`compare_pmc_series`).
+    """
+    relative = (
+        args.tolerance
+        if args.tolerance is not None
+        else config.engine_cross_check_relative_tolerance
+    )
+    absolute = (
+        args.absolute_tolerance
+        if args.absolute_tolerance is not None
+        else config.engine_cross_check_absolute_tolerance
+    )
+    revision = (
+        args.revision_threshold
+        if args.revision_threshold is not None
+        else config.engine_cross_check_revision_threshold
+    )
+    if relative <= 0.0:
+        raise ValueError(f"tolerance must be positive, got {relative!r}")
+    if absolute <= 0.0:
+        raise ValueError(f"absolute_tolerance must be positive, got {absolute!r}")
+    if revision <= 0.0:
+        raise ValueError(
+            f"discontinuity_threshold must be positive, got {revision!r}"
+        )
+    return relative, absolute, revision
+
+
 def _iso_date(value: str) -> date_cls:
     try:
         return date_cls.fromisoformat(value)
@@ -969,23 +1011,35 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--tolerance",
         type=_positive_float,
-        default=DEFAULT_TOLERANCE,
+        default=None,
         metavar="T",
         help=(
-            f"relative tolerance, default {DEFAULT_TOLERANCE} (= ±10%%; "
-            "owner-agreed §12.3 tolerance; hybrid rule: a day passes when "
-            "the relative OR the absolute bound holds)"
+            "relative tolerance (default: settings "
+            "engine_cross_check_relative_tolerance = ±10%%, owner-agreed "
+            "§12.3; hybrid rule: a day passes when the relative OR the "
+            "absolute bound holds)"
         ),
     )
     parser.add_argument(
         "--absolute-tolerance",
         type=_positive_float,
-        default=DEFAULT_ABSOLUTE_TOLERANCE,
+        default=None,
         metavar="PTS",
         help=(
-            "absolute tolerance in CTL/ATL points, default "
-            f"{DEFAULT_ABSOLUTE_TOLERANCE}: a day passes when the relative "
-            "OR this absolute bound holds (decaying-series guard)"
+            "absolute tolerance in CTL/ATL points (default: settings "
+            "engine_cross_check_absolute_tolerance = 0.5): a day passes "
+            "when the relative OR this absolute bound holds "
+            "(decaying-series guard)"
+        ),
+    )
+    parser.add_argument(
+        "--revision-threshold",
+        type=_positive_float,
+        default=None,
+        metavar="PTS",
+        help=(
+            "their-side revision-detection threshold in CTL/ATL points "
+            "(default: settings engine_cross_check_revision_threshold = 0.25)"
         ),
     )
     parser.add_argument(
@@ -1008,6 +1062,7 @@ async def _run(
     days: int,
     tolerance: float,
     absolute_tolerance: float,
+    revision_threshold: float,
     end_date: date_cls | None,
     athlete_id: int,
     config: Settings,
@@ -1023,6 +1078,7 @@ async def _run(
                 window_end=window_end,
                 tolerance=tolerance,
                 absolute_tolerance=absolute_tolerance,
+                discontinuity_threshold=revision_threshold,
                 athlete_id=athlete_id,
             )
     engine = create_db_engine(config.database_url)
@@ -1034,6 +1090,7 @@ async def _run(
                 window_end=window_end,
                 tolerance=tolerance,
                 absolute_tolerance=absolute_tolerance,
+                discontinuity_threshold=revision_threshold,
                 athlete_id=athlete_id,
             )
     finally:
@@ -1049,11 +1106,15 @@ def main(
     """CLI entry point: 0 on PASS, 1 on FAIL, 2 on argument errors."""
     args = build_parser().parse_args(argv)
     config = settings or get_settings()
+    tolerance, absolute_tolerance, revision_threshold = _resolve_tolerances(
+        args, config
+    )
     run = asyncio.run(
         _run(
             args.days,
-            args.tolerance,
-            args.absolute_tolerance,
+            tolerance,
+            absolute_tolerance,
+            revision_threshold,
             args.end,
             args.athlete_id,
             config,
