@@ -159,19 +159,79 @@ def test_upload_api_key_never_in_body_or_query() -> None:
 
 # --- 201 creation ---------------------------------------------------------------
 
+# The REAL response shape, live-verified 2026-10 by uploading one of the
+# owner's files twice against Intervals.icu (ODD fit-intake FI-5
+# reconnaissance): BOTH 201 (created) and 200 (duplicate) return a JSON
+# OBJECT, not an array:
+#
+#     {"icu_athlete_id":"i555003","id":"i194265861",
+#      "activities":[{"icu_athlete_id":"i555003","id":"i194265861"}]}
+#
+# A 200 duplicate carries the EXISTING activity's id — it is NOT an empty
+# body. A bare JSON array is tolerated as a fallback (the API may serve
+# both), but the object shape is what the API actually returns.
 
-def test_upload_201_reports_created_with_activity_ids() -> None:
-    payload = [
-        {"id": "i55751783", "icu_athlete_id": 0, "name": "Morning ride"},
-        {"id": "i55751784", "icu_athlete_id": 0, "name": "Morning ride (2)"},
-    ]
-    client, _ = make_client(lambda _: json_response(payload, status_code=201), make_settings())
+
+def observed_object_body(activity_id: str) -> dict[str, Any]:
+    """The live-verified response object (created AND duplicate)."""
+    return {
+        "icu_athlete_id": "i555003",
+        "id": activity_id,
+        "activities": [{"icu_athlete_id": "i555003", "id": activity_id}],
+    }
+
+
+def test_upload_201_object_body_reports_created_with_activity_ids() -> None:
+    client, _ = make_client(
+        lambda _: json_response(observed_object_body("i194265861"), status_code=201),
+        make_settings(),
+    )
 
     result = client.upload_activity_file(FIT_BYTES, filename="ride.fit")
 
     assert isinstance(result, ActivityUploadResult)
     assert result.created is True
+    assert result.activity_ids == ("i194265861",)
+
+
+def test_upload_201_activities_array_ids_are_all_returned() -> None:
+    body = {
+        "icu_athlete_id": "i555003",
+        "id": "i194265861",
+        "activities": [
+            {"icu_athlete_id": "i555003", "id": "i194265861"},
+            {"icu_athlete_id": "i555003", "id": "i194265862"},
+        ],
+    }
+    client, _ = make_client(lambda _: json_response(body, status_code=201), make_settings())
+
+    result = client.upload_activity_file(FIT_BYTES, filename="batch.zip")
+
+    assert result.created is True
+    assert result.activity_ids == ("i194265861", "i194265862")
+
+
+def test_upload_tolerates_bare_array_of_objects() -> None:
+    payload = [
+        {"id": "i55751783", "icu_athlete_id": "i555003"},
+        {"id": "i55751784", "icu_athlete_id": "i555003"},
+    ]
+    client, _ = make_client(lambda _: json_response(payload, status_code=201), make_settings())
+
+    result = client.upload_activity_file(FIT_BYTES, filename="ride.fit")
+
+    assert result.created is True
     assert result.activity_ids == ("i55751783", "i55751784")
+
+
+def test_upload_top_level_id_is_a_fallback_when_activities_is_absent() -> None:
+    body = {"icu_athlete_id": "i555003", "id": "i194265861"}
+    client, _ = make_client(lambda _: json_response(body, status_code=201), make_settings())
+
+    result = client.upload_activity_file(FIT_BYTES, filename="ride.fit")
+
+    assert result.created is True
+    assert result.activity_ids == ("i194265861",)
 
 
 def test_upload_result_is_frozen() -> None:
@@ -183,19 +243,24 @@ def test_upload_result_is_frozen() -> None:
         result.created = False
 
 
-# --- 200 all-duplicates ----------------------------------------------------------
+# --- 200 duplicate (carries the EXISTING activity's id — never empty) ------------
 
 
-def test_upload_200_is_reported_duplicate_not_error() -> None:
+def test_upload_200_is_reported_duplicate_with_the_existing_ids() -> None:
+    # Live-verified: an identical re-upload returns 200 with the SAME body
+    # shape, carrying the EXISTING activity's id.
     client, sent = make_client(
-        lambda _: json_response([]), make_settings(max_retries=3)
+        lambda _: json_response(observed_object_body("i194265861")),
+        make_settings(max_retries=3),
     )
 
     result = client.upload_activity_file(FIT_BYTES, filename="ride.fit")
 
     assert len(sent) == 1
     assert result.created is False, "a 200 means everything was a duplicate"
-    assert result.activity_ids == ()
+    assert result.activity_ids == ("i194265861",), (
+        "the duplicate response names the activity it deduped against"
+    )
     # Explicit: not an error and not an empty success.
     assert isinstance(result, ActivityUploadResult)
 

@@ -208,12 +208,25 @@ class IntervalsClient:
         ``.gpx.gz`` or a zip containing them (verified: official API
         cookbook).
 
-        Response semantics (official cookbook): **201 when at least one
-        activity was created, 200 when everything was a duplicate** — the
-        platform de-duplicates by a hash of the file contents, so re-uploading
-        the same file is safe and reported here as a duplicate, never as an
-        error. The response body is a JSON array of the created activities;
-        their ids are carried in ``ActivityUploadResult.activity_ids``.
+        Response semantics (LIVE-VERIFIED 2026-10 by uploading one of the
+        owner's real files twice — the cookbook's array/empty-body
+        description is wrong): **201 when the activity was created and 200
+        when the file was already present** — and in BOTH cases the body is
+        a JSON OBJECT::
+
+            {"icu_athlete_id":"i555003","id":"i194265861",
+             "activities":[{"icu_athlete_id":"i555003","id":"i194265861"}]}
+
+        A 200 duplicate carries the EXISTING activity's id (it is NOT an
+        empty body): the platform de-duplicates by a hash of the file
+        contents, so a re-upload of a byte-identical file is safe and is
+        reported here as a duplicate WITH the id it matched. Note the dedup
+        is byte-identical only: the same ride arriving as a different file
+        (e.g. sourced from Garmin Connect vs this upload) creates a SECOND
+        activity. The ids carried in ``ActivityUploadResult.activity_ids``
+        come from the ``activities`` array, falling back to the top-level
+        ``id``; a bare JSON array of objects is tolerated as a documented
+        fallback (the API may serve both).
 
         Auth is unchanged: HTTP Basic in the ``Authorization`` header only —
         the API key never appears in the body or the query (§5.1).
@@ -231,11 +244,9 @@ class IntervalsClient:
             files={"file": (filename, data)},
             data=form,
         )
-        created_ids = tuple(
-            str(item["id"]) for item in response.json()
-        )
         return ActivityUploadResult(
-            created=response.status_code == 201, activity_ids=created_ids
+            created=response.status_code == 201,
+            activity_ids=upload_response_activity_ids(response.json()),
         )
 
     # --- Internals ---------------------------------------------------------------
@@ -287,4 +298,35 @@ class IntervalsClient:
         raise IntervalsServerError(status, message)
 
 
-__all__ = ["IntervalsClient", "IntervalsHTTPError"]
+__all__ = [
+    "IntervalsClient",
+    "IntervalsHTTPError",
+    "upload_response_activity_ids",
+]
+
+
+def upload_response_activity_ids(body: Any) -> tuple[str, ...]:
+    """Activity ids from an upload response body (live-verified shape).
+
+    The real body is a JSON OBJECT with an ``activities`` array of objects
+    carrying ``id`` (and a top-level ``id`` duplicating the single created
+    id); a bare JSON array of objects is tolerated as a fallback. A 200
+    duplicate body carries the EXISTING activity's id — never discarded.
+    Anything unrecognised yields ``()`` (the caller reports it).
+    """
+    if isinstance(body, dict):
+        raw_items: list[Any] = body.get("activities") or []
+        top_id = body.get("id")
+    elif isinstance(body, list):
+        raw_items = list(body)
+        top_id = None
+    else:
+        raw_items, top_id = [], None
+    ids = [
+        str(item["id"])
+        for item in raw_items
+        if isinstance(item, dict) and item.get("id") is not None
+    ]
+    if not ids and top_id is not None:
+        ids.append(str(top_id))
+    return tuple(ids)
