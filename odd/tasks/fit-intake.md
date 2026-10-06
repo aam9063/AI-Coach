@@ -29,8 +29,8 @@ Without an intake, a FIT file that is not already in Intervals.icu can never rea
 
 ## Checklist
 
-- [ ] `FI-1`: RED: client tests for the multipart upload against a mocked transport — request shape (field name, filename, content type), a 201 creation, a 200 all-duplicates outcome reported as *duplicate* and not as an error, error mapping for 4xx/5xx, and that the API key never appears in the body.
-- [ ] `FI-2`: GREEN: implement the upload method on the Intervals.icu client with a typed result carrying the created activity ids and the duplicate/file counts.
+- [x] `FI-1`: RED: client tests for the multipart upload against a mocked transport — request shape (field name, filename, content type), a 201 creation, a 200 all-duplicates outcome reported as *duplicate* and not as an error, error mapping for 4xx/5xx, and that the API key never appears in the body.
+- [x] `FI-2`: GREEN: implement the upload method on the Intervals.icu client with a typed result carrying the created activity ids and the duplicate/file counts.
 - [ ] `FI-3`: RED+GREEN: CLI `python -m app.tools.upload_fit <path...>` that uploads each path, archives the bytes through the storage interface, and reports per file: created vs duplicate, path archived, and any error with its reason.
 - [ ] `FI-4`: RED+GREEN: immediate analysis from the local bytes — parse the FIT, select the load method from the session's own data, compute the load and (where a modality is usable) the 3-zone split, and print them with `engine_version`; tests use a real fixture FIT and assert the numbers.
 - [ ] `FI-5`: End-to-end verification against the running stack with the owner's real files: upload a real `.fit` (created), confirm the activity appears in Intervals.icu, re-upload the same file (reported duplicate, no second activity), and show the printed analysis.
@@ -53,4 +53,6 @@ Owner context: the iGPSPORT BSC500's recordings could not be extracted from the 
 
 Related, not in scope: the owner's readiness inputs (HRV, resting HR, sleep) will arrive from a Garmin Forerunner 265 through the Garmin↔Intervals.icu connection once the Garmin wellness fields are enabled and the watch is worn overnight — a `.fit` activity file contains none of them.
 
-Commits: (pending)
+- FI-1/2 done at `285cc50`: `upload_activity_file` on the existing Intervals.icu client, sharing its request/retry/exception plumbing, with a typed `ActivityUploadResult` distinguishing **created** (201, with the returned activity ids) from **duplicate** (200 — the platform de-duplicates by content hash, so a re-upload is safe and is reported as a duplicate rather than an error or an empty success). Parent-verified on a mocked transport: POST to `/api/v1/athlete/0/activities`, Basic auth, **the API key never in the body**, the file part named `file` with its filename, the optional `name`/`description` sent only when provided, 201 parsing the created ids, 200 reporting a duplicate with no retry, and 400/500 mapping to the client's typed errors.
+
+Commits: 285cc50 (FI-1/2)
