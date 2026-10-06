@@ -76,6 +76,41 @@ Band semantics
   0 is beyond any finite band). The deviation-in-SD field is ``None`` in
   that case (undefined, never ``inf``) and the ``detail`` text says so.
 
+Multi-signal warning rule (RID-3) and structured assessment (RID-4)
+--------------------------------------------------------------------
+:class:`ReadinessAssessment` / :func:`readiness_assessment` combine the
+three readiness signals with the two context signals the brief names — TSB
+from the load model (section 7.4) and an optional subjective-fatigue
+report — into the multi-signal warning rule. The rule is EXACTLY "two or
+more adverse signals agree" (section 7.4, section 12.5 acceptance): a
+single adverse signal alone must never produce a reduce-intensity
+suggestion. Adverse semantics: HRV direction ``"low"`` (suppressed rolling
+mean, the classic overreaching signal — Plews et al. 2013), resting HR
+``"elevated"``, sleep ``"low"`` (short), TSB below the configurable
+"very negative" threshold (``tsb_very_negative_below``, default -10.0,
+OWNER CHOICE — provenance in "Configurable constants") and a reported
+subjective fatigue. A signal with ``status == "insufficient_data"`` NEVER
+counts as agreeing: absence of evidence is not evidence. ACWR is accepted
+as context-only input (section 7.2, Impellizzeri et al. 2020) and is
+carried through the result verbatim without ever entering the verdict.
+The suggestion is a "consider reducing intensity" statement — never a
+diagnosis or medical advice (section 3). When every warning signal is
+adverse the suggestion additionally proposes rest and recovery, still as
+a suggestion (documented OWNER CHOICE).
+
+:class:`ReadinessAssessment` (RID-4) is the structured output object:
+every signal with its direction and confidence, the adverse-signal keys,
+the agreement count, the explicit ``suggest_reduce_intensity`` boolean,
+the human-readable reasons and the context-only inputs. It carries NO
+composite score and NO single readiness number (section 7.4). It is what
+the future ``get_readiness`` tool wraps (Feature 6, section 9.3). The
+shape is "typed Pydantic-ready" without importing pydantic into the
+engine: every field is a primitive or a tuple of frozen dataclasses, so
+``dataclasses.asdict`` yields a nested primitive structure that maps 1:1
+onto nested ``pydantic.BaseModel`` classes with identical field names
+(tuples become lists); that mapping belongs to the future tool layer
+(e.g. ``app/services/``), never to ``app/engine/``.
+
 Structured output (never a single score)
 ----------------------------------------
 Each signal returns a frozen :class:`ReadinessSignal` carrying its stable
@@ -141,6 +176,16 @@ source comments is RID-10's scope:
 - Sleep baseline 30 days (``baseline_days``): OWNER CHOICE — the brief
   fixes no sleep window; kept symmetric with resting HR.
 - Sleep band ± 0.5 SD (``band_sd``): OWNER CHOICE — same SWC extension.
+- TSB "very negative" threshold -10.0 (``tsb_very_negative_below``):
+  OWNER CHOICE — the brief says "very negative" without a number (the
+  warning-rule example is "TSB very negative", section 7.4). TSB =
+  CTL_{t-1} - ATL_{t-1} is expressed in TSS/day; the TrainingPeaks / Friel
+  coaching convention treats form below about -10 as the onset of the
+  high-fatigue zone and below -30 as deep-overreach territory. -10.0 is
+  chosen deliberately conservatively (fires EARLIER than -30) because the
+  rule already requires two or more agreeing signals before it suggests
+  anything, and a "consider reducing intensity" nudge must arrive well
+  before forced rest becomes the topic.
 - Baseline completeness 42 of 60 days (HRV) and 21 of 30 days (resting HR /
   sleep), i.e. 70% (``min_baseline_valid_days``): OWNER CHOICE — the owner's
   wellness rows are partly populated, so a strict 100% requirement would
@@ -172,13 +217,18 @@ __all__ = [
     "DEFAULT_SLEEP_BAND_SD",
     "DEFAULT_SLEEP_BASELINE_DAYS",
     "DEFAULT_SLEEP_MIN_BASELINE_VALID_DAYS",
+    "DEFAULT_TSB_VERY_NEGATIVE",
     "READINESS_DIRECTIONS",
     "SIGNAL_KEYS",
+    "WARNING_SIGNAL_KEYS",
+    "ReadinessAssessment",
     "ReadinessDirection",
     "ReadinessSignal",
     "SignalKey",
     "SignalStatus",
+    "WarningSignalKey",
     "hrv_readiness",
+    "readiness_assessment",
     "resting_hr_readiness",
     "sleep_readiness",
 ]
@@ -223,6 +273,15 @@ DEFAULT_SLEEP_MIN_BASELINE_VALID_DAYS: Final[int] = 21
 DEFAULT_MIN_WINDOW_VALID_FRACTION: Final[float] = 1.0
 """Fraction of the HRV rolling window that must carry a measurement
 (default strict, mirroring ``app.engine.zones``): OWNER CHOICE."""
+
+DEFAULT_TSB_VERY_NEGATIVE: Final[float] = -10.0
+"""TSB strictly below this value counts as "very negative" (adverse):
+OWNER CHOICE — the brief says "very negative" without a number (section
+7.4). TSB = CTL_{t-1} - ATL_{t-1} in TSS/day; the TrainingPeaks / Friel
+convention places the onset of the high-fatigue zone around -10 and deep
+overreach below -30. -10.0 fires EARLIER on purpose: the rule already
+requires two or more agreeing signals, and a "consider reducing
+intensity" nudge must arrive before forced rest is the topic."""
 
 
 # ---------------------------------------------------------------------------
@@ -269,6 +328,42 @@ READINESS_DIRECTIONS: Final[tuple[ReadinessDirection, ...]] = (
 )
 """All readiness direction keys (stable vocabulary for callers)."""
 
+WarningSignalKey = Literal[
+    "hrv_ln_rmssd",
+    "resting_hr",
+    "sleep_duration",
+    "tsb_very_negative",
+    "subjective_fatigue",
+]
+"""Stable keys of the five warning-rule inputs (section 7.4): the three
+readiness signals plus TSB (as a "very negative" flag) and the subjective
+fatigue report."""
+
+WARNING_SIGNAL_KEYS: Final[tuple[WarningSignalKey, ...]] = (
+    "hrv_ln_rmssd",
+    "resting_hr",
+    "sleep_duration",
+    "tsb_very_negative",
+    "subjective_fatigue",
+)
+"""All warning-signal keys, in the stable evaluation order of
+:func:`readiness_assessment`."""
+
+ADVERSE_DIRECTIONS: Final[dict[SignalKey, ReadinessDirection]] = {
+    SIGNAL_KEY_HRV: "low",
+    SIGNAL_KEY_RHR: "elevated",
+    SIGNAL_KEY_SLEEP: "low",
+}
+"""The observed-value direction that counts as ADVERSE per signal.
+
+The direction vocabulary describes the VALUE (module docstring), so the
+warning rule needs this explicit interpretation layer: a SUPPRESSED HRV
+rolling mean (``"low"``) is the classic overreaching signal (Plews et al.
+2013) while an ELEVATED one can mark recovery above baseline (not
+adverse); an ELEVATED resting HR is the concern (section 7.4) while a low
+one typically reflects fitness; SHORT sleep (``"low"``) is the concern
+while unusually long sleep is not a warning."""
+
 
 # ---------------------------------------------------------------------------
 # Result type
@@ -312,6 +407,64 @@ class ReadinessSignal:
     n_window_valid: int
     n_baseline_valid: int
     detail: str
+
+
+# ---------------------------------------------------------------------------
+# Multi-signal warning rule (RID-3) and structured assessment (RID-4)
+# ---------------------------------------------------------------------------
+
+SUGGESTION_REDUCE_INTENSITY: Final[str] = "Consider reducing intensity today."
+"""The neutral suggestion when two or more adverse signals agree: a
+suggestion, never a diagnosis or medical advice (section 3)."""
+
+SUGGESTION_REDUCE_AND_REST: Final[str] = (
+    "Consider reducing intensity today and prioritize rest and recovery."
+)
+"""The suggestion when EVERY warning signal is adverse (OWNER CHOICE to
+expose a rest/recovery phrasing; still a suggestion, never a diagnosis)."""
+
+_SIGNAL_LABELS: Final[dict[SignalKey, str]] = {
+    SIGNAL_KEY_HRV: "HRV (ln rMSSD)",
+    SIGNAL_KEY_RHR: "Resting heart rate",
+    SIGNAL_KEY_SLEEP: "Sleep duration",
+}
+"""Human-readable labels used in the assessment reasons."""
+
+
+@dataclass(frozen=True, slots=True)
+class ReadinessAssessment:
+    """The structured multi-signal readiness assessment (RID-4, section 7.4).
+
+    This is the object the future ``get_readiness`` tool wraps (Feature 6,
+    section 9.3): every signal with its direction and confidence (the
+    frozen :class:`ReadinessSignal` tuple), the adverse-signal keys, the
+    agreement count, the explicit ``suggest_reduce_intensity`` boolean,
+    the human-readable ``reasons`` (one per adverse warning signal, in the
+    stable :data:`WARNING_SIGNAL_KEYS` order) and the context-only inputs
+    (``tsb``, ``tsb_very_negative_below``, ``subjective_fatigue_reported``
+    and ``acwr`` — ACWR is context ONLY, never part of the verdict,
+    section 7.2 / Impellizzeri et al. 2020).
+
+    There is deliberately NO composite score and NO single readiness
+    number: section 7.4 requires a structured multi-signal object. The
+    shape is typed Pydantic-ready without importing pydantic here: every
+    field is a primitive or a tuple of frozen dataclasses, so
+    ``dataclasses.asdict`` yields a nested primitive structure that maps
+    1:1 onto nested ``pydantic.BaseModel`` classes with identical field
+    names (tuples become lists). That mapping belongs to the future tool
+    layer (e.g. ``app/services/``), never to ``app/engine/``.
+    """
+
+    signals: tuple[ReadinessSignal, ...]
+    adverse_signal_keys: tuple[WarningSignalKey, ...]
+    agreement_count: int
+    suggest_reduce_intensity: bool
+    suggestion: str | None
+    reasons: tuple[str, ...]
+    tsb: float
+    tsb_very_negative_below: float
+    subjective_fatigue_reported: bool | None
+    acwr: float | None
 
 
 # ---------------------------------------------------------------------------
@@ -775,4 +928,152 @@ def sleep_readiness(
         baseline_days=baseline_days,
         band_sd=band_sd,
         min_baseline_valid_days=min_baseline_valid_days,
+    )
+
+
+def _readiness_reason(signal: ReadinessSignal) -> str:
+    """One human-readable reason line for an assessed, adverse signal."""
+    observed = signal.observed
+    baseline_mean = signal.baseline_mean
+    deviation_in_sd = signal.deviation_in_sd
+    if observed is None or baseline_mean is None:
+        # Unreachable for assessed signals (they always carry values);
+        # kept defensive so the reason is never a substituted number.
+        return f"{_SIGNAL_LABELS[signal.key]} is outside its baseline band."
+    comparison = "below" if signal.direction == "low" else "above"
+    if deviation_in_sd is None:
+        return (
+            f"{_SIGNAL_LABELS[signal.key]} is {comparison} its baseline band: "
+            f"observed {observed:.4g} vs baseline mean {baseline_mean:.4g}."
+        )
+    return (
+        f"{_SIGNAL_LABELS[signal.key]} is {comparison} its baseline band: "
+        f"observed {observed:.4g} vs baseline mean {baseline_mean:.4g} "
+        f"({deviation_in_sd:+.3f} SD)."
+    )
+
+
+def readiness_assessment(
+    signals: Sequence[ReadinessSignal],
+    *,
+    tsb: float,
+    subjective_fatigue_reported: bool | None = None,
+    acwr: float | None = None,
+    tsb_very_negative_below: float = DEFAULT_TSB_VERY_NEGATIVE,
+) -> ReadinessAssessment:
+    """Multi-signal warning rule (RID-3): suggest reducing intensity only
+    when two or more adverse signals agree (section 7.4, section 12.5
+    acceptance criterion).
+
+    Inputs
+    ------
+    ``signals``
+        Exactly one :class:`ReadinessSignal` per key of
+        :data:`SIGNAL_KEYS` — the outputs of :func:`hrv_readiness`,
+        :func:`resting_hr_readiness` and :func:`sleep_readiness` for the
+        as-of date (missing keys, duplicates and unknown keys raise
+        ``ValueError``).
+    ``tsb``
+        Today's Training Stress Balance from the load model
+        (``app.engine.pmc``, section 7.4): "TSB very negative" counts as
+        an adverse signal when STRICTLY below
+        ``tsb_very_negative_below`` (default :data:`DEFAULT_TSB_VERY_NEGATIVE`,
+        OWNER CHOICE -10.0 — provenance in the module docstring). Exactly
+        AT the threshold does NOT count (tolerant boundary comparison,
+        the ZON-9 margin precedent).
+    ``subjective_fatigue_reported``
+        ``True`` when the athlete reported fatigue today (section 7.4's
+        example context signal); ``None`` / ``False`` = not reported.
+    ``acwr``
+        CONTEXT ONLY (section 7.2, Impellizzeri et al. 2020): carried
+        through to the result verbatim and never consulted for the
+        verdict — changing it cannot change the suggestion or the
+        agreement count (asserted by tests).
+
+    Adverse semantics
+    -----------------
+    HRV direction ``"low"``, resting-HR direction ``"elevated"`` and sleep
+    direction ``"low"`` are adverse (:data:`ADVERSE_DIRECTIONS`); the
+    opposite directions are not. A signal with
+    ``status == "insufficient_data"`` NEVER counts as agreeing — absence
+    of evidence is not evidence. Subjective fatigue counts when reported.
+    The suggestion fires exactly when ``agreement_count >= 2`` and is a
+    "consider reducing intensity" statement, never a diagnosis or medical
+    advice (section 3); when every warning signal in
+    :data:`WARNING_SIGNAL_KEYS` is adverse the suggestion additionally
+    proposes rest and recovery (documented OWNER CHOICE, still a
+    suggestion).
+
+    Returns a frozen :class:`ReadinessAssessment` (RID-4): the structured
+    multi-signal object with NO composite score, wrapped by the future
+    ``get_readiness`` tool (Feature 6). Raises ``ValueError`` on a
+    missing/duplicate/unknown signal key or a non-finite ``tsb``,
+    ``tsb_very_negative_below`` or ``acwr``.
+    """
+    if not math.isfinite(tsb):
+        raise ValueError(f"tsb must be finite, got {tsb!r}")
+    if not math.isfinite(tsb_very_negative_below):
+        raise ValueError(
+            f"tsb_very_negative_below must be finite, got {tsb_very_negative_below!r}"
+        )
+    if acwr is not None and not math.isfinite(acwr):
+        raise ValueError(f"acwr must be finite, got {acwr!r}")
+
+    by_key: dict[SignalKey, ReadinessSignal] = {}
+    for signal in signals:
+        if signal.key not in SIGNAL_KEYS:
+            raise ValueError(f"unknown readiness signal key: {signal.key!r}")
+        if signal.key in by_key:
+            raise ValueError(f"duplicate readiness signal key: {signal.key!r}")
+        by_key[signal.key] = signal
+    missing = [key for key in SIGNAL_KEYS if key not in by_key]
+    if missing:
+        raise ValueError(
+            f"missing readiness signal keys: {missing!r} — every signal of "
+            "SIGNAL_KEYS must be passed, use its insufficient_data result "
+            "when the signal cannot be assessed"
+        )
+
+    adverse: list[WarningSignalKey] = []
+    reasons: list[str] = []
+    for key in SIGNAL_KEYS:
+        signal = by_key[key]
+        # An insufficient_data signal never counts as agreeing: absence of
+        # evidence is not evidence (asserted by tests).
+        if signal.status == "assessed" and signal.direction == ADVERSE_DIRECTIONS[key]:
+            adverse.append(key)
+            reasons.append(_readiness_reason(signal))
+    if tsb < tsb_very_negative_below and not _same_boundary(
+        tsb, tsb_very_negative_below
+    ):
+        adverse.append("tsb_very_negative")
+        reasons.append(
+            f"TSB is {tsb:+.1f}, below the very-negative threshold "
+            f"{tsb_very_negative_below:+.1f}: recent fatigue exceeds "
+            "chronic fitness."
+        )
+    if subjective_fatigue_reported is True:
+        adverse.append("subjective_fatigue")
+        reasons.append("Subjective fatigue was reported for today.")
+
+    agreement_count = len(adverse)
+    suggest_reduce_intensity = agreement_count >= 2
+    suggestion: str | None = None
+    if suggest_reduce_intensity:
+        suggestion = (
+            SUGGESTION_REDUCE_AND_REST
+            if agreement_count == len(WARNING_SIGNAL_KEYS)
+            else SUGGESTION_REDUCE_INTENSITY
+        )
+    return ReadinessAssessment(
+        signals=tuple(by_key[key] for key in SIGNAL_KEYS),
+        adverse_signal_keys=tuple(adverse),
+        agreement_count=agreement_count,
+        suggest_reduce_intensity=suggest_reduce_intensity,
+        suggestion=suggestion,
+        reasons=tuple(reasons),
+        tsb=tsb,
+        tsb_very_negative_below=tsb_very_negative_below,
+        subjective_fatigue_reported=subjective_fatigue_reported,
+        acwr=acwr,
     )
