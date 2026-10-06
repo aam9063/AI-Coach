@@ -24,12 +24,22 @@ explicitly so no column can be mistaken for an engine-authoritative metric.
 
 ``raw_file_path`` stays nullable until ING-6 lands raw FIT storage; the
 column exists now so the migration and model are stable.
+
+RID-10 additions (brief §6, engine outputs): ``readiness_snapshot`` (one
+structured multi-signal readiness row per athlete+date),
+``weekly_intensity`` (one 3-zone distribution row per athlete+ISO
+week+sport) and ``session_durability`` (one EF/decoupling row per
+activity). All three are engine OUTPUT tables: idempotent upsert targets
+keyed by their unique constraints, each row stamped with
+``engine_version`` (§6) and ``computed_at``; the status/no-data
+decisions are documented on each class.
 """
 
 from datetime import date, datetime
 from typing import Any
 
 from sqlalchemy import (
+    Boolean,
     Date,
     DateTime,
     Float,
@@ -246,6 +256,193 @@ class AthleteProfileRow(Base):
     # §6: every persisted engine output carries the engine version.
     engine_version: Mapped[str] = mapped_column(String(32))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class ReadinessSnapshotRow(Base):
+    """One structured multi-signal readiness snapshot per (athlete, date)
+    (RID-10, brief §6/§7.4).
+
+    Row shape decision: **one row per athlete and day**, keyed by the
+    unique constraint ``uq_readiness_snapshot_athlete_date`` — the same
+    daily identity as the ``wellness`` input row and the ``daily_load``
+    ``combined`` row that feed it. The §7.4 structured multi-signal output
+    is persisted in full as JSONB (``signals``: one entry per signal key,
+    in the engine's stable :data:`app.engine.readiness.SIGNAL_KEYS` order,
+    each with status/direction/confidence/observed/baseline evidence) —
+    never collapsed into a composite score (§7.4 forbids one).
+
+    The warning-rule result is stored on the row as the headline columns
+    ``agreement_count`` and ``suggest_reduce_intensity`` (queryable)
+    alongside ``adverse_signal_keys`` and ``reasons`` (JSONB) and the
+    suggestion text. The context inputs (``tsb``,
+    ``tsb_very_negative_below``, ``subjective_fatigue_reported``,
+    ``acwr`` — context only, §7.2) round-trip for audit.
+
+    ``insufficient_data`` representation: a signal whose evidence was
+    insufficient persists inside ``signals`` with
+    ``status == "insufficient_data"`` and NULL observed/baseline values —
+    the absence is reported, never substituted (§7.4, ODD data note).
+
+    Every row carries ``engine_version`` (§6: every persisted engine
+    output carries the engine version) and ``computed_at``.
+    """
+
+    __tablename__ = "readiness_snapshot"
+    __table_args__ = (
+        UniqueConstraint("athlete_id", "date", name="uq_readiness_snapshot_athlete_date"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    athlete_id: Mapped[int] = mapped_column(Integer, default=1)
+    date: Mapped[date] = mapped_column(Date)
+
+    # Structured multi-signal payload (list of per-signal dicts, stable
+    # SIGNAL_KEYS order) — the §7.4 object, not a score.
+    signals: Mapped[list[dict[str, Any]]] = mapped_column(JSONB)
+
+    # Warning-rule result (RID-3): headline columns plus the evidence.
+    adverse_signal_keys: Mapped[list[str]] = mapped_column(JSONB)
+    agreement_count: Mapped[int] = mapped_column(Integer)
+    suggest_reduce_intensity: Mapped[bool] = mapped_column(Boolean)
+    suggestion: Mapped[str | None] = mapped_column(Text, default=None)
+    reasons: Mapped[list[str]] = mapped_column(JSONB)
+
+    # Context inputs of the assessment (round-tripped for audit; ACWR is
+    # context only, §7.2).
+    tsb: Mapped[float] = mapped_column(Float)
+    tsb_very_negative_below: Mapped[float] = mapped_column(Float)
+    subjective_fatigue_reported: Mapped[bool | None] = mapped_column(
+        Boolean, default=None
+    )
+    acwr: Mapped[float | None] = mapped_column(Float, default=None)
+
+    engine_version: Mapped[str] = mapped_column(String(32))
+    computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class WeeklyIntensityRow(Base):
+    """One 3-zone intensity distribution row per (athlete, ISO week, sport)
+    (RID-10, brief §6/§7.5).
+
+    Row shape decision: **one row per athlete, ISO week and sport** — the
+    identity of the engine's :class:`app.engine.intensity.WeeklySportZones`
+    output (the ``WeeklyIntensity`` wrapper holds one sport entry each, so
+    the per-sport entry is the natural persisted unit). The unique
+    constraint ``uq_weekly_intensity_athlete_year_week_sport`` anchors the
+    idempotent recompute upserts. ``week_start`` (the Monday) is stored
+    redundantly next to ``(iso_year, iso_week)`` for queryability; it is
+    derived from them (ISO 8601, Monday start).
+
+    ``no_data`` representation (§7.5, ODD decision): a sport-week without
+    a session of that sport persists as a row with ``status = "no_data"``,
+    zero seconds and ``percentages IS NULL`` — a missing week is reported
+    AS missing, never as a fabricated 0% split. The same NULL-percentages
+    convention covers a ``"data"`` week whose sessions carried no intensity
+    data (zero total seconds; nothing to divide by).
+
+    Every row carries ``engine_version`` (§6) and ``computed_at``.
+    """
+
+    __tablename__ = "weekly_intensity"
+    __table_args__ = (
+        UniqueConstraint(
+            "athlete_id",
+            "iso_year",
+            "iso_week",
+            "sport",
+            name="uq_weekly_intensity_athlete_year_week_sport",
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    athlete_id: Mapped[int] = mapped_column(Integer, default=1)
+    iso_year: Mapped[int] = mapped_column(Integer)
+    iso_week: Mapped[int] = mapped_column(Integer)
+    # The Monday of the ISO week (derived from (iso_year, iso_week)).
+    week_start: Mapped[date] = mapped_column(Date)
+    # Engine sport key ("run"/"bike"/"swim").
+    sport: Mapped[str] = mapped_column(String(32))
+    # "data" or "no_data" (engine WeekStatus).
+    status: Mapped[str] = mapped_column(String(16))
+
+    z1_seconds: Mapped[float] = mapped_column(Float)
+    z2_seconds: Mapped[float] = mapped_column(Float)
+    z3_seconds: Mapped[float] = mapped_column(Float)
+    total_seconds: Mapped[float] = mapped_column(Float)
+    # [z1_pct, z2_pct, z3_pct]; NULL when the total is zero (no_data or a
+    # session without intensity data) — never a fabricated split.
+    percentages: Mapped[list[float] | None] = mapped_column(JSONB, default=None)
+
+    engine_version: Mapped[str] = mapped_column(String(32))
+    computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class SessionDurabilityRow(Base):
+    """One aerobic-durability result per activity (RID-10, brief §6/§7.6).
+
+    Row shape decision: **one row per activity**, keyed by the unique
+    constraint ``uq_session_durability_activity`` — §6 places "EF,
+    decoupling" among the per-activity engine summary metrics, and the
+    durability output (§7.6) is inherently per session. The row references
+    ``activity.id`` (the engine consumes that row's streams) with the same
+    ``ondelete CASCADE`` convention as ``activity_stream``; a separate
+    table rather than new columns on ``activity`` keeps the ingest-owned
+    row untouched and carries the §6 ``engine_version``/``computed_at``
+    recompute stamp the activity columns would lack.
+
+    ``not_steady`` representation (§7.6, ODD decision): a session rejected
+    by the steadiness guard persists as a row with ``status =
+    "not_steady"``, NULL EF/decoupling fields and the measured intensity
+    drift plus the engine ``detail`` — the rejection is evidence, never a
+    fabricated decoupling value.
+
+    The §7.6 durability TREND (RID-9) is deliberately NOT persisted: it is
+    a pure function of the per-session ``decoupling`` values persisted
+    here (joined to ``activity`` for date/duration eligibility), so a
+    stored trend row would be a redundant copy. Recompute from this table
+    instead.
+
+    Every row carries ``engine_version`` (§6) and ``computed_at``.
+    """
+
+    __tablename__ = "session_durability"
+    __table_args__ = (
+        UniqueConstraint("activity_id", name="uq_session_durability_activity"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    activity_id: Mapped[int] = mapped_column(
+        ForeignKey("activity.id", ondelete="CASCADE"), index=True
+    )
+    # Engine durability sport key ("bike"/"run").
+    sport: Mapped[str] = mapped_column(String(16))
+    # "ok" or "not_steady" (engine SessionDecouplingStatus).
+    status: Mapped[str] = mapped_column(String(16))
+
+    # NULL when not_steady — the guard rejected the session.
+    ef_first_half: Mapped[float | None] = mapped_column(Float, default=None)
+    ef_second_half: Mapped[float | None] = mapped_column(Float, default=None)
+    decoupling: Mapped[float | None] = mapped_column(Float, default=None)
+    decoupling_pct: Mapped[float | None] = mapped_column(Float, default=None)
+    within_reference_band: Mapped[bool | None] = mapped_column(
+        Boolean, default=None
+    )
+    reference_band: Mapped[float] = mapped_column(Float)
+    intensity_first_half: Mapped[float | None] = mapped_column(
+        Float, default=None
+    )
+    intensity_second_half: Mapped[float | None] = mapped_column(
+        Float, default=None
+    )
+    intensity_drift: Mapped[float] = mapped_column(Float)
+    max_intensity_drift: Mapped[float] = mapped_column(Float)
+    n_samples: Mapped[int] = mapped_column(Integer)
+    n_first_half: Mapped[int] = mapped_column(Integer)
+    n_second_half: Mapped[int] = mapped_column(Integer)
+    detail: Mapped[str] = mapped_column(Text, default="")
+
+    engine_version: Mapped[str] = mapped_column(String(32))
+    computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
 class AthleteThresholdHistoryRow(Base):
