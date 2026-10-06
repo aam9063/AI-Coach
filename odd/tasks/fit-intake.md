@@ -12,7 +12,7 @@ Without an intake, a FIT file that is not already in Intervals.icu can never rea
 
 ## Scope (CLI first; the WhatsApp rail arrives with Feature 6)
 
-- **Upload**: `POST /athlete/{id}/activities` (multipart form-data, field `file`) through the existing Intervals.icu client. Verified from the official cookbook: the endpoint accepts `.fit`, `.gpx`, `.fit.gz`, `.gpx.gz` or a zip, returns **201 when at least one activity was created and 200 when everything was a duplicate**, and **de-duplicates by a hash of the file contents** — so re-uploading the same file is safe and must be reported as a duplicate rather than an error.
+- **Upload**: `POST /athlete/{id}/activities` (multipart form-data, field `file`) through the existing Intervals.icu client. Verified from the official cookbook: the endpoint accepts `.fit`, `.gpx`, `.fit.gz`, `.gpx.gz` or a zip, returns **201 when at least one activity was created and 200 when everything was a duplicate**, and de-duplicates by a content hash — **observed live to match byte-identical files only**, so a file for the same ride coming from another source creates a second activity — so re-uploading the same file is safe and must be reported as a duplicate rather than an error.
 - **CLI**: `python -m app.tools.upload_fit <path...>` — uploads each file, then for the ones that were newly created: archives the raw bytes locally through the ING-6 storage interface (§5.2), parses them with the engine's FIT parser, computes the session's load through the existing method selection, derives the session's intensity where a modality is usable, and prints a per-file summary (created/duplicate, load and method, zone split, anything skipped with its reason).
 - **Provenance rule (explicit)**: the file is the owner's own recording. Our code **never talks to Strava's API and never will** (§5.3); the CLI takes a local path and uploads it to Intervals.icu. Nothing in this feature reads from Strava.
 - **Analysis is per file, from local bytes**: the upload response identifies the created activity, but the analysis must not wait for a full sync round trip. The FIT bytes are already in hand, so the parser and the engine run on them directly, and the activity becomes visible to `daily_load`/intensity/durability on the next sync.
@@ -43,7 +43,18 @@ Without an intake, a FIT file that is not already in Intervals.icu can never rea
 
 ## Verification evidence
 
-To be filled when the feature is implemented.
+Independently verified by `gentle-ai-verify` (read-only) at HEAD `a08ae40` — **9/9 items PASS, no blocking defects**, dev database untouched (857 activities / 5,036 streams / 2,200 wellness days / 17,600 daily_load rows / 2,200 readiness snapshots / 939 weekly_intensity rows and `alembic current` identical before and after).
+
+- **Gates**: ruff clean, mypy strict clean (132 files), `uv run pytest` **1,108 passed, 0 skipped**, with the DB tests genuinely running against the dedicated test database.
+- **Purity**: no `app.db`/`app.ingest`/`app.core`/I/O import anywhere under `app/engine/`; the upload client and the intake CLI live outside it.
+- **Checklist**: FI-1..FI-5 each mapped to code and to passing tests.
+- **Upload contract** (mocked transport): `multipart/form-data` with the file part named `file`, the API key proven absent from the body and the query, `created=True` only for 201, and the **observed** object shape parsed in both 201 and 200 — a duplicate carries the existing activity's id — with the bare-array and top-level-id fallbacks covered.
+- **Owner additions**: `.fit.gz` uploaded as-is with the analysis decompressing in memory (magic bytes), recursive directory discovery, and `--zip-batch N` with per-batch accounting, member lists on failure and explicit archive-skip when ids cannot be attributed to members.
+- **Reporting**: every outcome carries a reason, exit codes distinguish success from failure, the archive is keyed by the returned activity id, an unusable modality prints its reason instead of a zero split, and **no test performs a real network call** (mocked transports only).
+- **Provenance**: no Strava API client exists anywhere in `app/`, and the rule is recorded in the doc; FI-5 was corroborated with read-only GETs (869 activities, the test upload absent, the duplicate-match id present) without uploading anything.
+- **Live-API corrections**: both recorded — the real response shape and the byte-identical-only dedup.
+
+Low-severity notes from the verifier, addressed: the archive stores the uploaded bytes (compressed for `.fit.gz`) under a `<activity_id>.fit` filename, which is now documented in the CLI docstring; and the Scope paragraph now agrees with the recorded dedup correction.
 
 ## Progress
 
