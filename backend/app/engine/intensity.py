@@ -88,6 +88,24 @@ zone key: nothing is silently dropped.
 
 Weekly aggregation (RID-5, section 7.5)
 ---------------------------------------
+PAUSE RULE (real-data quality finding, 2026-07): the persisted weekly
+seconds equalled the SUM OF THE STREAM SPANS, not ``moving_time`` (week 24:
+24439 s persisted vs 20910 s of moving_time; span/moving ratios 1.12-1.29
+on the four recent rides), because a paused sample (speed ~0, HR drifting
+down) was classified into the EASY zone and its interval counted — stops
+systematically inflated Z1 and overstated training time. Time in zone is
+therefore weighted by :func:`moving_weights`, which excludes
+non-moving/paused time BEFORE aggregation: a sample whose speed is
+tolerantly at or below the stopped-speed tolerance (the FIT SDK's
+documented 0.1 m/s default) contributes nothing, and — the general
+FALLBACK when no speed stream exists — a time interval at or beyond a cap
+of 5x the median positive sample interval is a pause/recording gap and
+contributes nothing. Without a time stream each valid sample still counts
+exactly one second (the per-second convention; the speed rule applies, the
+gap cap cannot). The rule is configurable and the boundary convention is
+the project's strict one — EXACTLY at a limit counts as beyond it (see
+:func:`moving_weights`).
+
 Time in zone per sport per week, aggregated from per-source-zone seconds
 via the 3-zone mapping. Documented week semantics:
 
@@ -144,6 +162,7 @@ engine never silently drops or fabricates data.
 
 import datetime as dt
 import math
+import statistics
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final, Literal
@@ -307,6 +326,191 @@ def select_intensity_modality(
         "power samples (bike_power cannot classify) and no usable HR "
         "samples (bike_hr cannot classify) — reported, never guessed"
     )
+
+
+# ---------------------------------------------------------------------------
+# Pause-aware time-in-zone weighting (RID-5; see the module docstring)
+# ---------------------------------------------------------------------------
+
+DEFAULT_PAUSE_SPEED_TOLERANCE_MPS: Final[float] = 0.1
+"""Speeds tolerantly at or below this value (m/s) are "stopped": the
+sample is NON-MOVING and contributes no time in zone. LITERATURE-ADJACENT
+published default: the Garmin FIT SDK documents a
+``stopped_speed_threshold`` of 0.1 m/s (its DeviceInfo field default,
+100 mm/s) for exactly this stop detection — small enough to keep a
+labouring climb, large enough to swallow GPS drift at a red light.
+OWNER-REVIEWABLE and configurable per call / via Settings."""
+
+DEFAULT_PAUSE_GAP_CAP_MEDIAN_MULTIPLE: Final[float] = 5.0
+"""A time interval at or beyond this MULTIPLE of the median positive
+sample interval is a pause/recording gap: the sample's zone must not
+inherit it and it contributes no time in zone (the general fallback when
+no speed stream exists — a pause then only shows up as a large gap between
+consecutive timestamps). OWNER CHOICE (no published convention): at the
+owner's ~0.3 Hz streams the median interval is ~3 s, so 5x (~15 s) admits
+every ordinary sampling jitter and dropout while excluding any real stop.
+Configurable per call / via Settings."""
+
+
+def moving_weights(
+    n: int,
+    *,
+    times: Sequence[float] | None = None,
+    speeds: Sequence[float | None] | None = None,
+    speed_tolerance_mps: float = DEFAULT_PAUSE_SPEED_TOLERANCE_MPS,
+    gap_cap_median_multiple: float = DEFAULT_PAUSE_GAP_CAP_MEDIAN_MULTIPLE,
+) -> list[float]:
+    """Per-sample time-in-zone weights (seconds) that EXCLUDE
+    non-moving/paused time (see the module docstring and the weekly
+    aggregation's pause rule).
+
+    One weight per classified sample, in sample order:
+
+    - WITHOUT a ``time`` stream each valid sample counts exactly one second
+      (the documented per-second convention); the speed rule below still
+      applies, the gap cap cannot (no timestamps to measure a gap on).
+    - WITH a ``time`` stream the interval ``[t_i, t_i+1)`` is attributed to
+      sample ``i`` (the last sample inherits the previous gap; a
+      non-positive interval contributes nothing) — the same interval rule
+      the intensity service documents.
+
+    Then the two pause rules zero a weight:
+
+    1. SPEED RULE: when ``speeds`` is given, a sample whose speed entry is
+       not ``None`` and tolerantly at or below ``speed_tolerance_mps`` is
+       NON-MOVING and contributes nothing, whatever its zone. A ``None``
+       speed entry is a GAP, not a zero speed — it is never claimed as
+       stopped (the gap cap remains the fallback). A stream that is absent,
+       empty or entirely ``None`` is not usable (the engine's
+       :func:`has_usable_samples` rule) and the speed rule does nothing.
+    2. GAP-CAP RULE (only with a ``time`` stream; the general FALLBACK when
+       no speed stream exists): the cap is ``gap_cap_median_multiple`` x
+       the MEDIAN POSITIVE sample interval (median over the strictly
+       positive deltas only, so duplicate timestamps cannot collapse the
+       cap and exclude everything). An interval at or beyond the cap is a
+       pause/recording gap — the sample's zone must not inherit it — and
+       contributes nothing. With no positive interval there is no median
+       and no cap.
+
+    BOUNDARY CONVENTION (the project's strict/tolerant rule, the same
+    precedent as the durability decoupling band — exactly at the limit
+    counts as beyond the favorable side): a speed EXACTLY at the tolerance
+    counts as stopped, and an interval EXACTLY at the cap counts as a
+    pause; both boundaries are compared tolerantly (the same
+    ``_same_boundary`` isclose rule as the zone tables) so float noise
+    cannot flip a classification.
+
+    Parameters:
+
+    - ``n``: the number of classified samples (weights are returned for
+      exactly ``n`` samples; ``n == 0`` returns an empty list).
+    - ``times``: the epoch-seconds timestamps, at least ``n`` of them
+      (``None`` = no time stream). Non-finite entries raise ``ValueError``.
+    - ``speeds``: the speed samples in m/s, at least ``n`` of them
+      (``None`` = no speed stream; ``None`` entries are gaps).
+      Non-finite entries raise ``ValueError``.
+    - ``speed_tolerance_mps``: the stopped-speed tolerance (finite,
+      non-negative; default :data:`DEFAULT_PAUSE_SPEED_TOLERANCE_MPS`).
+    - ``gap_cap_median_multiple``: the gap cap multiple (finite, positive;
+      default :data:`DEFAULT_PAUSE_GAP_CAP_MEDIAN_MULTIPLE`).
+
+    Anything else — negative ``n``, a ``times``/``speeds`` sequence shorter
+    than ``n``, non-finite entries, a non-finite/negative tolerance or a
+    non-finite/non-positive multiple — raises ``ValueError``: the rule
+    never guesses.
+    """
+    if n < 0:
+        raise ValueError(f"n must not be negative, got {n!r}")
+    if not math.isfinite(speed_tolerance_mps) or speed_tolerance_mps < 0.0:
+        raise ValueError(
+            "speed_tolerance_mps must be finite and non-negative, got "
+            f"{speed_tolerance_mps!r}"
+        )
+    if (
+        not math.isfinite(gap_cap_median_multiple)
+        or gap_cap_median_multiple <= 0.0
+    ):
+        raise ValueError(
+            "gap_cap_median_multiple must be finite and positive, got "
+            f"{gap_cap_median_multiple!r}"
+        )
+    if n == 0:
+        return []
+
+    time_values: list[float] | None = None
+    if times is not None:
+        if len(times) < n:
+            raise ValueError(
+                f"times must hold at least {n} entries for {n} samples, "
+                f"got {len(times)!r}"
+            )
+        time_values = [float(t) for t in times[:n]]
+        if any(not math.isfinite(t) for t in time_values):
+            raise ValueError(
+                f"times entries must be finite, got {times!r}"
+            )
+    speed_values: list[float | None] | None = None
+    if speeds is not None:
+        if len(speeds) < n:
+            raise ValueError(
+                f"speeds must hold at least {n} entries for {n} samples, "
+                f"got {len(speeds)!r}"
+            )
+        speed_values = [
+            None if s is None else float(s) for s in speeds[:n]
+        ]
+        if any(
+            s is not None and not math.isfinite(s) for s in speed_values
+        ):
+            raise ValueError(
+                f"speeds entries must be finite (or None gaps), got "
+                f"{speeds!r}"
+            )
+
+    # Base weights: the interval each sample represents.
+    deltas: list[float] | None = None
+    if time_values is None:
+        weights = [1.0] * n
+    else:
+        deltas = [
+            (
+                time_values[i + 1] - time_values[i]
+                if i + 1 < n
+                else time_values[i] - time_values[i - 1]
+            )
+            for i in range(n)
+        ]
+        weights = list(deltas)
+
+    # Gap-cap rule: the cap is the multiple of the median POSITIVE
+    # interval (duplicate timestamps must not collapse it); with no
+    # positive interval there is no median and no cap.
+    if deltas is not None:
+        positive = [d for d in deltas if d > 0.0]
+        if positive:
+            cap = gap_cap_median_multiple * statistics.median(positive)
+            weights = [
+                0.0 if (d > cap or _same_boundary(d, cap)) else w
+                for d, w in zip(deltas, weights, strict=True)
+            ]
+
+    # Speed rule: a known stopped speed is non-moving, whatever its zone.
+    if speed_values is not None:
+        for i, speed in enumerate(speed_values):
+            if speed is None:
+                continue
+            if speed < speed_tolerance_mps or _same_boundary(
+                speed, speed_tolerance_mps
+            ):
+                weights[i] = 0.0
+
+    # A non-positive interval never counts (the service's existing rule).
+    if deltas is not None:
+        weights = [
+            w if d > 0.0 else 0.0
+            for d, w in zip(deltas, weights, strict=True)
+        ]
+    return weights
 
 _THRESHOLD_PROVENANCE: Final[
     dict[IntensityModalityKey, tuple[ThresholdProvenance, str,

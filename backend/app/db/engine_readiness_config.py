@@ -242,7 +242,12 @@ def intensity_constants_from_settings(settings: Settings) -> dict[str, Any]:
       ``polarized_bands`` / ``pyramidal_bands`` →
       :func:`app.engine.intensity.descriptive_pattern_comparison`
       (bands OWNER-REVIEWABLE around the published point values; minimum
-      volume OWNER CHOICE).
+      volume OWNER CHOICE),
+    - ``speed_tolerance_mps`` / ``gap_cap_median_multiple`` — the
+      pause-aware time-in-zone weighting consumed by
+      :func:`app.engine.intensity.moving_weights` (speed tolerance the
+      FIT SDK's 0.1 m/s stopped-speed default; gap-cap multiple OWNER
+      CHOICE).
 
     No caller yet (Feature 6 will consume this).
     """
@@ -259,6 +264,15 @@ def intensity_constants_from_settings(settings: Settings) -> dict[str, Any]:
             settings.engine_sport_modality, field="ENGINE_SPORT_MODALITY"
         ),
         "min_pattern_week_seconds": settings.engine_min_pattern_week_seconds,
+        # Pause rule (time-in-zone weighting; see
+        # app.engine.intensity.moving_weights): consumed one pair at a
+        # time by the intensity service's weighting of the classified
+        # samples. Speed tolerance LITERATURE-ADJACENT (FIT SDK
+        # stopped_speed_threshold 0.1 m/s); gap-cap multiple OWNER CHOICE.
+        "speed_tolerance_mps": settings.engine_pause_speed_tolerance_mps,
+        "gap_cap_median_multiple": (
+            settings.engine_pause_gap_cap_median_multiple
+        ),
         "polarized_bands": parse_reference_bands(
             settings.engine_polarized_bands, field="ENGINE_POLARIZED_BANDS"
         ),

@@ -44,11 +44,14 @@ from app.engine.durability import (
 from app.engine.intensity import (
     DEFAULT_FIRST_THRESHOLD_PCTS,
     DEFAULT_MIN_PATTERN_WEEK_SECONDS,
+    DEFAULT_PAUSE_GAP_CAP_MEDIAN_MULTIPLE,
+    DEFAULT_PAUSE_SPEED_TOLERANCE_MPS,
     DEFAULT_POLARIZED_BANDS,
     DEFAULT_PYRAMIDAL_BANDS,
     DEFAULT_SECOND_THRESHOLD_PCTS,
     SPORT_MODALITY,
     descriptive_pattern_comparison,
+    moving_weights,
     three_zone_model,
 )
 from app.engine.readiness import (
@@ -225,6 +228,11 @@ class TestIntensityConstantsFromSettings:
                 descriptive_pattern_comparison,
                 "pyramidal_bands",
             ),
+            "speed_tolerance_mps": (moving_weights, "speed_tolerance_mps"),
+            "gap_cap_median_multiple": (
+                moving_weights,
+                "gap_cap_median_multiple",
+            ),
         }
         assert set(constants) == set(pinned) | {"sport_modality"}, (
             "the mapping keys and the pinned keys diverged; update both "
@@ -249,6 +257,14 @@ class TestIntensityConstantsFromSettings:
         assert constants["min_pattern_week_seconds"] == DEFAULT_MIN_PATTERN_WEEK_SECONDS
         assert constants["polarized_bands"] == DEFAULT_POLARIZED_BANDS
         assert constants["pyramidal_bands"] == DEFAULT_PYRAMIDAL_BANDS
+        assert (
+            constants["speed_tolerance_mps"]
+            == DEFAULT_PAUSE_SPEED_TOLERANCE_MPS
+        )
+        assert (
+            constants["gap_cap_median_multiple"]
+            == DEFAULT_PAUSE_GAP_CAP_MEDIAN_MULTIPLE
+        )
 
     def test_non_default_values_flow_through_the_mapping(self) -> None:
         constants = intensity_constants_from_settings(
@@ -261,6 +277,8 @@ class TestIntensityConstantsFromSettings:
                 ),
                 engine_sport_modality="run:run_hr,bike:bike_hr,swim:swim_pace",
                 engine_min_pattern_week_seconds=5400.0,
+                engine_pause_speed_tolerance_mps=0.2,
+                engine_pause_gap_cap_median_multiple=8.0,
                 engine_polarized_bands="65,85,5,20,15,35",
                 engine_pyramidal_bands="50,70,10,30,10,25",
             )
@@ -283,6 +301,8 @@ class TestIntensityConstantsFromSettings:
             "swim": "swim_pace",
         }
         assert constants["min_pattern_week_seconds"] == 5400.0
+        assert constants["speed_tolerance_mps"] == 0.2
+        assert constants["gap_cap_median_multiple"] == 8.0
         assert constants["polarized_bands"] == ((65.0, 85.0), (5.0, 20.0), (15.0, 35.0))
         assert constants["pyramidal_bands"] == ((50.0, 70.0), (10.0, 30.0), (10.0, 25.0))
 

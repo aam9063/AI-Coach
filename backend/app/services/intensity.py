@@ -38,17 +38,27 @@ calendar days ending at ``window_end``:
    guessed. The classification validates against the table the session
    was ACTUALLY classified on (``ZoneSession.modality``), so ``bike_hr``
    zone keys flow through the weekly aggregation unharmed.
-4. Weight the classified samples into source-zone SECONDS. Real
-   Intervals.icu streams are NOT necessarily 1 Hz (live-verified: the
-   owner's rides carry ~0.3 Hz streams plus an epoch-seconds ``time``
-   stream), so when a ``time`` stream exists the interval
-   ``[t_i, t_i+1)`` is attributed to sample ``i``'s zone (the last valid
-   sample inherits the previous gap; intervals whose sample is a ``None``
-   gap contribute nothing — the engine's gap rule). Without a ``time``
-   stream each valid sample counts as exactly one second (the §6
-   per-second convention). The seconds are mapped into the 3-zone model
-   with :func:`app.engine.intensity.map_to_three_zones` and the
-   caller-supplied per-modality cut points (settings ``ENGINE_*_THRESHOLD_PCTS``).
+4. Weight the classified samples into source-zone SECONDS, excluding
+   non-moving/paused time (the pause rule of
+   :func:`app.engine.intensity.moving_weights` — see the real-data
+   finding in the engine's module docstring): with a ``time`` stream the
+   interval ``[t_i, t_i+1)`` is attributed to sample ``i``'s zone (the
+   last valid sample inherits the previous gap; intervals whose sample is
+   a ``None`` gap contribute nothing — the engine's gap rule), a sample
+   whose speed is tolerantly at or below the stopped-speed tolerance
+   (settings ``ENGINE_PAUSE_SPEED_TOLERANCE_MPS``, the FIT SDK's 0.1 m/s
+   default) contributes NOTHING, and an interval at or beyond the gap cap
+   (settings ``ENGINE_PAUSE_GAP_CAP_MEDIAN_MULTIPLE``, 5x the median
+   positive sample interval — the general FALLBACK when no speed stream
+   exists, where a pause only shows up as a large timestamp gap)
+   contributes nothing. Without a ``time`` stream each valid sample counts
+   as exactly one second (the §6 per-second convention); the speed rule
+   still applies, the gap cap cannot. Boundary convention (the project's
+   strict rule): EXACTLY at a limit counts as beyond it. The seconds are
+   mapped into the 3-zone model with
+   :func:`app.engine.intensity.map_to_three_zones` and the
+   caller-supplied per-modality cut points (settings
+   ``ENGINE_*_THRESHOLD_PCTS``).
 5. Aggregate with :func:`app.engine.intensity.weekly_time_in_zone` (ISO
    weeks, Monday start) and upsert one ``weekly_intensity`` row per
    (athlete, ISO week, sport) via
@@ -77,12 +87,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.repository import upsert_weekly_intensity
 from app.engine.intensity import (
+    DEFAULT_PAUSE_GAP_CAP_MEDIAN_MULTIPLE,
+    DEFAULT_PAUSE_SPEED_TOLERANCE_MPS,
     SPORT_KEYS,
     SPORT_MODALITY,
     IntensityModalityKey,
     SportKey,
     WeeklyIntensity,
     has_usable_samples,
+    moving_weights,
     select_intensity_modality,
     three_zone_model,
     weekly_time_in_zone,
@@ -221,28 +234,46 @@ def _classify_samples(
 def _weighted_zone_seconds(
     classified: list[str | None],
     time_stream: list[Any] | None,
+    speed_stream: list[Any] | None,
+    *,
+    speed_tolerance_mps: float,
+    gap_cap_median_multiple: float,
 ) -> dict[str, float]:
     """Source-zone seconds from the classified samples (module-docstring
-    weighting rule): with a ``time`` stream the interval to the next sample
-    is attributed to the sample's zone (last sample inherits the previous
-    gap; a ``None``-gap sample contributes nothing); without one, each
-    valid sample counts as one second (per-second convention, §6)."""
+    weighting rule, step 4): the per-sample weights come from the pure
+    engine rule :func:`app.engine.intensity.moving_weights` — with a
+    ``time`` stream the interval to the next sample is attributed to the
+    sample's zone (last sample inherits the previous gap; a ``None``-gap
+    sample contributes nothing), NON-MOVING samples (speed tolerantly at
+    or below ``speed_tolerance_mps``) and pause/recording gaps (interval
+    at or beyond ``gap_cap_median_multiple`` x the median positive sample
+    interval — the fallback when no speed stream exists) contribute
+    nothing; without a ``time`` stream each valid sample counts as one
+    second (per-second convention, §6)."""
     n = len(classified)
     if n == 0:
         return {}
     times: list[float] | None = None
     if time_stream is not None and len(time_stream) >= n:
         times = [float(t) for t in time_stream[:n]]
+    speeds: list[float | None] | None = None
+    if speed_stream is not None and len(speed_stream) >= n:
+        speeds = [
+            None if s is None else float(s) for s in speed_stream[:n]
+        ]
+    weights = moving_weights(
+        n,
+        times=times,
+        speeds=speeds,
+        speed_tolerance_mps=speed_tolerance_mps,
+        gap_cap_median_multiple=gap_cap_median_multiple,
+    )
     seconds: dict[str, float] = defaultdict(float)
     for i, zone_key in enumerate(classified):
         if zone_key is None:
             continue  # the engine's gap rule: a gap contributes no time
-        if times is None:
-            seconds[zone_key] += 1.0
-            continue
-        delta = times[i + 1] - times[i] if i + 1 < n else times[i] - times[i - 1]
-        if delta > 0.0:
-            seconds[zone_key] += delta
+        if weights[i] > 0.0:
+            seconds[zone_key] += weights[i]
     return dict(seconds)
 
 
@@ -255,6 +286,8 @@ def _build_zone_session(
     ftp_watts: float | None,
     lthr_bpm: float | None,
     css_mps: float | None,
+    speed_tolerance_mps: float = DEFAULT_PAUSE_SPEED_TOLERANCE_MPS,
+    gap_cap_median_multiple: float = DEFAULT_PAUSE_GAP_CAP_MEDIAN_MULTIPLE,
 ) -> tuple[Any | None, str | None]:
     """Derive one engine :class:`ZoneSession` from a stored activity.
 
@@ -285,6 +318,7 @@ def _build_zone_session(
         )
     values = list(streams[stream_name])
     time_stream = streams.get("time")
+    speed_stream = streams.get("speed")
     classified = _classify_samples(
         modality,
         values,
@@ -292,7 +326,13 @@ def _build_zone_session(
         lthr_bpm=lthr_bpm,
         css_mps=css_mps,
     )
-    zone_seconds = _weighted_zone_seconds(classified, time_stream)
+    zone_seconds = _weighted_zone_seconds(
+        classified,
+        time_stream,
+        speed_stream,
+        speed_tolerance_mps=speed_tolerance_mps,
+        gap_cap_median_multiple=gap_cap_median_multiple,
+    )
     return (
         zone_session(
             _activity_date(activity), sport, zone_seconds, modality=modality
@@ -314,6 +354,8 @@ async def recompute_intensity(
     ftp_watts: float | None = None,
     lthr_bpm: float | None = None,
     css_mps: float | None = None,
+    speed_tolerance_mps: float = DEFAULT_PAUSE_SPEED_TOLERANCE_MPS,
+    gap_cap_median_multiple: float = DEFAULT_PAUSE_GAP_CAP_MEDIAN_MULTIPLE,
 ) -> IntensityReport:
     """Recompute and persist the weekly 3-zone intensity rows for a
     trailing window.
@@ -328,7 +370,13 @@ async def recompute_intensity(
     engine's canonical ``SPORT_MODALITY`` (validated, ``ValueError``
     otherwise). The athlete thresholds come from settings (§14) and stay
     ``None`` when unconfigured — the affected activities are then reported
-    as skipped, never classified with a guessed threshold.
+    as skipped, never classified with a guessed threshold. The pause rule
+    is configurable: ``speed_tolerance_mps`` (the stopped-speed tolerance,
+    default :data:`DEFAULT_PAUSE_SPEED_TOLERANCE_MPS`) and
+    ``gap_cap_median_multiple`` (the pause/recording-gap cap as a multiple
+    of the median positive sample interval — the general fallback when no
+    speed stream exists, default
+    :data:`DEFAULT_PAUSE_GAP_CAP_MEDIAN_MULTIPLE`).
 
     Upserts are idempotent per ``(athlete_id, iso_year, iso_week,
     sport)``; flushes without committing.
@@ -415,6 +463,8 @@ async def recompute_intensity(
             ftp_watts=ftp_watts,
             lthr_bpm=lthr_bpm,
             css_mps=css_mps,
+            speed_tolerance_mps=speed_tolerance_mps,
+            gap_cap_median_multiple=gap_cap_median_multiple,
         )
         if zone_sess is None:
             skipped.append(

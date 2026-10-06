@@ -13,6 +13,11 @@ Proves that :func:`app.services.intensity.recompute_intensity`:
 - represents an engine ``no_data`` sport-week as a row with
   ``status == "no_data"`` and NULL percentages — never a fabricated 0%
   split;
+- EXCLUDES non-moving/paused time from the zone seconds (the pause rule of
+  ``app.engine.intensity.moving_weights``): a stopped sample (speed at or
+  below the stopped-speed tolerance) and a recording gap at or beyond the
+  gap cap contribute no time, so a pause with a low HR is never counted as
+  easy-zone (Z1) time;
 - reports activities it cannot classify (unsupported sport, missing
   threshold or missing stream) as skipped with a reason, never silently.
 
@@ -20,6 +25,7 @@ Requires the compose Postgres; skips cleanly without it (see conftest).
 """
 
 import datetime as dt
+from collections.abc import Sequence
 from typing import Any, cast
 
 import pytest
@@ -511,3 +517,256 @@ class TestPowerlessBikeFallback:
         reason = report.skipped[0].reason
         assert "power" in reason
         assert "bike_hr" in reason
+
+
+class TestPauseTimeExclusion:
+    """Paused time must NOT count as time in zone (RID-5 pause rule).
+
+    Real-data finding (dev evidence, 2026-07): the persisted weekly seconds
+    equalled the SUM OF THE STREAM SPANS, not ``moving_time`` — week 24
+    held 24439 s persisted vs 20910 s of moving_time (span/moving ratios
+    1.12-1.29 over the four recent rides), because a paused sample (speed
+    ~0, HR drifting down) was classified into the EASY zone and its
+    interval counted. The service weights samples through
+    :func:`app.engine.intensity.moving_weights`:
+
+    - a sample whose speed is tolerantly at or below the stopped-speed
+      tolerance (default 0.1 m/s, the FIT SDK's documented default) is
+      NON-MOVING and contributes nothing;
+    - without a speed stream, a time interval at or beyond the gap cap
+      (default 5x the median positive sample interval) is a pause and
+      contributes nothing (the GENERAL FALLBACK).
+    """
+
+    LTHR = 200.0  # test anchor: 150 bpm = 75 % LTHR -> Friel bike Z1
+
+    async def _store_hr_speed_ride(
+        self,
+        db_session: AsyncSession,
+        *,
+        source_id: str,
+        day: dt.date,
+        times: list[float],
+        bpm: list[float],
+        speed: Sequence[float] | None,
+    ) -> ActivityRow:
+        """One ride with HR, time and (optionally) speed streams."""
+        start = dt.datetime.combine(day, dt.time(8, 0), tzinfo=dt.UTC)
+        activity = await repository.upsert_activity(
+            db_session,
+            source_id=source_id,
+            type="Ride",
+            name=source_id,
+            start_time=start,
+            start_time_local=start.isoformat(),
+            duration_s=int(times[-1] - times[0]) if len(times) > 1 else 60,
+        )
+        await repository.upsert_activity_stream(
+            db_session,
+            activity_id=activity.id,
+            stream_type="hr",
+            data=bpm,
+        )
+        await repository.upsert_activity_stream(
+            db_session,
+            activity_id=activity.id,
+            stream_type="time",
+            data=list(times),
+        )
+        if speed is not None:
+            await repository.upsert_activity_stream(
+                db_session,
+                activity_id=activity.id,
+                stream_type="speed",
+                data=list(speed),
+            )
+        return activity
+
+    async def _recompute(
+        self,
+        db_session: AsyncSession,
+        *,
+        gap_cap_median_multiple: float | None = None,
+        speed_tolerance_mps: float | None = None,
+    ) -> Any:
+        kwargs: dict[str, Any] = {}
+        if gap_cap_median_multiple is not None:
+            kwargs["gap_cap_median_multiple"] = gap_cap_median_multiple
+        if speed_tolerance_mps is not None:
+            kwargs["speed_tolerance_mps"] = speed_tolerance_mps
+        return await recompute_intensity(
+            db_session,
+            athlete_id=ATHLETE_ID,
+            window_end=dt.date(2026, 8, 16),
+            days=14,
+            engine_version=ENGINE_VERSION,
+            sport_modality={
+                "run": "run_hr",
+                "bike": "bike_power",
+                "swim": "swim_pace",
+            },
+            first_threshold_pcts=dict(DEFAULT_FIRST_THRESHOLD_PCTS),
+            second_threshold_pcts=dict(DEFAULT_SECOND_THRESHOLD_PCTS),
+            ftp_watts=FTP,
+            lthr_bpm=self.LTHR,
+            **kwargs,
+        )
+
+    async def _bike_week_row(
+        self, db_session: AsyncSession
+    ) -> WeeklyIntensityRow:
+        return cast(
+            WeeklyIntensityRow,
+            (
+                await db_session.execute(
+                    _fresh(
+                        select(WeeklyIntensityRow).where(
+                            WeeklyIntensityRow.sport == "bike",
+                            WeeklyIntensityRow.week_start == WEEK1_MONDAY,
+                        )
+                    )
+                )
+            ).scalar_one(),
+        )
+
+    async def test_paused_low_hr_time_is_not_easy_zone(
+        self, db_session: AsyncSession
+    ) -> None:
+        """60 s of riding then a 60 s pause with the HR dropping: the pause
+        contributes NO easy-zone time (60 s counted, not 119 s)."""
+        seconds = 120
+        bpm = [150.0] * seconds
+        bpm[60:] = [140.0] * 60  # HR drops during the pause — still Z1
+        speed = [5.0] * 60 + [0.0] * 60
+        await self._store_hr_speed_ride(
+            db_session,
+            source_id="paused-ride",
+            day=WEEK1_MONDAY,
+            times=[float(i) for i in range(seconds)],
+            bpm=bpm,
+            speed=speed,
+        )
+        await db_session.commit()
+
+        report = await self._recompute(db_session)
+        await db_session.commit()
+
+        assert report.sessions_derived == 1
+        assert report.skipped == ()
+        row = await self._bike_week_row(db_session)
+        assert row.status == "data"
+        # Without the pause rule this is the full stream span (119 s of
+        # intervals); with it only the moving time counts.
+        assert row.total_seconds == pytest.approx(60.0)
+        assert row.z1_seconds == pytest.approx(60.0)
+        assert row.z2_seconds == pytest.approx(0.0)
+        assert row.z3_seconds == pytest.approx(0.0)
+        assert row.percentages == pytest.approx([100.0, 0.0, 0.0])
+
+    async def test_no_pause_session_totals_are_unchanged(
+        self, db_session: AsyncSession
+    ) -> None:
+        """A session that never stops classifies exactly as before the
+        pause rule: every interval counts (60 s ride -> 60 s in zone)."""
+        seconds = 60
+        await self._store_hr_speed_ride(
+            db_session,
+            source_id="steady-ride",
+            day=WEEK1_MONDAY,
+            times=[float(i) for i in range(seconds)],
+            bpm=[150.0] * seconds,
+            speed=[5.0] * seconds,
+        )
+        await db_session.commit()
+
+        report = await self._recompute(db_session)
+        await db_session.commit()
+
+        assert report.sessions_derived == 1
+        row = await self._bike_week_row(db_session)
+        assert row.total_seconds == pytest.approx(60.0)
+        assert row.z1_seconds == pytest.approx(60.0)
+        assert row.percentages == pytest.approx([100.0, 0.0, 0.0])
+
+    async def test_no_speed_stream_long_gap_excluded_via_cap(
+        self, db_session: AsyncSession
+    ) -> None:
+        """No speed stream (the gap cap is the general fallback): a 91 s
+        recording gap between the timestamps is a pause and contributes
+        nothing (49 s counted, not the 140 s stream span)."""
+        times = [float(i) for i in range(30)] + [
+            120.0 + float(i) for i in range(20)
+        ]
+        await self._store_hr_speed_ride(
+            db_session,
+            source_id="gap-ride",
+            day=WEEK1_MONDAY,
+            times=times,
+            bpm=[150.0] * len(times),
+            speed=None,
+        )
+        await db_session.commit()
+
+        report = await self._recompute(db_session)
+        await db_session.commit()
+
+        assert report.sessions_derived == 1
+        row = await self._bike_week_row(db_session)
+        assert row.total_seconds == pytest.approx(49.0)
+        assert row.z1_seconds == pytest.approx(49.0)
+        assert row.percentages == pytest.approx([100.0, 0.0, 0.0])
+
+    async def test_gap_cap_is_configurable(
+        self, db_session: AsyncSession
+    ) -> None:
+        """A much larger cap multiple treats the same 91 s gap as regular
+        sampling: the interval counts again (140 s, the pre-rule span)."""
+        times = [float(i) for i in range(30)] + [
+            120.0 + float(i) for i in range(20)
+        ]
+        await self._store_hr_speed_ride(
+            db_session,
+            source_id="gap-ride-bigcap",
+            day=WEEK1_MONDAY,
+            times=times,
+            bpm=[150.0] * len(times),
+            speed=None,
+        )
+        await db_session.commit()
+
+        report = await self._recompute(
+            db_session, gap_cap_median_multiple=200.0
+        )
+        await db_session.commit()
+
+        assert report.sessions_derived == 1
+        row = await self._bike_week_row(db_session)
+        assert row.total_seconds == pytest.approx(140.0)
+
+    async def test_speed_tolerance_is_configurable(
+        self, db_session: AsyncSession
+    ) -> None:
+        """A custom stopped-speed tolerance flows through: at tolerance
+        0.0 a 0.1 m/s GPS-noise sample is still moving; at the default
+        0.1 m/s it counts as stopped."""
+        seconds = 10
+        times = [float(i) for i in range(seconds)]
+        # 4 moving seconds, then a 4 s GPS-noise "pause" at 0.1 m/s, then
+        # moving again.
+        speed = [5.0] * 4 + [0.1] * 4 + [5.0] * 2
+        await self._store_hr_speed_ride(
+            db_session,
+            source_id="tolerance-ride",
+            day=WEEK1_MONDAY,
+            times=times,
+            bpm=[150.0] * seconds,
+            speed=speed,
+        )
+        await db_session.commit()
+
+        await self._recompute(db_session)
+        await db_session.commit()
+        row = await self._bike_week_row(db_session)
+        # 0.1 m/s at the default tolerance (0.1, boundary counts as
+        # stopped): the 4 noise seconds contribute nothing (6 s of 10).
+        assert row.total_seconds == pytest.approx(6.0)

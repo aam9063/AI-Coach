@@ -304,6 +304,24 @@ class Settings(BaseSettings):
     # low weekly volume the percentages reflect session choice more than
     # distribution.
     engine_min_pattern_week_seconds: float = 7200.0
+    # Time-in-zone pause exclusion (§7.5): a paused sample (speed ~0, HR
+    # drifting down) must NOT count as easy-zone (Z1) time — real-data
+    # finding: the persisted weekly seconds equalled the sum of the stream
+    # spans, not moving_time (week 24: 24439 s vs 20910 s), because stops
+    # were classified into the easy zone. A sample whose speed is
+    # tolerantly at or below the stopped-speed tolerance is non-moving and
+    # contributes nothing; without a speed stream, a time interval at or
+    # beyond the gap cap (a multiple of the median positive sample
+    # interval) is a pause/recording gap and contributes nothing (the
+    # general fallback). Speed tolerance LITERATURE-ADJACENT published
+    # default: the Garmin FIT SDK's documented stopped_speed_threshold of
+    # 0.1 m/s. Gap-cap multiple OWNER CHOICE (no published convention): 5x
+    # the owner's ~3 s median interval (~15 s) admits sampling jitter and
+    # excludes real stops. Boundary convention (the project's strict
+    # rule): exactly at a limit counts as beyond it. Configurable; see
+    # app.engine.intensity.moving_weights.
+    engine_pause_speed_tolerance_mps: float = 0.1
+    engine_pause_gap_cap_median_multiple: float = 5.0
     # Aerobic decoupling reference band (§7.6): Pa:HR strictly below 5% on
     # long steady sessions suggests good aerobic durability. LITERATURE
     # (Friel; the boundary is strict — exactly 5% counts as beyond).

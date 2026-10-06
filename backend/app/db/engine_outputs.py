@@ -26,10 +26,13 @@ Inputs and where they come from:
   session by stream availability (the load engine's power-first
   preference): a POWER-LESS ride with HR classifies on the ``bike_hr``
   Friel HR table, so the owner's rides produce weekly intensity rows
-  under the bike sport. A session with no usable modality is reported as
-  skipped (never classified with a guessed threshold), as is a session
-  whose selected modality's threshold (FTP / LTHR / CSS) is not
-  configured.
+  under the bike sport. Time in zone EXCLUDES non-moving/paused time
+  (the pause rule of ``app.engine.intensity.moving_weights``, configured
+  by ``ENGINE_PAUSE_SPEED_TOLERANCE_MPS`` and
+  ``ENGINE_PAUSE_GAP_CAP_MEDIAN_MULTIPLE``). A session with no usable
+  modality is reported as skipped (never classified with a guessed
+  threshold), as is a session whose selected modality's threshold (FTP /
+  LTHR / CSS) is not configured.
 - durability: bike (NP) / run (NGS) activities with the intensity and HR
   streams.
 
@@ -223,6 +226,12 @@ def main(argv: Sequence[str] | None = None) -> int:
                     ],
                     second_threshold_pcts=intensity_constants[
                         "second_threshold_pcts"
+                    ],
+                    speed_tolerance_mps=intensity_constants[
+                        "speed_tolerance_mps"
+                    ],
+                    gap_cap_median_multiple=intensity_constants[
+                        "gap_cap_median_multiple"
                     ],
                     ftp_watts=settings.athlete_ftp_w,
                     lthr_bpm=settings.athlete_lthr_bpm,
