@@ -41,15 +41,15 @@ Readiness must be a structured, evidence-based view of the athlete's own baselin
 
 ## Checklist
 
-- [ ] `RID-1`: RED: unit tests for HRV ln(rMSSD) 7-day rolling mean vs 60-day baseline flagging outside ± 0.5 SD, on synthetic series with a known injected shift (§7.4).
-- [ ] `RID-2`: GREEN: implement readiness signals — HRV baseline logic, resting HR vs 30-day baseline, sleep vs personal baseline — each returning direction and confidence (§7.4); tests green.
-- [ ] `RID-3`: RED+GREEN: multi-signal warning rule — fires only when two or more signals agree; explicitly tested negative cases: single-signal deviations do NOT warn (§7.4, §12.5 acceptance).
-- [ ] `RID-4`: RED+GREEN: structured readiness output object (each signal, direction, confidence; no composite score) with typed Pydantic-ready shape (§7.4).
-- [ ] `RID-5`: RED+GREEN: time-in-zone aggregation per sport per week from stored zone tables (Feature 4) (§7.5).
-- [ ] `RID-6`: RED+GREEN: 3-zone model mapping from 5/7-zone tables (Z1 below first threshold, Z2 between, Z3 above second) with the mapping documented in code (§7.5).
-- [ ] `RID-7`: RED+GREEN: comparison output vs polarized (~80/20) and pyramidal reference distributions, descriptive only (Seiler 2010; Stöggl & Sperlich 2014) (§7.5).
-- [ ] `RID-8`: RED+GREEN: Efficiency Factor (bike NP / avg HR; run NGS / avg HR) and aerobic decoupling (Pa:HR) tests including a hand-calculated decoupling example (§7.6, §12.5 acceptance).
-- [ ] `RID-9`: RED+GREEN: durability trend computation on long sessions (§7.6, Maunder et al. 2021) with insufficient-data handling for short activities.
+- [x] `RID-1`: RED: unit tests for HRV ln(rMSSD) 7-day rolling mean vs 60-day baseline flagging outside ± 0.5 SD, on synthetic series with a known injected shift (§7.4).
+- [x] `RID-2`: GREEN: implement readiness signals — HRV baseline logic, resting HR vs 30-day baseline, sleep vs personal baseline — each returning direction and confidence (§7.4); tests green.
+- [x] `RID-3`: RED+GREEN: multi-signal warning rule — fires only when two or more signals agree; explicitly tested negative cases: single-signal deviations do NOT warn (§7.4, §12.5 acceptance).
+- [x] `RID-4`: RED+GREEN: structured readiness output object (each signal, direction, confidence; no composite score) with typed Pydantic-ready shape (§7.4).
+- [x] `RID-5`: RED+GREEN: time-in-zone aggregation per sport per week from stored zone tables (Feature 4) (§7.5).
+- [x] `RID-6`: RED+GREEN: 3-zone model mapping from 5/7-zone tables (Z1 below first threshold, Z2 between, Z3 above second) with the mapping documented in code (§7.5).
+- [x] `RID-7`: RED+GREEN: comparison output vs polarized (~80/20) and pyramidal reference distributions, descriptive only (Seiler 2010; Stöggl & Sperlich 2014) (§7.5).
+- [x] `RID-8`: RED+GREEN: Efficiency Factor (bike NP / avg HR; run NGS / avg HR) and aerobic decoupling (Pa:HR) tests including a hand-calculated decoupling example (§7.6, §12.5 acceptance).
+- [x] `RID-9`: RED+GREEN: durability trend computation on long sessions (§7.6, Maunder et al. 2021) with insufficient-data handling for short activities.
 - [ ] `RID-10`: Wire readiness/intensity/durability outputs into persistence with `engine_version` (§6) and document configurable windows/thresholds in settings with source comments (§14).
 
 ## Acceptance criteria
