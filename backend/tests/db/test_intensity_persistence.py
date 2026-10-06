@@ -304,3 +304,210 @@ class TestIntensitySkippedContract:
         assert report.sessions_derived == 0
         assert len(report.skipped) == 1
         assert "power" in report.skipped[0].reason
+
+
+class TestPowerlessBikeFallback:
+    """The owner has NO power meter: their rides carry ``hr``/``speed``/
+    ``distance``/``altitude``/``time`` streams only. The service must
+    select the bike_hr modality for such rides (the load engine's
+    power-first preference) instead of skipping every ride."""
+
+    LTHR = 200.0  # test anchor: 150 bpm = 75 % LTHR (Z1); 210 = 105 % (Z5a)
+
+    async def _store_hr_ride(
+        self,
+        db_session: AsyncSession,
+        *,
+        source_id: str,
+        day: dt.date,
+        bpm: float,
+        seconds: int = 60,
+        with_power: bool = False,
+        power_all_none: bool = False,
+    ) -> ActivityRow:
+        """One 60 s ride with an HR stream (and optionally a power stream
+        that is real or entirely ``None`` gaps)."""
+        start = dt.datetime.combine(day, dt.time(8, 0), tzinfo=dt.UTC)
+        activity = await repository.upsert_activity(
+            db_session,
+            source_id=source_id,
+            type="Ride",
+            name=source_id,
+            start_time=start,
+            start_time_local=start.isoformat(),
+            duration_s=seconds,
+        )
+        await repository.upsert_activity_stream(
+            db_session,
+            activity_id=activity.id,
+            stream_type="hr",
+            data=cast(list[float], [bpm] * seconds),
+        )
+        await repository.upsert_activity_stream(
+            db_session,
+            activity_id=activity.id,
+            stream_type="time",
+            data=cast(list[float], [float(i) for i in range(seconds)]),
+        )
+        if with_power or power_all_none:
+            payload: list[float | None] = (
+                [None] * seconds if power_all_none else [100.0] * seconds
+            )
+            await repository.upsert_activity_stream(
+                db_session,
+                activity_id=activity.id,
+                stream_type="power",
+                data=cast(list[float], payload),
+            )
+        return activity
+
+    async def _recompute(
+        self, db_session: AsyncSession
+    ) -> Any:
+        return await recompute_intensity(
+            db_session,
+            athlete_id=ATHLETE_ID,
+            window_end=dt.date(2026, 8, 16),
+            days=14,
+            engine_version=ENGINE_VERSION,
+            sport_modality={
+                "run": "run_hr",
+                "bike": "bike_power",
+                "swim": "swim_pace",
+            },
+            first_threshold_pcts=dict(DEFAULT_FIRST_THRESHOLD_PCTS),
+            second_threshold_pcts=dict(DEFAULT_SECOND_THRESHOLD_PCTS),
+            ftp_watts=FTP,
+            lthr_bpm=self.LTHR,
+        )
+
+    async def test_powerless_ride_with_hr_produces_bike_rows(
+        self, db_session: AsyncSession
+    ) -> None:
+        """A ride with only HR + time streams classifies on the bike_hr
+        table and lands in the bike sport's weekly rows (never skipped)."""
+        await self._store_hr_ride(
+            db_session,
+            source_id="hr-ride",
+            day=WEEK1_MONDAY,
+            bpm=150.0,  # 75 % LTHR -> Friel bike Z1 -> 3-zone Z1
+        )
+        await db_session.commit()
+
+        report = await self._recompute(db_session)
+        await db_session.commit()
+
+        assert report.sessions_derived == 1
+        assert report.skipped == ()
+        bike_w1 = (
+            (
+                await db_session.execute(
+                    _fresh(
+                        select(WeeklyIntensityRow).where(
+                            WeeklyIntensityRow.sport == "bike",
+                            WeeklyIntensityRow.week_start == WEEK1_MONDAY,
+                        )
+                    )
+                )
+            ).scalar_one()
+        )
+        assert bike_w1.status == "data"
+        assert bike_w1.total_seconds == pytest.approx(60.0)
+        assert bike_w1.percentages == pytest.approx([100.0, 0.0, 0.0])
+
+    async def test_all_none_power_stream_falls_back_to_hr(
+        self, db_session: AsyncSession
+    ) -> None:
+        """The "usable" boundary: a power stream that EXISTS but is
+        entirely ``None`` gaps is NOT usable — the ride still classifies
+        on bike_hr."""
+        await self._store_hr_ride(
+            db_session,
+            source_id="gap-power-ride",
+            day=WEEK1_MONDAY,
+            bpm=150.0,
+            power_all_none=True,
+        )
+        await db_session.commit()
+
+        report = await self._recompute(db_session)
+        await db_session.commit()
+
+        assert report.sessions_derived == 1
+        assert report.skipped == ()
+        bike_w1 = (
+            (
+                await db_session.execute(
+                    _fresh(
+                        select(WeeklyIntensityRow).where(
+                            WeeklyIntensityRow.sport == "bike",
+                            WeeklyIntensityRow.week_start == WEEK1_MONDAY,
+                        )
+                    )
+                )
+            ).scalar_one()
+        )
+        assert bike_w1.status == "data"
+        assert bike_w1.percentages == pytest.approx([100.0, 0.0, 0.0])
+
+    async def test_powered_ride_still_uses_bike_power(
+        self, db_session: AsyncSession
+    ) -> None:
+        """With usable power the canonical bike_power classification is
+        unchanged (power wins over HR)."""
+        await self._store_hr_ride(
+            db_session,
+            source_id="power-ride",
+            day=WEEK1_MONDAY,
+            bpm=150.0,
+            with_power=True,
+        )
+        await db_session.commit()
+
+        report = await self._recompute(db_session)
+        await db_session.commit()
+
+        assert report.sessions_derived == 1
+        assert report.skipped == ()
+        bike_w1 = (
+            (
+                await db_session.execute(
+                    _fresh(
+                        select(WeeklyIntensityRow).where(
+                            WeeklyIntensityRow.sport == "bike",
+                            WeeklyIntensityRow.week_start == WEEK1_MONDAY,
+                        )
+                    )
+                )
+            ).scalar_one()
+        )
+        assert bike_w1.status == "data"
+        # 100 W at FTP 200 = 50 % FTP -> Coggan Z1 -> 3-zone Z1 (the
+        # bike_power table, not the HR one).
+        assert bike_w1.percentages == pytest.approx([100.0, 0.0, 0.0])
+
+    async def test_ride_without_power_or_hr_is_skipped_with_reason(
+        self, db_session: AsyncSession
+    ) -> None:
+        """No usable modality at all is still an explicit, named skip —
+        never a silent drop and never an empty fabricated session."""
+        start = dt.datetime.combine(WEEK1_MONDAY, dt.time(8, 0), tzinfo=dt.UTC)
+        await repository.upsert_activity(
+            db_session,
+            source_id="bare-ride",
+            type="Ride",
+            name="bare-ride",
+            start_time=start,
+            start_time_local=start.isoformat(),
+            duration_s=3600,
+        )
+        await db_session.commit()
+
+        report = await self._recompute(db_session)
+        await db_session.commit()
+
+        assert report.sessions_derived == 0
+        assert len(report.skipped) == 1
+        reason = report.skipped[0].reason
+        assert "power" in reason
+        assert "bike_hr" in reason

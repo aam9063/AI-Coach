@@ -68,8 +68,17 @@ Provenance (LITERATURE vs OWNER CHOICE, per "Configurable constants")
   :data:`app.engine.zones.DEFAULT_SWIM_ZONE_BOUNDARY_PCTS`).
 - Which source zone belongs to which sport (bike rides -> Coggan power,
   runs -> Friel run HR, swims -> CSS pace) is a documented OWNER CHOICE
-  (:data:`SPORT_MODALITY`); an engine-internal extension point covers
-  future HR-based bike sessions.
+  (:data:`SPORT_MODALITY`, the DEFAULT mapping); at the session level the
+  choice is refined by :func:`select_intensity_modality`, which mirrors
+  the load engine's fixed method-selection preference (power first, then
+  heart rate — ``app.engine.load.select_load_method``): a bike session
+  with usable power samples classifies on the Coggan power table, a
+  power-less bike session with usable HR samples on the Friel bike HR
+  table (``bike_hr``, the same LT1 90% / LT2 100% LTHR cut points and
+  provenance tags as documented below), and a bike session with neither
+  raises an explicit ``ValueError`` (never silently dropped). Run and
+  swim are unchanged: their modalities do not depend on stream
+  availability.
 
 Overriding a threshold recomputes the mapping against the source table's
 percentage bounds. A threshold that does not sit ON a source-zone boundary
@@ -197,9 +206,14 @@ SPORT_MODALITY: Final[dict[SportKey, IntensityModalityKey]] = {
 """Default source table per sport. OWNER CHOICE (documented): bike rides
 use the Coggan power table, runs the Friel run HR table, swims the CSS pace
 table — the primary intensity modality of each sport in the brief
-(sections 7.3/7.5). EXTENSIBILITY: a future HR-based bike session needs one
-entry here (e.g. a per-session modality override at the caller layer), not
-a change to the mapping logic."""
+(sections 7.3/7.5). REFINEMENT: :func:`select_intensity_modality` refines
+this DEFAULT mapping per session by stream availability — a bike session
+without usable power samples but with usable HR samples classifies on
+``bike_hr`` (the same preference order as the load engine's method
+selection, power first then heart rate). Run and swim entries are
+unconditional. Every session's table is carried explicitly on
+:class:`ZoneSession.modality`, so the weekly aggregation validates zone
+seconds against the table the session was actually classified on."""
 
 DEFAULT_FIRST_THRESHOLD_PCTS: Final[dict[IntensityModalityKey, float]] = {
     "bike_power": 76.0,
@@ -226,6 +240,73 @@ module docstring). Configurable per call via
 
 ThresholdProvenance = Literal["literature", "owner_choice"]
 """Provenance tag of a threshold cut point (reviewed by the owner)."""
+
+
+def has_usable_samples(samples: Sequence[float | None] | None) -> bool:
+    """Whether a stream holds at least one usable (non-``None``) sample.
+
+    The SAME usable-sample rule the load engine applies in its method
+    selection (``app.engine.load.select_load_method``: a stream that is
+    "absent, empty or all missing" cannot back a method): a stream that is
+    ``None`` (absent), empty, or ENTIRELY ``None`` (every entry a gap) is
+    NOT usable. A ``0.0`` sample is a value, not a gap. This is the
+    usability boundary :func:`select_intensity_modality` consumes — a
+    stream that exists but carries no valid sample must not select the
+    modality that would classify it.
+    """
+    return samples is not None and any(s is not None for s in samples)
+
+
+def select_intensity_modality(
+    sport: SportKey,
+    *,
+    has_power_samples: bool,
+    has_hr_samples: bool,
+) -> IntensityModalityKey:
+    """The intensity modality of one session, refined from its streams.
+
+    ``SPORT_MODALITY`` is the documented DEFAULT mapping (run -> run_hr,
+    bike -> bike_power, swim -> swim_pace); this selector refines the bike
+    entry by stream availability, implementing the SAME preference order
+    the load engine fixes for method selection
+    (``app.engine.load.select_load_method``): power first, then heart
+    rate.
+
+    - ``bike``: ``bike_power`` when usable power samples exist (the
+      caller's usability check — see :func:`has_usable_samples`), else
+      ``bike_hr`` when usable HR samples exist, else ``ValueError`` — the
+      explicit "no usable modality" outcome, naming both candidate
+      modalities: the engine never silently drops a session, the caller
+      reports the reason.
+    - ``run`` / ``swim``: unchanged, ``run_hr`` / ``swim_pace`` regardless
+      of the flags (their source tables do not depend on stream
+      availability).
+
+    An unknown ``sport`` raises ``ValueError`` (the stable sport namespace
+    is never silently widened). The LT1/LT2 provenance tags of the
+    selected modality are exactly the ones documented in the module
+    docstring and :data:`_THRESHOLD_PROVENANCE` — selection changes which
+    table classifies a session, never a threshold's provenance.
+    """
+    if sport not in SPORT_KEYS:
+        raise ValueError(
+            f"unknown sport {sport!r}; expected one of {SPORT_KEYS}"
+        )
+    if sport == "run":
+        return "run_hr"
+    if sport == "swim":
+        return "swim_pace"
+    # bike: power first (the load engine's order: power -> HR), then the
+    # documented HR fallback; otherwise an explicit, named refusal.
+    if has_power_samples:
+        return "bike_power"
+    if has_hr_samples:
+        return "bike_hr"
+    raise ValueError(
+        f"no usable intensity modality for sport {sport!r}: no usable "
+        "power samples (bike_power cannot classify) and no usable HR "
+        "samples (bike_hr cannot classify) — reported, never guessed"
+    )
 
 _THRESHOLD_PROVENANCE: Final[
     dict[IntensityModalityKey, tuple[ThresholdProvenance, str,
@@ -556,10 +637,14 @@ class ZoneSession:
     """One training session's time in the source zones (RID-5 input).
 
     Construct via :func:`zone_session`, which validates the sport, the
-    zone keys against the sport's source table and the seconds (finite,
+    zone keys against the session's source table and the seconds (finite,
     non-negative). ``zone_seconds`` is the validated ``((key, seconds),
     ...)`` pairs in the source table's canonical order; a session without
-    intensity data is an EMPTY mapping (documented, allowed). Frozen and
+    intensity data is an EMPTY mapping (documented, allowed).
+    ``modality`` is the RESOLVED source table the session was classified
+    on (``None`` = the sport's default :data:`SPORT_MODALITY` entry;
+    :func:`zone_session` resolves the refined choice of
+    :func:`select_intensity_modality` into the concrete key). Frozen and
     slotted.
     """
 
@@ -567,6 +652,7 @@ class ZoneSession:
     sport: SportKey
     zone_seconds: tuple[tuple[str, float], ...]
     total_seconds: float
+    modality: IntensityModalityKey | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -622,17 +708,22 @@ def iso_week_start(iso_year: int, iso_week: int) -> dt.date:
 
 
 def _validated_zone_seconds(
-    sport: SportKey, zone_seconds: Mapping[str, float]
+    sport: SportKey,
+    zone_seconds: Mapping[str, float],
+    modality: IntensityModalityKey | None = None,
 ) -> tuple[tuple[str, float], ...]:
-    """Validate zone seconds against the sport's source table (RID-5).
+    """Validate zone seconds against the session's source table (RID-5).
 
-    Unknown sport, unknown zone key, non-finite or negative seconds raise
-    ``ValueError``; the validated pairs are returned in the source table's
-    canonical order so aggregation is order-independent.
+    ``modality`` selects the table (``None`` = the sport's default
+    :data:`SPORT_MODALITY` entry — the refined per-session choice of
+    :func:`select_intensity_modality` is passed explicitly). Unknown
+    sport, unknown modality, unknown zone key, non-finite or negative
+    seconds raise ``ValueError``; the validated pairs are returned in the
+    source table's canonical order so aggregation is order-independent.
     """
     if sport not in SPORT_KEYS:
         raise ValueError(f"unknown sport {sport!r}; expected one of {SPORT_KEYS}")
-    model = three_zone_model(SPORT_MODALITY[sport])
+    model = three_zone_model(modality or SPORT_MODALITY[sport])
     valid = set(model.source_zone_keys)
     pairs: list[tuple[str, float]] = []
     for key, seconds in zone_seconds.items():
@@ -659,21 +750,30 @@ def zone_session(
     session_date: dt.date,
     sport: SportKey,
     zone_seconds: Mapping[str, float],
+    modality: IntensityModalityKey | None = None,
 ) -> ZoneSession:
     """Build a validated :class:`ZoneSession` (RID-5 input).
 
     ``sport`` must be one of :data:`SPORT_KEYS`, every zone key must belong
-    to the sport's source table and every seconds value must be finite and
-    non-negative — otherwise ``ValueError`` (unknown keys are never
-    silently dropped). An empty ``zone_seconds`` is allowed (a session
-    without intensity data contributes zero seconds).
+    to the session's source table and every seconds value must be finite
+    and non-negative — otherwise ``ValueError`` (unknown keys are never
+    silently dropped). ``modality`` selects the source table: ``None``
+    (default) uses the sport's default :data:`SPORT_MODALITY` entry, an
+    explicit key (e.g. the ``bike_hr`` refinement of
+    :func:`select_intensity_modality` for a power-less ride) validates the
+    zone keys against THAT table. An empty ``zone_seconds`` is allowed (a
+    session without intensity data contributes zero seconds).
     """
-    pairs = _validated_zone_seconds(sport, zone_seconds)
+    if sport not in SPORT_KEYS:
+        raise ValueError(f"unknown sport {sport!r}; expected one of {SPORT_KEYS}")
+    resolved_modality: Final = modality or SPORT_MODALITY[sport]
+    pairs = _validated_zone_seconds(sport, zone_seconds, resolved_modality)
     return ZoneSession(
         session_date=session_date,
         sport=sport,
         zone_seconds=pairs,
         total_seconds=math.fsum(seconds for _, seconds in pairs),
+        modality=resolved_modality,
     )
 
 
@@ -695,10 +795,15 @@ def weekly_time_in_zone(
     ``percentages is None`` — never a fabricated 0% split.
 
     ``sports`` defaults to all of :data:`SPORT_KEYS` in canonical order; an
-    unknown sport raises ``ValueError``. An empty ``sessions`` sequence,
-    an unknown sport in a session, an unknown zone key or non-finite /
-    negative seconds raise ``ValueError`` (defensive re-validation: the
-    engine never silently drops data).
+    unknown sport raises ``ValueError``. Each session aggregates against
+    its OWN source table (``session.modality``, resolved to the sport's
+    :data:`SPORT_MODALITY` entry when unset — the per-session refinement
+    of :func:`select_intensity_modality`, e.g. a power-less bike ride on
+    the ``bike_hr`` table), so sessions of one sport may mix modalities in
+    one week without cross-table key confusion. An empty ``sessions``
+    sequence, an unknown sport in a session, an unknown zone key or
+    non-finite / negative seconds raise ``ValueError`` (defensive
+    re-validation: the engine never silently drops data).
     """
     requested = tuple(SPORT_KEYS) if sports is None else tuple(sports)
     for sport in requested:
@@ -708,18 +813,25 @@ def weekly_time_in_zone(
             )
     if not sessions:
         raise ValueError("no sessions provided; nothing to aggregate")
-    models = {
-        sport: three_zone_model(SPORT_MODALITY[sport]) for sport in SPORT_KEYS
-    }
+    models: dict[IntensityModalityKey, ThreeZoneModel] = {}
     grouped: Final[dict[tuple[int, int], dict[SportKey, list[ZoneSession]]]] = {}
     for session in sessions:
         # Defensive re-validation: the engine never trusts its inputs.
-        _validated_zone_seconds(session.sport, dict(session.zone_seconds))
+        # The session's OWN modality (the resolved refinement of
+        # :func:`select_intensity_modality`, defaulting to the sport's
+        # :data:`SPORT_MODALITY` entry) picks the table its zone keys are
+        # validated against — a bike_hr session is checked against the
+        # Friel bike HR table, never the default power table.
+        session_modality = session.modality or SPORT_MODALITY[session.sport]
+        _validated_zone_seconds(
+            session.sport, dict(session.zone_seconds), session_modality
+        )
         if session.sport not in SPORT_KEYS:
             raise ValueError(
                 f"unknown sport {session.sport!r}; expected one of "
                 f"{SPORT_KEYS}"
             )
+        models.setdefault(session_modality, three_zone_model(session_modality))
         grouped.setdefault(iso_week_of(session.session_date), {}) \
                .setdefault(session.sport, []).append(session)
 
@@ -738,8 +850,11 @@ def weekly_time_in_zone(
             z2s: list[float] = []
             z3s: list[float] = []
             for session in sport_sessions:
+                session_modality = (
+                    session.modality or SPORT_MODALITY[session.sport]
+                )
                 mapped = map_to_three_zones(
-                    models[sport], dict(session.zone_seconds)
+                    models[session_modality], dict(session.zone_seconds)
                 )
                 z1s.append(mapped.z1_seconds)
                 z2s.append(mapped.z2_seconds)

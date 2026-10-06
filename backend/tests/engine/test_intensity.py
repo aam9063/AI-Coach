@@ -57,8 +57,10 @@ from app.engine.intensity import (
     WeeklyIntensity,
     WeeklySportZones,
     descriptive_pattern_comparison,
+    has_usable_samples,
     iso_week_start,
     map_to_three_zones,
+    select_intensity_modality,
     three_zone_model,
     weekly_time_in_zone,
     zone_session,
@@ -612,3 +614,139 @@ class TestModuleConventions:
         }
         model: ThreeZoneModel = three_zone_model("swim_pace")
         assert model.source_zone_keys == ("Z1", "Z2", "Z3", "Z4", "Z5")
+
+
+# ---------------------------------------------------------------------------
+# Modality selection (power-less bike fallback; mirrors the load engine's
+# power-first preference, app.engine.load.select_load_method)
+# ---------------------------------------------------------------------------
+
+
+class TestIntensityModalitySelection:
+    def test_bike_prefers_power_when_usable_power_samples_exist(self) -> None:
+        """Power wins over HR on the bike: the same preference order the
+        load engine's method selection fixes (power -> HR)."""
+        assert (
+            select_intensity_modality(
+                "bike", has_power_samples=True, has_hr_samples=True
+            )
+            == "bike_power"
+        )
+        assert (
+            select_intensity_modality(
+                "bike", has_power_samples=True, has_hr_samples=False
+            )
+            == "bike_power"
+        )
+
+    def test_bike_falls_back_to_bike_hr_without_power(self) -> None:
+        """A power-less ride with heart rate classifies on the Friel bike
+        HR table (bike_hr: LT1 90% LTHR, LT2 100% LTHR)."""
+        assert (
+            select_intensity_modality(
+                "bike", has_power_samples=False, has_hr_samples=True
+            )
+            == "bike_hr"
+        )
+
+    def test_bike_without_power_or_hr_raises_explicitly(self) -> None:
+        """No usable modality is an EXPLICIT outcome (the engine never
+        silently drops a session): a ValueError naming both candidate
+        modalities."""
+        with pytest.raises(ValueError, match="bike_power"):
+            select_intensity_modality(
+                "bike", has_power_samples=False, has_hr_samples=False
+            )
+        with pytest.raises(ValueError, match="bike_hr"):
+            select_intensity_modality(
+                "bike", has_power_samples=False, has_hr_samples=False
+            )
+
+    def test_run_and_swim_are_unchanged(self) -> None:
+        """The selector refines only the bike: run stays run_hr and swim
+        stays swim_pace regardless of the flags (their source tables do
+        not depend on stream availability)."""
+        assert (
+            select_intensity_modality(
+                "run", has_power_samples=False, has_hr_samples=True
+            )
+            == "run_hr"
+        )
+        assert (
+            select_intensity_modality(
+                "swim", has_power_samples=True, has_hr_samples=True
+            )
+            == "swim_pace"
+        )
+
+    def test_unknown_sport_raises(self) -> None:
+        with pytest.raises(ValueError, match="sport"):
+            select_intensity_modality(
+                "row",  # type: ignore[arg-type]
+                has_power_samples=True,
+                has_hr_samples=True,
+            )
+
+
+class TestHasUsableSamples:
+    def test_absent_empty_or_all_none_stream_is_not_usable(self) -> None:
+        """The load engine's usable-sample rule verbatim: a stream that is
+        absent (``None``), empty, or ENTIRELY ``None`` (all-gap) is not
+        usable — a stream that exists but holds no valid sample must not
+        select the modality that classifies it."""
+        assert has_usable_samples(None) is False
+        assert has_usable_samples([]) is False
+        assert has_usable_samples([None, None, None]) is False
+
+    def test_one_valid_sample_makes_the_stream_usable(self) -> None:
+        assert has_usable_samples([None, 120.0, None]) is True
+        assert has_usable_samples([0.0]) is True  # 0 is a value, not a gap
+
+
+class TestBikeHrSessionsFlowThroughTheWeeklyAggregation:
+    def test_bike_hr_zone_keys_validate_against_the_bike_hr_table(
+        self,
+    ) -> None:
+        """A bike session classified on the bike_hr table carries the
+        Friel bike HR zone keys (Z5a/Z5b/Z5c, not the Coggan Z5-Z7): the
+        weekly aggregation must validate and map it against the bike_hr
+        model, not the sport's default bike_power table."""
+        session = zone_session(
+            W2_MON,
+            "bike",
+            {"Z1": 600.0, "Z3": 300.0, "Z5a": 100.0},
+            modality="bike_hr",
+        )
+        assert session.modality == "bike_hr"
+        weeks = weekly_time_in_zone([session], sports=["bike"])
+        bike = weeks[0].sports[0]
+        assert bike.status == "data"
+        # bike_hr 3-zone map: Z1->Z1, Z3->Z2, Z5a->Z3.
+        assert bike.z1_seconds == pytest.approx(600.0)
+        assert bike.z2_seconds == pytest.approx(300.0)
+        assert bike.z3_seconds == pytest.approx(100.0)
+        assert bike.percentages == pytest.approx([60.0, 30.0, 10.0])
+
+    def test_default_modality_still_the_canonical_map(self) -> None:
+        """Without an explicit modality the session keeps the sport's
+        default SPORT_MODALITY table (bike -> bike_power)."""
+        session = zone_session(W2_MON, "bike", {"Z7": 60.0})
+        assert session.modality == "bike_power"
+        weeks = weekly_time_in_zone([session], sports=["bike"])
+        assert weeks[0].sports[0].z3_seconds == pytest.approx(60.0)
+
+    def test_mixed_bike_modalities_in_one_week(self) -> None:
+        """A power ride and an HR ride in the same week each aggregate on
+        their own source table (per-session modality, no cross-table
+        key confusion)."""
+        sessions = [
+            zone_session(W2_MON, "bike", {"Z1": 100.0}),  # bike_power Z1
+            zone_session(W2_SUN, "bike", {"Z5a": 50.0}, modality="bike_hr"),
+        ]
+        weeks = weekly_time_in_zone(sessions, sports=["bike"])
+        bike = weeks[0].sports[0]
+        assert bike.total_seconds == pytest.approx(150.0)
+        # bike_power Z1 -> Z1; bike_hr Z5a -> Z3.
+        assert bike.z1_seconds == pytest.approx(100.0)
+        assert bike.z3_seconds == pytest.approx(50.0)
+        assert bike.z2_seconds == pytest.approx(0.0)

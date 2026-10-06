@@ -20,12 +20,16 @@ Inputs and where they come from:
   ``python -m app.db.daily_load`` first so the window's TSB exists;
   window days without it are reported as skipped.
 - intensity: the window's activities and streams; the per-sport source
-  table is the engine's canonical map (run: Friel HR zones, bike: Coggan
-  power zones, swim: CSS zones — the settings' ``engine_sport_modality``
-  is pinned to it and validated), with the LT1/LT2 cut points from
-  ``ENGINE_*_THRESHOLD_PCTS`` and the athlete thresholds (FTP / LTHR /
-  CSS) from the §14 settings fields. Rides without power streams are
-  reported as skipped (never classified with a guessed threshold).
+  table is the engine's canonical DEFAULT map (run: Friel HR zones, bike:
+  Coggan power zones, swim: CSS zones — the settings'
+  ``engine_sport_modality`` is pinned to it and validated), refined per
+  session by stream availability (the load engine's power-first
+  preference): a POWER-LESS ride with HR classifies on the ``bike_hr``
+  Friel HR table, so the owner's rides produce weekly intensity rows
+  under the bike sport. A session with no usable modality is reported as
+  skipped (never classified with a guessed threshold), as is a session
+  whose selected modality's threshold (FTP / LTHR / CSS) is not
+  configured.
 - durability: bike (NP) / run (NGS) activities with the intensity and HR
   streams.
 

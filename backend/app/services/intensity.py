@@ -17,16 +17,27 @@ calendar days ending at ``window_end``:
    TreadmillRun/VirtualRun -> run; Swim -> swim). Anything else (strength,
    walks) is reported in :attr:`IntensityReport.skipped` — never silently
    dropped.
-3. Classify each valid sample of the sport's CANONICAL source zone table
-   (Feature 4: Coggan power zones for ``bike``, Friel HR zones for
-   ``run``, the CSS swim zones for ``swim`` — the engine's fixed
-   ``SPORT_MODALITY`` map, which the weekly aggregation validates
-   against). The caller's ``sport_modality`` map is validated to EQUAL
-   the canonical map and rejected loudly otherwise (the settings field
-   ``engine_sport_modality`` stays owner-reviewable but is pinned to the
-   engine's mapping). The corresponding threshold (FTP / LTHR / CSS) must
+3. Select the session's source-table modality with
+   :func:`app.engine.intensity.select_intensity_modality` — the
+   documented DEFAULT map (:data:`SPORT_MODALITY`) refined by stream
+   availability, mirroring the load engine's preference order (power
+   first, then heart rate): a bike ride with usable power samples
+   classifies on the Coggan power table; a POWER-LESS ride (the owner
+   has no power meter) with usable HR samples on the ``bike_hr`` Friel
+   HR table (LT1 90% / LT2 100% LTHR). Usability is the load engine's
+   rule (:func:`app.engine.intensity.has_usable_samples`): a stream that
+   is absent, empty or ENTIRELY ``None`` is not usable. A session with
+   no usable modality is reported in :attr:`IntensityReport.skipped`
+   with the named reason — never silently dropped, never guessed. The
+   caller's ``sport_modality`` map is still validated to EQUAL the
+   canonical DEFAULT map and rejected loudly otherwise (the settings
+   field ``engine_sport_modality`` stays owner-reviewable but is pinned
+   to the engine's mapping; selection refines per SESSION, not per
+   settings). The selected modality's threshold (FTP / LTHR / CSS) must
    be configured or the activity is skipped with a reason — never
-   guessed.
+   guessed. The classification validates against the table the session
+   was ACTUALLY classified on (``ZoneSession.modality``), so ``bike_hr``
+   zone keys flow through the weekly aggregation unharmed.
 4. Weight the classified samples into source-zone SECONDS. Real
    Intervals.icu streams are NOT necessarily 1 Hz (live-verified: the
    owner's rides carry ~0.3 Hz streams plus an epoch-seconds ``time``
@@ -70,8 +81,9 @@ from app.engine.intensity import (
     SPORT_MODALITY,
     IntensityModalityKey,
     SportKey,
-    ThreeZoneModel,
     WeeklyIntensity,
+    has_usable_samples,
+    select_intensity_modality,
     three_zone_model,
     weekly_time_in_zone,
     zone_session,
@@ -246,10 +258,13 @@ def _build_zone_session(
 ) -> tuple[Any | None, str | None]:
     """Derive one engine :class:`ZoneSession` from a stored activity.
 
-    Returns ``(session, None)`` on success or ``(None, reason)`` when the
-    modality's stream or threshold is missing — reported, never guessed.
-    A session whose samples are ALL gaps is a valid empty ZoneSession (the
-    engine's documented "session without intensity data" semantics).
+    ``modality`` is the SELECTED source table (the refined choice of
+    :func:`app.engine.intensity.select_intensity_modality` — e.g.
+    ``bike_hr`` for a power-less ride). Returns ``(session, None)`` on
+    success or ``(None, reason)`` when the modality's stream or threshold
+    is missing — reported, never guessed. A session whose samples are ALL
+    gaps is a valid empty ZoneSession (the engine's documented "session
+    without intensity data" semantics).
     """
     threshold = {
         "bike_power": ftp_watts,
@@ -279,7 +294,9 @@ def _build_zone_session(
     )
     zone_seconds = _weighted_zone_seconds(classified, time_stream)
     return (
-        zone_session(_activity_date(activity), sport, zone_seconds),
+        zone_session(
+            _activity_date(activity), sport, zone_seconds, modality=modality
+        ),
         None,
     )
 
@@ -319,16 +336,18 @@ async def recompute_intensity(
     if days <= 0:
         raise ValueError(f"days must be positive, got {days!r}")
     if sport_modality != SPORT_MODALITY or set(sport_modality) != set(SPORT_KEYS):
-        # The engine's weekly aggregation validates zone seconds against
-        # its CANONICAL per-sport source table (SPORT_MODALITY); a
-        # different map cannot flow through it, so it is rejected here
-        # loudly instead of failing mid-aggregation (the settings field
-        # engine_sport_modality is owner-reviewable but pinned to the
-        # engine's mapping).
+        # The settings' sport->modality map is pinned to the engine's
+        # canonical DEFAULT mapping (SPORT_MODALITY): modality selection
+        # refines the bike entry per SESSION by stream availability, never
+        # per settings, so a different map cannot flow through — rejected
+        # here loudly (the settings field engine_sport_modality stays
+        # owner-reviewable but pinned).
         raise ValueError(
             f"sport_modality {sport_modality!r} does not match the "
             f"engine's canonical SPORT_MODALITY {SPORT_MODALITY!r}: the "
-            "weekly aggregation validates against the canonical tables"
+            "sport->modality map is pinned to the engine's default "
+            "mapping; per-session stream availability is refined by "
+            "select_intensity_modality, not by settings"
         )
     window_start = window_end - dt.timedelta(days=days - 1)
 
@@ -338,21 +357,25 @@ async def recompute_intensity(
 
     # Built up-front so a custom settings cut point that would split a
     # source zone fails LOUDLY here (three_zone_model raises), before any
-    # row is written.
-    models: dict[SportKey, ThreeZoneModel] = {
-        sport: three_zone_model(
+    # row is written. bike_hr is validated alongside the canonical
+    # default tables: modality selection can route a power-less bike
+    # session onto it, so a bad settings cut point for it must fail the
+    # same way.
+    validated_modalities: Final[frozenset[IntensityModalityKey]] = (
+        frozenset(sport_modality.values()) | {"bike_hr"}
+    )
+    for modality in sorted(validated_modalities):
+        three_zone_model(
             modality,
             first_threshold_pct=first_threshold_pcts[modality],
             second_threshold_pct=second_threshold_pcts[modality],
         )
-        for sport, modality in sport_modality.items()
-    }
 
     sessions: list[Any] = []
     skipped: list[SkippedActivity] = []
     for activity, streams in candidates:
         sport = _sport_key(activity.type)
-        if sport is None or sport not in models:
+        if sport is None or sport not in sport_modality:
             skipped.append(
                 SkippedActivity(
                     activity_id=activity.id,
@@ -364,11 +387,31 @@ async def recompute_intensity(
                 )
             )
             continue
+        # Modality selection (see step 3 of the module docstring): the
+        # default map refined by the session's actual streams — power
+        # first, then HR (the load engine's preference). Usability is
+        # the load engine's rule: absent, empty or all-None is not
+        # usable. A session with no usable modality is a named skip.
+        try:
+            modality = select_intensity_modality(
+                sport,
+                has_power_samples=has_usable_samples(streams.get("power")),
+                has_hr_samples=has_usable_samples(streams.get("hr")),
+            )
+        except ValueError as exc:
+            skipped.append(
+                SkippedActivity(
+                    activity_id=activity.id,
+                    sport=activity.type,
+                    reason=str(exc),
+                )
+            )
+            continue
         zone_sess, reason = _build_zone_session(
             activity,
             streams,
             sport=sport,
-            modality=sport_modality[sport],
+            modality=modality,
             ftp_watts=ftp_watts,
             lthr_bpm=lthr_bpm,
             css_mps=css_mps,
