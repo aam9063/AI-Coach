@@ -1,0 +1,1727 @@
+EJEMPLO DE ENTRENAMIENTO PARA CICLISMO:
+
+E1:
+Warm up
+
+30 min @ 67 bpm
+Zone 1: Recovery
+Active
+
+15 min @ 127 bpm
+Zone 2: Aerobic
+Recovery
+
+5 min @ 81 bpm
+Zone 1: Recovery
+Active
+
+15 min @ 127 bpm
+Zone 2: Aerobic
+Recovery
+
+5 min @ 81 bpm
+Zone 1: Recovery
+Active
+
+15 min @ 127 bpm
+Zone 2: Aerobic
+Cool down
+
+40 min @ 67 bpm
+Zone 1: Recovery
+
+E2:
+RODAJE SUAVE: SOLO DARSE UN PASEO. NADA DE FORZAR, NO PASAR DE Z2 (2h)
+
+E3:
+Warm up
+
+30 min @ 67 bpm
+Zone 1: Recovery
+Repetir 1 veces
+
+Active
+
+20 min @ 118 bpm
+Zone 1: Recovery
+Active
+
+10 min @ 133 bpm
+Zone 3: Tempo
+Recovery
+
+15 min @ 81 bpm
+Zone 1: Recovery
+Repetir 1 veces
+
+Active
+
+10 min @ 139 bpm
+Zone 4: SubThreshold
+Active
+
+4 min @ 126 bpm
+Zone 2: Aerobic
+Cool down
+
+40 min @ 67 bpm
+Zone 1: Recovery
+
+E4:SALIDA LIBRE:  A PODER SER EN GRUPO. PUEDES FORZAR (3h o más)
+
+E5: 
+Warm up
+
+30 min @ 67 bpm
+Zone 1: Recovery
+Active
+
+15 min @ 127 bpm
+Zone 2: Aerobic
+Recovery
+
+5 min @ 81 bpm
+Zone 1: Recovery
+Active
+
+15 min @ 127 bpm
+Zone 2: Aerobic
+Recovery
+
+5 min @ 81 bpm
+Zone 1: Recovery
+Active
+
+15 min @ 127 bpm
+Zone 2: Aerobic
+Cool down
+
+40 min @ 67 bpm
+Zone 1: Recovery
+
+
+--
+
+Warm up
+
+30 min @ 67 bpm
+Zone 1: Recovery
+Repetir 1 veces
+
+Active
+
+20 min @ 118 bpm
+Zone 1: Recovery
+Active
+
+10 min @ 133 bpm
+Zone 3: Tempo
+Recovery
+
+15 min @ 81 bpm
+Zone 1: Recovery
+Repetir 1 veces
+
+Active
+
+10 min @ 139 bpm
+Zone 4: SubThreshold
+Active
+
+4 min @ 126 bpm
+Zone 2: Aerobic
+Cool down
+
+40 min @ 67 bpm
+Zone 1: Recovery
+
+--
+
+Warm up
+
+30 min @ 67 bpm
+Zone 1: Recovery
+Repetir 3 veces
+
+Active
+
+3 min @ 127 bpm
+Zone 2: Aerobic
+Active
+
+1 min @ 145 bpm
+Zone 4: SubThreshold
+Recovery
+
+5 min @ 81 bpm
+Zone 1: Recovery
+Repetir 3 veces
+
+Active
+
+3 min @ 127 bpm
+Zone 2: Aerobic
+Active
+
+1 min @ 145 bpm
+Zone 4: SubThreshold
+Recovery
+
+5 min @ 81 bpm
+Zone 1: Recovery
+Repetir 3 veces
+
+Active
+
+3 min @ 127 bpm
+Zone 2: Aerobic
+Active
+
+1 min @ 145 bpm
+Zone 4: SubThreshold
+Cool down
+
+40 min @ 67 bpm
+Zone 1: Recovery
+
+--
+
+Warm up
+
+30 min @ 67 bpm
+Zone 1: Recovery
+Active
+
+20 min @ 127 bpm
+Zone 2: Aerobic
+Recovery
+
+13 min @ 81 bpm
+Zone 1: Recovery
+Active
+
+20 min @ 127 bpm
+Zone 2: Aerobic
+Recovery
+
+13 min @ 81 bpm
+Zone 1: Recovery
+Repetir 1 veces
+
+Active
+
+5 min @ 127 bpm
+Zone 2: Aerobic
+Active
+
+5 min @ 139 bpm
+Zone 4: SubThreshold
+Active
+
+5 min @ 127 bpm
+Zone 2: Aerobic
+Cool down
+
+40 min @ 67 bpm
+Zone 1: Recovery
+
+--
+
+Warm up
+
+30 min @ 67 bpm
+Zone 1: Recovery
+Repetir 3 veces
+
+Active
+
+3 min @ 127 bpm
+Zone 2: Aerobic
+Active
+
+1 min @ 145 bpm
+Zone 4: SubThreshold
+Recovery
+
+5 min @ 81 bpm
+Zone 1: Recovery
+Repetir 3 veces
+
+Active
+
+3 min @ 127 bpm
+Zone 2: Aerobic
+Active
+
+1 min @ 145 bpm
+Zone 4: SubThreshold
+Recovery
+
+5 min @ 81 bpm
+Zone 1: Recovery
+Repetir 3 veces
+
+Active
+
+3 min @ 127 bpm
+Zone 2: Aerobic
+Active
+
+1 min @ 145 bpm
+Zone 4: SubThreshold
+Cool down
+
+40 min @ 67 bpm
+Zone 1: Recovery
+
+--
+
+Warm up
+
+30 min @ 67 bpm
+Zone 1: Recovery
+Active
+
+20 min @ 127 bpm
+Zone 2: Aerobic
+Recovery
+
+13 min @ 81 bpm
+Zone 1: Recovery
+Active
+
+20 min @ 127 bpm
+Zone 2: Aerobic
+Recovery
+
+13 min @ 81 bpm
+Zone 1: Recovery
+Repetir 1 veces
+
+Active
+
+5 min @ 127 bpm
+Zone 2: Aerobic
+Active
+
+5 min @ 139 bpm
+Zone 4: SubThreshold
+Active
+
+5 min @ 127 bpm
+Zone 2: Aerobic
+Cool down
+
+40 min @ 67 bpm
+Zone 1: Recovery
+
+--
+
+Warm up
+
+30 min @ 89 bpm
+Zone 1: Recovery
+Repetir 1 veces
+
+Active
+
+5 min @ 123 bpm
+Zone 2: Aerobic
+Active
+
+5 min @ 136 bpm
+Zone 3: Tempo
+Active
+
+5 min @ 123 bpm
+Zone 2: Aerobic
+Recovery
+
+4 min @ 81 bpm
+Zone 1: Recovery
+Repetir 1 veces
+
+Active
+
+5 min @ 123 bpm
+Zone 2: Aerobic
+Active
+
+5 min @ 136 bpm
+Zone 3: Tempo
+Active
+
+5 min @ 123 bpm
+Zone 2: Aerobic
+Cool down
+
+40 min @ 89 bpm
+Zone 1: Recovery
+--
+
+Warm up
+
+30 min @ 89 bpm
+Zone 1: Recovery
+Repetir 1 veces
+
+Active
+
+5 min @ 123 bpm
+Zone 2: Aerobic
+Active
+
+5 min @ 136 bpm
+Zone 3: Tempo
+Active
+
+5 min @ 123 bpm
+Zone 2: Aerobic
+Recovery
+
+4 min @ 81 bpm
+Zone 1: Recovery
+Repetir 1 veces
+
+Active
+
+5 min @ 123 bpm
+Zone 2: Aerobic
+Active
+
+5 min @ 136 bpm
+Zone 3: Tempo
+Active
+
+5 min @ 123 bpm
+Zone 2: Aerobic
+Cool down
+
+40 min @ 89 bpm
+Zone 1: Recovery
+--
+
+Warm up
+
+20 min @ 67 bpm
+Zone 1: Recovery
+Active
+
+10 min @ 127 bpm
+Zone 2: Aerobic
+70-70 rpm
+Recovery
+
+6 min @ 81 bpm
+Zone 1: Recovery
+Active
+
+10 min @ 127 bpm
+Zone 2: Aerobic
+70-70 rpm
+Recovery
+
+6 min @ 81 bpm
+Zone 1: Recovery
+Active
+
+10 min @ 127 bpm
+Zone 2: Aerobic
+70-70 rpm
+Recovery
+
+13 min @ 74 bpm
+Zone 1: Recovery
+Active
+
+6 min @ 135 bpm
+Zone 3: Tempo
+Recovery
+
+3 min @ 74 bpm
+Zone 1: Recovery
+Active
+
+6 min @ 135 bpm
+Zone 3: Tempo
+Cool down
+
+31:55 @ 67 bpm
+Zone 1: Recovery
+
+--
+Warm up
+
+20 min @ 81 bpm
+Zone 1: Recovery
+Repetir 2 veces
+
+Active
+
+2 min @ 123 bpm
+Zone 2: Aerobic
+60-60 rpm
+Active
+
+2 min @ 123 bpm
+Zone 2: Aerobic
+80-80 rpm
+Recovery
+
+4 min @ 81 bpm
+Zone 1: Recovery
+Repetir 2 veces
+
+Active
+
+2 min @ 123 bpm
+Zone 2: Aerobic
+60-60 rpm
+Active
+
+2 min @ 123 bpm
+Zone 2: Aerobic
+80-80 rpm
+Recovery
+
+10:15 @ 81 bpm
+Zone 1: Recovery
+Repetir 6 veces
+
+Active
+
+2 min @ 127 bpm
+Zone 2: Aerobic
+90-90 rpm
+Active
+
+1 min @ 127 bpm
+Zone 2: Aerobic
+50-50 rpm
+Cool down
+
+49:10 @ 74 bpm
+Zone 1: Recovery
+--
+Warm up
+
+20 min @ 81 bpm
+Zone 1: Recovery
+Repetir 5 veces
+
+Active
+
+2 min @ 127 bpm
+Zone 2: Aerobic
+70-70 rpm
+Active
+
+1 min @ 127 bpm
+Zone 2: Aerobic
+90-90 rpm
+Recovery
+
+8 min @ 81 bpm
+Zone 1: Recovery
+Repetir 5 veces
+
+Active
+
+2 min @ 127 bpm
+Zone 2: Aerobic
+70-70 rpm
+Active
+
+1 min @ 127 bpm
+Zone 2: Aerobic
+90-90 rpm
+Recovery
+
+14:10 @ 81 bpm
+Zone 1: Recovery
+Repetir 1 veces
+
+Active
+
+1 min @ 142 bpm
+Zone 4: SubThreshold
+Active
+
+2 min @ 123 bpm
+Zone 2: Aerobic
+Active
+
+1 min @ 163 bpm
+Zone 5C: Anaerobic Capacity
+Recovery
+
+2 min @ 81 bpm
+Zone 1: Recovery
+Repetir 1 veces
+
+Active
+
+1 min @ 142 bpm
+Zone 4: SubThreshold
+Active
+
+2 min @ 123 bpm
+Zone 2: Aerobic
+Active
+
+1 min @ 163 bpm
+Zone 5C: Anaerobic Capacity
+Recovery
+
+2 min @ 81 bpm
+Zone 1: Recovery
+Cool down
+
+36:20 @ 67 bpm
+Zone 1: Recovery
+--
+Warm up
+
+20 min @ 81 bpm
+Zone 1: Recovery
+Repetir 2 veces
+
+Active
+
+2 min @ 123 bpm
+Zone 2: Aerobic
+60-60 rpm
+Active
+
+2 min @ 123 bpm
+Zone 2: Aerobic
+80-80 rpm
+Recovery
+
+4 min @ 81 bpm
+Zone 1: Recovery
+Repetir 2 veces
+
+Active
+
+2 min @ 123 bpm
+Zone 2: Aerobic
+60-60 rpm
+Active
+
+2 min @ 123 bpm
+Zone 2: Aerobic
+80-80 rpm
+Recovery
+
+10:15 @ 81 bpm
+Zone 1: Recovery
+Repetir 6 veces
+
+Active
+
+2 min @ 127 bpm
+Zone 2: Aerobic
+90-90 rpm
+Active
+
+1 min @ 127 bpm
+Zone 2: Aerobic
+50-50 rpm
+Cool down
+
+49:10 @ 74 bpm
+Zone 1: Recovery
+--
+Warm up
+
+20 min @ 81 bpm
+Zone 1: Recovery
+Repetir 5 veces
+
+Active
+
+2 min @ 127 bpm
+Zone 2: Aerobic
+70-70 rpm
+Active
+
+1 min @ 127 bpm
+Zone 2: Aerobic
+90-90 rpm
+Recovery
+
+8 min @ 81 bpm
+Zone 1: Recovery
+Repetir 5 veces
+
+Active
+
+2 min @ 127 bpm
+Zone 2: Aerobic
+70-70 rpm
+Active
+
+1 min @ 127 bpm
+Zone 2: Aerobic
+90-90 rpm
+Recovery
+
+14:10 @ 81 bpm
+Zone 1: Recovery
+Repetir 1 veces
+
+Active
+
+1 min @ 142 bpm
+Zone 4: SubThreshold
+Active
+
+2 min @ 123 bpm
+Zone 2: Aerobic
+Active
+
+1 min @ 163 bpm
+Zone 5C: Anaerobic Capacity
+Recovery
+
+2 min @ 81 bpm
+Zone 1: Recovery
+Repetir 1 veces
+
+Active
+
+1 min @ 142 bpm
+Zone 4: SubThreshold
+Active
+
+2 min @ 123 bpm
+Zone 2: Aerobic
+Active
+
+1 min @ 163 bpm
+Zone 5C: Anaerobic Capacity
+Recovery
+
+2 min @ 81 bpm
+Zone 1: Recovery
+Cool down
+
+36:20 @ 67 bpm
+Zone 1: Recovery
+--
+Warm up
+
+30:35 @ 81 bpm
+Zone 1: Recovery
+Repetir 1 veces
+
+Active
+
+4 min @ 136 bpm
+Zone 3: Tempo
+APRIETA
+
+40 sec @ 148 bpm
+Zone 5A: SuperThreshold
+NO TIENES QUE LLEGAR A ESTE PULSO
+A TOPE
+
+20 sec @ 155 bpm
+Zone 5B: Aerobic Capacity
+NO TIENES QUE LLEGAR A ESTE PULSO
+Recovery
+
+5 min @ 81 bpm
+Zone 1: Recovery
+Repetir 1 veces
+
+Active
+
+4 min @ 136 bpm
+Zone 3: Tempo
+APRIETA
+
+40 sec @ 148 bpm
+Zone 5A: SuperThreshold
+NO TIENES QUE LLEGAR A ESTE PULSO
+A TOPE
+
+20 sec @ 155 bpm
+Zone 5B: Aerobic Capacity
+NO TIENES QUE LLEGAR A ESTE PULSO
+Recovery
+
+5 min @ 81 bpm
+Zone 1: Recovery
+Repetir 1 veces
+
+Active
+
+4 min @ 136 bpm
+Zone 3: Tempo
+APRIETA
+
+40 sec @ 148 bpm
+Zone 5A: SuperThreshold
+NO TIENES QUE LLEGAR A ESTE PULSO
+A TOPE
+
+20 sec @ 155 bpm
+Zone 5B: Aerobic Capacity
+NO TIENES QUE LLEGAR A ESTE PULSO
+Recovery
+
+5 min @ 81 bpm
+Zone 1: Recovery
+Repetir 1 veces
+
+Active
+
+4 min @ 136 bpm
+Zone 3: Tempo
+APRIETA
+
+40 sec @ 148 bpm
+Zone 5A: SuperThreshold
+NO TIENES QUE LLEGAR A ESTE PULSO
+A TOPE
+
+20 sec @ 155 bpm
+Zone 5B: Aerobic Capacity
+NO TIENES QUE LLEGAR A ESTE PULSO
+Recovery
+
+5 min @ 81 bpm
+Zone 1: Recovery
+Repetir 1 veces
+
+Active
+
+4 min @ 136 bpm
+Zone 3: Tempo
+APRIETA
+
+40 sec @ 148 bpm
+Zone 5A: SuperThreshold
+NO TIENES QUE LLEGAR A ESTE PULSO
+A TOPE
+
+20 sec @ 155 bpm
+Zone 5B: Aerobic Capacity
+NO TIENES QUE LLEGAR A ESTE PULSO
+Recovery
+
+5 min @ 81 bpm
+Zone 1: Recovery
+Repetir 1 veces
+
+Active
+
+4 min @ 136 bpm
+Zone 3: Tempo
+APRIETA
+
+40 sec @ 148 bpm
+Zone 5A: SuperThreshold
+NO TIENES QUE LLEGAR A ESTE PULSO
+A TOPE
+
+20 sec @ 155 bpm
+Zone 5B: Aerobic Capacity
+NO TIENES QUE LLEGAR A ESTE PULSO
+Cool down
+
+35:25 @ 67 bpm
+Zone 1: Recovery
+--
+Warm up
+
+20 min @ 1 RPE
+Repetir 5 veces
+
+Active
+
+1 min @ 7 RPE
+60-60 rpm
+Active
+
+1 min @ 7 RPE
+90-90 rpm
+Recovery
+
+7 min @ 2 RPE
+Repetir 5 veces
+
+Active
+
+1 min @ 7 RPE
+60-60 rpm
+Active
+
+1 min @ 7 RPE
+90-90 rpm
+Recovery
+
+12 min @ 2 RPE
+Repetir 6 veces
+
+A TOPE
+
+15 sec @ 10 RPE
+Active
+
+45 sec @ 6 RPE
+Recovery
+
+5 min @ 2 RPE
+Repetir 6 veces
+
+A TOPE
+
+15 sec @ 10 RPE
+Active
+
+45 sec @ 6 RPE
+Recovery
+
+5 min @ 2 RPE
+Repetir 6 veces
+
+A TOPE
+
+15 sec @ 10 RPE
+Active
+
+45 sec @ 6 RPE
+Cool down
+
+30:05 @ 1 RPE
+--
+Warm up
+
+30:35 @ 81 bpm
+Zone 1: Recovery
+Repetir 1 veces
+
+Active
+
+4 min @ 136 bpm
+Zone 3: Tempo
+APRIETA
+
+40 sec @ 148 bpm
+Zone 5A: SuperThreshold
+NO TIENES QUE LLEGAR A ESTE PULSO
+A TOPE
+
+20 sec @ 155 bpm
+Zone 5B: Aerobic Capacity
+NO TIENES QUE LLEGAR A ESTE PULSO
+Recovery
+
+5 min @ 81 bpm
+Zone 1: Recovery
+Repetir 1 veces
+
+Active
+
+4 min @ 136 bpm
+Zone 3: Tempo
+APRIETA
+
+40 sec @ 148 bpm
+Zone 5A: SuperThreshold
+NO TIENES QUE LLEGAR A ESTE PULSO
+A TOPE
+
+20 sec @ 155 bpm
+Zone 5B: Aerobic Capacity
+NO TIENES QUE LLEGAR A ESTE PULSO
+Recovery
+
+5 min @ 81 bpm
+Zone 1: Recovery
+Repetir 1 veces
+
+Active
+
+4 min @ 136 bpm
+Zone 3: Tempo
+APRIETA
+
+40 sec @ 148 bpm
+Zone 5A: SuperThreshold
+NO TIENES QUE LLEGAR A ESTE PULSO
+A TOPE
+
+20 sec @ 155 bpm
+Zone 5B: Aerobic Capacity
+NO TIENES QUE LLEGAR A ESTE PULSO
+Recovery
+
+5 min @ 81 bpm
+Zone 1: Recovery
+Repetir 1 veces
+
+Active
+
+4 min @ 136 bpm
+Zone 3: Tempo
+APRIETA
+
+40 sec @ 148 bpm
+Zone 5A: SuperThreshold
+NO TIENES QUE LLEGAR A ESTE PULSO
+A TOPE
+
+20 sec @ 155 bpm
+Zone 5B: Aerobic Capacity
+NO TIENES QUE LLEGAR A ESTE PULSO
+Recovery
+
+5 min @ 81 bpm
+Zone 1: Recovery
+Repetir 1 veces
+
+Active
+
+4 min @ 136 bpm
+Zone 3: Tempo
+APRIETA
+
+40 sec @ 148 bpm
+Zone 5A: SuperThreshold
+NO TIENES QUE LLEGAR A ESTE PULSO
+A TOPE
+
+20 sec @ 155 bpm
+Zone 5B: Aerobic Capacity
+NO TIENES QUE LLEGAR A ESTE PULSO
+Recovery
+
+5 min @ 81 bpm
+Zone 1: Recovery
+Repetir 1 veces
+
+Active
+
+4 min @ 136 bpm
+Zone 3: Tempo
+APRIETA
+
+40 sec @ 148 bpm
+Zone 5A: SuperThreshold
+NO TIENES QUE LLEGAR A ESTE PULSO
+A TOPE
+
+20 sec @ 155 bpm
+Zone 5B: Aerobic Capacity
+NO TIENES QUE LLEGAR A ESTE PULSO
+Cool down
+
+35:25 @ 67 bpm
+Zone 1: Recovery
+--
+Warm up
+
+20 min @ 1 RPE
+Repetir 5 veces
+
+Active
+
+1 min @ 7 RPE
+60-60 rpm
+Active
+
+1 min @ 7 RPE
+90-90 rpm
+Recovery
+
+7 min @ 2 RPE
+Repetir 5 veces
+
+Active
+
+1 min @ 7 RPE
+60-60 rpm
+Active
+
+1 min @ 7 RPE
+90-90 rpm
+Recovery
+
+12 min @ 2 RPE
+Repetir 6 veces
+
+A TOPE
+
+15 sec @ 10 RPE
+Active
+
+45 sec @ 6 RPE
+Recovery
+
+5 min @ 2 RPE
+Repetir 6 veces
+
+A TOPE
+
+15 sec @ 10 RPE
+Active
+
+45 sec @ 6 RPE
+Recovery
+
+5 min @ 2 RPE
+Repetir 6 veces
+
+A TOPE
+
+15 sec @ 10 RPE
+Active
+
+45 sec @ 6 RPE
+Cool down
+
+30:05 @ 1 RPE
+--
+Warm up
+
+34:15 @ 81 bpm
+Zone 1: Recovery
+Repetir 5 veces
+
+Active
+
+2 min @ 129 bpm
+Zone 2: Aerobic
+90-90 rpm
+Active
+
+1 min @ 129 bpm
+Zone 2: Aerobic
+50-50 rpm
+Recovery
+
+9 min @ 81 bpm
+Zone 1: Recovery
+Active
+
+3 min @ 152 bpm
+Zone 5B: Aerobic Capacity
+Recovery
+
+2 min @ 81 bpm
+Zone 1: Recovery
+Active
+
+3 min @ 152 bpm
+Zone 5B: Aerobic Capacity
+Recovery
+
+2 min @ 81 bpm
+Zone 1: Recovery
+Active
+
+3 min @ 152 bpm
+Zone 5B: Aerobic Capacity
+Recovery
+
+2 min @ 81 bpm
+Zone 1: Recovery
+Active
+
+3 min @ 152 bpm
+Zone 5B: Aerobic Capacity
+Cool down
+
+40 min @ 67 bpm
+Zone 1: Recovery
+--
+Warm up
+
+31:05 @ 81 bpm
+Zone 1: Recovery
+Repetir 1 veces
+
+Active
+
+4 min @ 127 bpm
+Zone 2: Aerobic
+Active
+
+4 min @ 155 bpm
+Zone 5B: Aerobic Capacity
+NO PASA NADA SI NO LLEGAS AL PULSO MARCADO
+Active
+
+4 min @ 127 bpm
+Zone 2: Aerobic
+Recovery
+
+10 min @ 81 bpm
+Zone 1: Recovery
+Repetir 1 veces
+
+Active
+
+4 min @ 127 bpm
+Zone 2: Aerobic
+Active
+
+4 min @ 155 bpm
+Zone 5B: Aerobic Capacity
+NO PASA NADA SI NO LLEGAS AL PULSO MARCADO
+Active
+
+4 min @ 127 bpm
+Zone 2: Aerobic
+Recovery
+
+12:30 @ 81 bpm
+Zone 1: Recovery
+Repetir 6 veces
+
+Active
+
+1 min @ 129 bpm
+Zone 2: Aerobic
+Active
+
+1 min @ 148 bpm
+Zone 5A: SuperThreshold
+Recovery
+
+7 min @ 81 bpm
+Zone 1: Recovery
+Repetir 6 veces
+
+Active
+
+1 min @ 129 bpm
+Zone 2: Aerobic
+Active
+
+1 min @ 148 bpm
+Zone 5A: SuperThreshold
+Cool down
+
+28:20 @ 67 bpm
+Zone 1: Recovery
+--
+Warm up
+
+34:15 @ 81 bpm
+Zone 1: Recovery
+Repetir 5 veces
+
+Active
+
+2 min @ 129 bpm
+Zone 2: Aerobic
+90-90 rpm
+Active
+
+1 min @ 129 bpm
+Zone 2: Aerobic
+50-50 rpm
+Recovery
+
+9 min @ 81 bpm
+Zone 1: Recovery
+Active
+
+3 min @ 152 bpm
+Zone 5B: Aerobic Capacity
+Recovery
+
+2 min @ 81 bpm
+Zone 1: Recovery
+Active
+
+3 min @ 152 bpm
+Zone 5B: Aerobic Capacity
+Recovery
+
+2 min @ 81 bpm
+Zone 1: Recovery
+Active
+
+3 min @ 152 bpm
+Zone 5B: Aerobic Capacity
+Recovery
+
+2 min @ 81 bpm
+Zone 1: Recovery
+Active
+
+3 min @ 152 bpm
+Zone 5B: Aerobic Capacity
+Cool down
+
+40 min @ 67 bpm
+Zone 1: Recovery
+--
+Warm up
+
+31:05 @ 81 bpm
+Zone 1: Recovery
+Repetir 1 veces
+
+Active
+
+4 min @ 127 bpm
+Zone 2: Aerobic
+Active
+
+4 min @ 155 bpm
+Zone 5B: Aerobic Capacity
+NO PASA NADA SI NO LLEGAS AL PULSO MARCADO
+Active
+
+4 min @ 127 bpm
+Zone 2: Aerobic
+Recovery
+
+10 min @ 81 bpm
+Zone 1: Recovery
+Repetir 1 veces
+
+Active
+
+4 min @ 127 bpm
+Zone 2: Aerobic
+Active
+
+4 min @ 155 bpm
+Zone 5B: Aerobic Capacity
+NO PASA NADA SI NO LLEGAS AL PULSO MARCADO
+Active
+
+4 min @ 127 bpm
+Zone 2: Aerobic
+Recovery
+
+12:30 @ 81 bpm
+Zone 1: Recovery
+Repetir 6 veces
+
+Active
+
+1 min @ 129 bpm
+Zone 2: Aerobic
+Active
+
+1 min @ 148 bpm
+Zone 5A: SuperThreshold
+Recovery
+
+7 min @ 81 bpm
+Zone 1: Recovery
+Repetir 6 veces
+
+Active
+
+1 min @ 129 bpm
+Zone 2: Aerobic
+Active
+
+1 min @ 148 bpm
+Zone 5A: SuperThreshold
+Cool down
+
+28:20 @ 67 bpm
+Zone 1: Recovery
+--
+Warm up
+
+20 min @ 67 bpm
+Zone 1: Recovery
+Repetir 1 veces
+
+a tope
+
+20 sec @ 222 bpm
+Zone 5C: Anaerobic Capacity
+aceleración
+Active
+
+40 sec @ 133 bpm
+Zone 3: Tempo
+aceleración
+Recovery
+
+3 min @ 81 bpm
+Zone 1: Recovery
+Repetir 1 veces
+
+a tope
+
+20 sec @ 222 bpm
+Zone 5C: Anaerobic Capacity
+aceleración
+Active
+
+40 sec @ 133 bpm
+Zone 3: Tempo
+aceleración
+Recovery
+
+3 min @ 81 bpm
+Zone 1: Recovery
+Repetir 1 veces
+
+a tope
+
+20 sec @ 222 bpm
+Zone 5C: Anaerobic Capacity
+aceleración
+Active
+
+40 sec @ 133 bpm
+Zone 3: Tempo
+aceleración
+Recovery
+
+3 min @ 81 bpm
+Zone 1: Recovery
+Repetir 1 veces
+
+a tope
+
+20 sec @ 222 bpm
+Zone 5C: Anaerobic Capacity
+aceleración
+Active
+
+40 sec @ 133 bpm
+Zone 3: Tempo
+aceleración
+Recovery
+
+3 min @ 81 bpm
+Zone 1: Recovery
+Repetir 1 veces
+
+a tope
+
+20 sec @ 222 bpm
+Zone 5C: Anaerobic Capacity
+aceleración
+Active
+
+40 sec @ 133 bpm
+Zone 3: Tempo
+aceleración
+Recovery
+
+3 min @ 81 bpm
+Zone 1: Recovery
+Repetir 1 veces
+
+a tope
+
+20 sec @ 222 bpm
+Zone 5C: Anaerobic Capacity
+aceleración
+Active
+
+40 sec @ 133 bpm
+Zone 3: Tempo
+aceleración
+Recovery
+
+8 min @ 81 bpm
+Zone 1: Recovery
+Active
+
+5 min @ 141 bpm
+Zone 4: SubThreshold
+90rpm
+Recovery
+
+3 min @ 81 bpm
+Zone 1: Recovery
+Active
+
+5 min @ 141 bpm
+Zone 4: SubThreshold
+90rpm
+Recovery
+
+3 min @ 81 bpm
+Zone 1: Recovery
+Active
+
+5 min @ 141 bpm
+Zone 4: SubThreshold
+90rpm
+Recovery
+
+3 min @ 81 bpm
+Zone 1: Recovery
+Active
+
+5 min @ 148 bpm
+Zone 5A: SuperThreshold
+90rpm
+Recovery
+
+3 min @ 81 bpm
+Zone 1: Recovery
+Active
+
+5 min @ 148 bpm
+Zone 5A: SuperThreshold
+90rpm
+Cool down
+
+34:30 @ 67 bpm
+Zone 1: Recovery
+--
+Warm up
+
+29:50 @ 67 bpm
+Zone 1: Recovery
+Repetir 4 veces
+
+Active
+
+1 min @ 114 bpm
+Zone 1: Recovery
+50rpm
+Active
+
+1 min @ 114 bpm
+Zone 1: Recovery
+80rpm
+Recovery
+
+6 min @ 81 bpm
+Zone 1: Recovery
+Repetir 5 veces
+
+Active
+
+1:10 @ 118 bpm
+Zone 1: Recovery
+Active
+
+50 sec @ 149 bpm
+Zone 5A: SuperThreshold
+Recovery
+
+6 min @ 81 bpm
+Zone 1: Recovery
+Repetir 5 veces
+
+Active
+
+1:10 @ 118 bpm
+Zone 1: Recovery
+Active
+
+50 sec @ 149 bpm
+Zone 5A: SuperThreshold
+Cool down
+
+50:15 @ 67 bpm
+Zone 1: Recovery
+--
+Warm up
+
+20 min @ 67 bpm
+Zone 1: Recovery
+Repetir 1 veces
+
+a tope
+
+20 sec @ 222 bpm
+Zone 5C: Anaerobic Capacity
+aceleración
+Active
+
+40 sec @ 133 bpm
+Zone 3: Tempo
+aceleración
+Recovery
+
+3 min @ 81 bpm
+Zone 1: Recovery
+Repetir 1 veces
+
+a tope
+
+20 sec @ 222 bpm
+Zone 5C: Anaerobic Capacity
+aceleración
+Active
+
+40 sec @ 133 bpm
+Zone 3: Tempo
+aceleración
+Recovery
+
+3 min @ 81 bpm
+Zone 1: Recovery
+Repetir 1 veces
+
+a tope
+
+20 sec @ 222 bpm
+Zone 5C: Anaerobic Capacity
+aceleración
+Active
+
+40 sec @ 133 bpm
+Zone 3: Tempo
+aceleración
+Recovery
+
+3 min @ 81 bpm
+Zone 1: Recovery
+Repetir 1 veces
+
+a tope
+
+20 sec @ 222 bpm
+Zone 5C: Anaerobic Capacity
+aceleración
+Active
+
+40 sec @ 133 bpm
+Zone 3: Tempo
+aceleración
+Recovery
+
+3 min @ 81 bpm
+Zone 1: Recovery
+Repetir 1 veces
+
+a tope
+
+20 sec @ 222 bpm
+Zone 5C: Anaerobic Capacity
+aceleración
+Active
+
+40 sec @ 133 bpm
+Zone 3: Tempo
+aceleración
+Recovery
+
+3 min @ 81 bpm
+Zone 1: Recovery
+Repetir 1 veces
+
+a tope
+
+20 sec @ 222 bpm
+Zone 5C: Anaerobic Capacity
+aceleración
+Active
+
+40 sec @ 133 bpm
+Zone 3: Tempo
+aceleración
+Recovery
+
+8 min @ 81 bpm
+Zone 1: Recovery
+Active
+
+5 min @ 141 bpm
+Zone 4: SubThreshold
+90rpm
+Recovery
+
+3 min @ 81 bpm
+Zone 1: Recovery
+Active
+
+5 min @ 141 bpm
+Zone 4: SubThreshold
+90rpm
+Recovery
+
+3 min @ 81 bpm
+Zone 1: Recovery
+Active
+
+5 min @ 141 bpm
+Zone 4: SubThreshold
+90rpm
+Recovery
+
+3 min @ 81 bpm
+Zone 1: Recovery
+Active
+
+5 min @ 148 bpm
+Zone 5A: SuperThreshold
+90rpm
+Recovery
+
+3 min @ 81 bpm
+Zone 1: Recovery
+Active
+
+5 min @ 148 bpm
+Zone 5A: SuperThreshold
+90rpm
+Cool down
+
+34:30 @ 67 bpm
+Zone 1: Recovery
+--
+Warm up
+
+29:50 @ 67 bpm
+Zone 1: Recovery
+Repetir 4 veces
+
+Active
+
+1 min @ 112 bpm
+Zone 1: Recovery
+50rpm
+Active
+
+1 min @ 112 bpm
+Zone 1: Recovery
+80rpm
+Recovery
+
+6 min @ 81 bpm
+Zone 1: Recovery
+Repetir 5 veces
+
+Active
+
+1:10 @ 118 bpm
+Zone 1: Recovery
+Active
+
+50 sec @ 149 bpm
+Zone 5A: SuperThreshold
+Recovery
+
+6 min @ 81 bpm
+Zone 1: Recovery
+Repetir 5 veces
+
+Active
+
+1:10 @ 118 bpm
+Zone 1: Recovery
+Active
+
+50 sec @ 149 bpm
+Zone 5A: SuperThreshold
+Cool down
+
+50:15 @ 67 bpm
+Zone 1: Recovery
+--
+

@@ -1,0 +1,11 @@
+# Keep local state out of the build context. Secrets never enter the image:
+# they are injected at runtime via environment (§14).
+.env
+.venv
+.git
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+tests/

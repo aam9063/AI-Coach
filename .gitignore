@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+.env
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+dist/
+
+# OS
+.DS_Store
+
+# Local dev data
+backend/data/
