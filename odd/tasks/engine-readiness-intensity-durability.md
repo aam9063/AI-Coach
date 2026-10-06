@@ -1,6 +1,6 @@
 # ODD Feature: engine-readiness-intensity-durability
 
-Status: pending | Feature 5 of 11 (brief section 12) | Source: PROJECT_BRIEF.md
+Status: in progress | Feature 5 of 11 (brief section 12) | Source: PROJECT_BRIEF.md
 
 ## Objective
 
@@ -69,6 +69,10 @@ To be filled when the feature is implemented (commits, test runs, cross-checks).
 
 ## Progress
 
-Not started.
+In progress (Feature 5/11) on branch `feat/engine-readiness`, **stacked on `feat/engine-zones`** because the 3-zone intensity mapping consumes Feature 4's zone tables and `zones.py` is not in `dev` yet (the engine-zones pull request is still open). Sequencing was decided with the owner: Features 4 and 5 are implemented before the WhatsApp agent (Feature 6) so the agent's `get_readiness` and `get_intensity_distribution` tools wrap real engine outputs instead of stubs. The PR for this branch should be opened after the engine-zones PR merges, so its diff shows only this feature.
 
-Commits: (none yet)
+Owner decisions carried into this feature (§15): the agent uses **OpenAI**; voice notes/STT are postponed; the Twilio webhook will be exposed through a development tunnel rather than a deployment.
+
+Data note: the owner's `wellness` rows are the readiness input (§7.4) and currently cover 177 days (Apr–Oct 2026) with HRV, resting HR and sleep partly populated; where a signal is absent the engine must report it as missing rather than substituting a default.
+
+Commits: (pending)
