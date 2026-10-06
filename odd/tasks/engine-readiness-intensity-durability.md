@@ -50,7 +50,7 @@ Readiness must be a structured, evidence-based view of the athlete's own baselin
 - [ ] `RID-7`: RED+GREEN: comparison output vs polarized (~80/20) and pyramidal reference distributions, descriptive only (Seiler 2010; Stöggl & Sperlich 2014) (§7.5).
 - [ ] `RID-8`: RED+GREEN: Efficiency Factor (bike NP / avg HR; run NGS / avg HR) and aerobic decoupling (Pa:HR) tests including a hand-calculated decoupling example (§7.6, §12.5 acceptance).
 - [ ] `RID-9`: RED+GREEN: durability trend computation on long sessions (§7.6, Maunder et al. 2021) with insufficient-data handling for short activities.
-- [x] `RID-10`: Wire readiness/intensity/durability outputs into persistence with `engine_version` (§6) and document configurable windows/thresholds in settings with source comments (§14).
+- [ ] `RID-10`: Wire readiness/intensity/durability outputs into persistence with `engine_version` (§6) and document configurable windows/thresholds in settings with source comments (§14).
 
 ## Acceptance criteria
 
