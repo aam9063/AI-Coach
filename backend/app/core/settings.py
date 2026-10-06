@@ -227,6 +227,104 @@ class Settings(BaseSettings):
     # this RELATIVE fraction. OWNER CHOICE (pending owner confirmation).
     engine_threshold_change_margin: float = 0.05
 
+    # --- Engine readiness/intensity/durability constants (RID-10;
+    # §7.4-§7.6, §14) -------------------------------------------------------
+    # Every constant of the readiness, intensity-distribution and durability
+    # engine is explicit, sourced and configurable, mirroring the documented
+    # module constants in app/engine/readiness.py, app/engine/intensity.py
+    # and app/engine/durability.py (which remain the engine's fallbacks; the
+    # engine never imports settings, §6). The settings→engine mapping helper
+    # app.db.engine_readiness_config follows the ZON-11 pattern of
+    # app.db.zones_config; nothing in app/ consumes these constants yet
+    # (Feature 6 will wire the get_readiness / get_intensity_distribution
+    # tools), so the helper has no caller by design today.
+    # HRV readiness (§7.4): 7-day rolling ln(rMSSD) mean vs the 60-day own
+    # baseline, flagged strictly outside ± 0.5 SD. Window and baseline
+    # LITERATURE (Plews et al. 2013); the 0.5 SD smallest-worthwhile-change
+    # band LITERATURE (Kiviniemi et al. 2007); the 70% baseline completeness
+    # floor (42 of 60 days) OWNER CHOICE — the owner's wellness rows are
+    # partly populated and a strict requirement would leave the signal
+    # permanently unassessable.
+    engine_hrv_window_days: int = 7
+    engine_hrv_baseline_days: int = 60
+    engine_hrv_band_sd: float = 0.5
+    engine_hrv_min_baseline_valid_days: int = 42
+    # Resting-HR readiness (§7.4): the as-of value vs the 30-day own
+    # baseline. Baseline window LITERATURE (§7.4); the 0.5 SD band (the SWC
+    # logic extended to resting HR) and the 70% completeness floor OWNER
+    # CHOICE.
+    engine_rhr_baseline_days: int = 30
+    engine_rhr_band_sd: float = 0.5
+    engine_rhr_min_baseline_valid_days: int = 21
+    # Sleep readiness (§7.4): duration vs the athlete's own baseline. The
+    # brief fixes no sleep window: baseline, band and completeness floor are
+    # OWNER CHOICE, kept symmetric with resting HR.
+    engine_sleep_baseline_days: int = 30
+    engine_sleep_band_sd: float = 0.5
+    engine_sleep_min_baseline_valid_days: int = 21
+    # Fraction of the HRV rolling window that must carry a measurement
+    # before the signal assesses. OWNER CHOICE: strict 1.0 (only fully
+    # complete windows count), mirroring the gap rules of app.engine.zones /
+    # app.engine.load; relax explicitly for gap-heavy streams.
+    engine_min_window_valid_fraction: float = 1.0
+    # TSB strictly below this value is the "very negative" adverse signal
+    # of the multi-signal warning rule (§7.4). OWNER CHOICE: the brief says
+    # "very negative" without a number; -10.0 follows the TrainingPeaks /
+    # Friel high-fatigue onset and fires earlier than the deep-overreach
+    # zone (-30) on purpose — the rule already requires two or more
+    # agreeing signals before suggesting anything.
+    engine_tsb_very_negative: float = -10.0
+    # 3-zone intensity model (§7.5): first- (LT1) and second- (LT2)
+    # threshold cut points per modality as "modality:pct" comma pairs
+    # (bike_power % FTP, run_hr / bike_hr % LTHR, swim_pace % CSS). Second
+    # thresholds sit at the top of the published Threshold zone (Coggan Z4
+    # 106% FTP; Friel Z4 100% LTHR; the Tempo/CSS boundary 100% CSS):
+    # LITERATURE (Seiler 2010 for the 3-zone construct). First thresholds
+    # sit at the top of each table's last fully aerobic zone: OWNER CHOICE —
+    # no source publishes LT1 as an exact percentage.
+    engine_first_threshold_pcts: str = (
+        "bike_power:76,run_hr:90,bike_hr:90,swim_pace:95"
+    )
+    engine_second_threshold_pcts: str = (
+        "bike_power:106,run_hr:100,bike_hr:100,swim_pace:100"
+    )
+    # Which source zone table each sport's sessions use. OWNER CHOICE: bike
+    # rides use the Coggan power table, runs the Friel run HR table, swims
+    # the CSS pace table (the primary intensity modality per §7.3/§7.5).
+    engine_sport_modality: str = "run:run_hr,bike:bike_power,swim:swim_pace"
+    # Descriptive pattern-comparison reference bands (§7.5; Seiler 2010
+    # polarized ~80/20; Stöggl & Sperlich 2014 pyramidal): six percentages
+    # Z1_lo,Z1_hi,Z2_lo,Z2_hi,Z3_lo,Z3_hi. The papers report means, not
+    # decision bands, so the bands around the published point values are
+    # OWNER-REVIEWABLE choices.
+    engine_polarized_bands: str = "70,90,0,15,10,30"
+    engine_pyramidal_bands: str = "55,75,15,35,5,20"
+    # Minimum weekly time in zone (seconds) before a pattern label is
+    # reported at all. OWNER CHOICE: 2 h — the brief fixes no number, and at
+    # low weekly volume the percentages reflect session choice more than
+    # distribution.
+    engine_min_pattern_week_seconds: float = 7200.0
+    # Aerobic decoupling reference band (§7.6): Pa:HR strictly below 5% on
+    # long steady sessions suggests good aerobic durability. LITERATURE
+    # (Friel; the boundary is strict — exactly 5% counts as beyond).
+    engine_decoupling_reference_band: float = 0.05
+    # Steadiness guard for decoupling: the halves' intensity measures (NP /
+    # NGS) must agree within this relative drift, or the session is rejected
+    # as not steady. OWNER CHOICE: no source publishes a steadiness
+    # threshold; 15% tolerates normal cardiac drift on a steady long ride
+    # while excluding interval-style swings.
+    engine_max_half_intensity_drift: float = 0.15
+    # Durability trends on long sessions (§7.6; Maunder et al. 2021
+    # motivate the trend itself, not these operational numbers — all three
+    # are OWNER CHOICE): the "long session" threshold (90 min, below it the
+    # decoupling measures pacing rather than durability), the trailing
+    # window (84 days = 12 weeks, roughly one training build) and the
+    # minimum eligible sessions (two points cannot be distinguished from
+    # noise).
+    engine_min_long_session_seconds: float = 5400.0
+    engine_trend_window_days: int = 84
+    engine_min_trend_sessions: int = 3
+
     # WhatsApp via Twilio (§5.1).
     twilio_account_sid: str = ""
     twilio_auth_token: str = ""

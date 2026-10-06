@@ -15,6 +15,11 @@ from typing import Any
 import pytest
 
 from app.core.settings import Settings
+from app.db.engine_readiness_config import (
+    parse_reference_bands,
+    parse_sport_modality,
+    parse_threshold_pcts,
+)
 from app.db.zones_config import (
     parse_ftp_precedence,
     parse_int_ladder,
@@ -25,6 +30,21 @@ from app.engine.banister import (
     DEFAULT_TAU1_DAYS,
     DEFAULT_TAU2_DAYS,
 )
+from app.engine.durability import (
+    DEFAULT_DECOUPLING_REFERENCE_BAND,
+    DEFAULT_MAX_HALF_INTENSITY_DRIFT,
+    DEFAULT_MIN_LONG_SESSION_SECONDS,
+    DEFAULT_MIN_TREND_SESSIONS,
+    DEFAULT_TREND_WINDOW_DAYS,
+)
+from app.engine.intensity import (
+    DEFAULT_FIRST_THRESHOLD_PCTS,
+    DEFAULT_MIN_PATTERN_WEEK_SECONDS,
+    DEFAULT_POLARIZED_BANDS,
+    DEFAULT_PYRAMIDAL_BANDS,
+    DEFAULT_SECOND_THRESHOLD_PCTS,
+    SPORT_MODALITY,
+)
 from app.engine.load import NP_WINDOW_SAMPLES
 from app.engine.pmc import (
     ACWR_TAU_ACUTE_DAYS,
@@ -32,6 +52,20 @@ from app.engine.pmc import (
     DEFAULT_MIN_HISTORY_DAYS,
     DEFAULT_TAU_ATL_DAYS,
     DEFAULT_TAU_CTL_DAYS,
+)
+from app.engine.readiness import (
+    DEFAULT_HRV_BAND_SD,
+    DEFAULT_HRV_BASELINE_DAYS,
+    DEFAULT_HRV_MIN_BASELINE_VALID_DAYS,
+    DEFAULT_HRV_WINDOW_DAYS,
+    DEFAULT_MIN_WINDOW_VALID_FRACTION,
+    DEFAULT_RHR_BAND_SD,
+    DEFAULT_RHR_BASELINE_DAYS,
+    DEFAULT_RHR_MIN_BASELINE_VALID_DAYS,
+    DEFAULT_SLEEP_BAND_SD,
+    DEFAULT_SLEEP_BASELINE_DAYS,
+    DEFAULT_SLEEP_MIN_BASELINE_VALID_DAYS,
+    DEFAULT_TSB_VERY_NEGATIVE,
 )
 from app.engine.zones import (
     CP_MAX_DURATION_S,
@@ -210,6 +244,220 @@ class TestZoneSettingsDefaultsMatchEngineConstants:
     def test_threshold_change_margin(self) -> None:
         # ZON-9 margin: OWNER CHOICE (pending owner confirmation).
         assert _settings().engine_threshold_change_margin == DEFAULT_THRESHOLD_CHANGE_MARGIN == 0.05
+
+
+class TestReadinessSettingsDefaultsMatchEngineConstants:
+    """Every readiness constant is a sourced, configurable field (RID-10).
+
+    Contract: the Settings defaults are EXACTLY the pure engine's documented
+    module constants in ``app.engine.readiness`` (the fallbacks); the
+    mapping helper ``app.db.engine_readiness_config`` passes them into the
+    engine, which never imports settings (§6).
+    """
+
+    def test_hrv_constants(self) -> None:
+        # LITERATURE: 7-day window / 60-day baseline (Plews et al. 2013),
+        # ± 0.5 SD smallest-worthwhile-change band (Kiviniemi et al. 2007).
+        # OWNER CHOICE: 70% baseline completeness (42 of 60 days).
+        settings = _settings()
+        assert settings.engine_hrv_window_days == DEFAULT_HRV_WINDOW_DAYS == 7
+        assert settings.engine_hrv_baseline_days == DEFAULT_HRV_BASELINE_DAYS == 60
+        assert settings.engine_hrv_band_sd == DEFAULT_HRV_BAND_SD == 0.5
+        assert (
+            settings.engine_hrv_min_baseline_valid_days
+            == DEFAULT_HRV_MIN_BASELINE_VALID_DAYS
+            == 42
+        )
+
+    def test_resting_hr_constants(self) -> None:
+        # Baseline window LITERATURE (§7.4); band and completeness floor
+        # OWNER CHOICE (SWC logic extended to resting HR).
+        settings = _settings()
+        assert settings.engine_rhr_baseline_days == DEFAULT_RHR_BASELINE_DAYS == 30
+        assert settings.engine_rhr_band_sd == DEFAULT_RHR_BAND_SD == 0.5
+        assert (
+            settings.engine_rhr_min_baseline_valid_days
+            == DEFAULT_RHR_MIN_BASELINE_VALID_DAYS
+            == 21
+        )
+
+    def test_sleep_constants(self) -> None:
+        # All OWNER CHOICE (the brief fixes no sleep window); symmetric with
+        # resting HR.
+        settings = _settings()
+        assert settings.engine_sleep_baseline_days == DEFAULT_SLEEP_BASELINE_DAYS == 30
+        assert settings.engine_sleep_band_sd == DEFAULT_SLEEP_BAND_SD == 0.5
+        assert (
+            settings.engine_sleep_min_baseline_valid_days
+            == DEFAULT_SLEEP_MIN_BASELINE_VALID_DAYS
+            == 21
+        )
+
+    def test_window_completeness_and_tsb_threshold(self) -> None:
+        # OWNER CHOICE: strict 1.0 window completeness; TSB "very negative"
+        # threshold -10.0 (the brief gives no number).
+        settings = _settings()
+        assert (
+            settings.engine_min_window_valid_fraction
+            == DEFAULT_MIN_WINDOW_VALID_FRACTION
+            == 1.0
+        )
+        assert settings.engine_tsb_very_negative == DEFAULT_TSB_VERY_NEGATIVE == -10.0
+
+
+class TestIntensitySettingsDefaultsMatchEngineConstants:
+    """Every intensity constant is a sourced, configurable field (RID-10)."""
+
+    def test_threshold_pct_maps(self) -> None:
+        # First thresholds (top of source Z2): OWNER CHOICE. Second
+        # thresholds (top of the published Threshold zone): LITERATURE cut
+        # points (Coggan Z4, Friel LTHR, CSS = Wakayoshi et al. 1992).
+        settings = _settings()
+        assert parse_threshold_pcts(
+            settings.engine_first_threshold_pcts,
+            field="ENGINE_FIRST_THRESHOLD_PCTS",
+        ) == DEFAULT_FIRST_THRESHOLD_PCTS == {
+            "bike_power": 76.0,
+            "run_hr": 90.0,
+            "bike_hr": 90.0,
+            "swim_pace": 95.0,
+        }
+        assert parse_threshold_pcts(
+            settings.engine_second_threshold_pcts,
+            field="ENGINE_SECOND_THRESHOLD_PCTS",
+        ) == DEFAULT_SECOND_THRESHOLD_PCTS == {
+            "bike_power": 106.0,
+            "run_hr": 100.0,
+            "bike_hr": 100.0,
+            "swim_pace": 100.0,
+        }
+
+    def test_sport_modality_map(self) -> None:
+        # OWNER CHOICE: bike -> Coggan power, run -> Friel run HR,
+        # swim -> CSS pace.
+        assert parse_sport_modality(
+            _settings().engine_sport_modality, field="ENGINE_SPORT_MODALITY"
+        ) == SPORT_MODALITY == {"run": "run_hr", "bike": "bike_power", "swim": "swim_pace"}
+
+    def test_pattern_bands_and_minimum_volume(self) -> None:
+        # Bands OWNER-REVIEWABLE around the published point values (Seiler
+        # 2010 polarized; Stöggl & Sperlich 2014 pyramidal). Minimum volume
+        # 2 h: OWNER CHOICE (the brief fixes no number).
+        settings = _settings()
+        assert parse_reference_bands(
+            settings.engine_polarized_bands, field="ENGINE_POLARIZED_BANDS"
+        ) == DEFAULT_POLARIZED_BANDS == ((70.0, 90.0), (0.0, 15.0), (10.0, 30.0))
+        assert parse_reference_bands(
+            settings.engine_pyramidal_bands, field="ENGINE_PYRAMIDAL_BANDS"
+        ) == DEFAULT_PYRAMIDAL_BANDS == ((55.0, 75.0), (15.0, 35.0), (5.0, 20.0))
+        assert (
+            settings.engine_min_pattern_week_seconds
+            == DEFAULT_MIN_PATTERN_WEEK_SECONDS
+            == 7200.0
+        )
+
+
+class TestDurabilitySettingsDefaultsMatchEngineConstants:
+    """Every durability constant is a sourced, configurable field (RID-10)."""
+
+    def test_decoupling_constants(self) -> None:
+        # Reference band LITERATURE (Friel < 5%); steadiness drift limit
+        # OWNER CHOICE (no published threshold).
+        settings = _settings()
+        assert (
+            settings.engine_decoupling_reference_band
+            == DEFAULT_DECOUPLING_REFERENCE_BAND
+            == 0.05
+        )
+        assert (
+            settings.engine_max_half_intensity_drift
+            == DEFAULT_MAX_HALF_INTENSITY_DRIFT
+            == 0.15
+        )
+
+    def test_trend_constants(self) -> None:
+        # All OWNER CHOICE: Maunder et al. 2021 motivate the trend itself,
+        # not the operational thresholds.
+        settings = _settings()
+        assert (
+            settings.engine_min_long_session_seconds
+            == DEFAULT_MIN_LONG_SESSION_SECONDS
+            == 5400.0
+        )
+        assert settings.engine_trend_window_days == DEFAULT_TREND_WINDOW_DAYS == 84
+        assert settings.engine_min_trend_sessions == DEFAULT_MIN_TREND_SESSIONS == 3
+
+
+class TestRid10SettingsAreConfigurableFromEnvironment:
+    def test_readiness_constants_parse_from_env(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ENGINE_HRV_WINDOW_DAYS", "5")
+        monkeypatch.setenv("ENGINE_HRV_BASELINE_DAYS", "56")
+        monkeypatch.setenv("ENGINE_HRV_BAND_SD", "0.75")
+        monkeypatch.setenv("ENGINE_HRV_MIN_BASELINE_VALID_DAYS", "40")
+        monkeypatch.setenv("ENGINE_RHR_BASELINE_DAYS", "21")
+        monkeypatch.setenv("ENGINE_SLEEP_BAND_SD", "0.6")
+        monkeypatch.setenv("ENGINE_MIN_WINDOW_VALID_FRACTION", "0.8")
+        monkeypatch.setenv("ENGINE_TSB_VERY_NEGATIVE", "-15")
+        settings = _settings()
+        assert settings.engine_hrv_window_days == 5
+        assert settings.engine_hrv_baseline_days == 56
+        assert settings.engine_hrv_band_sd == 0.75
+        assert settings.engine_hrv_min_baseline_valid_days == 40
+        assert settings.engine_rhr_baseline_days == 21
+        assert settings.engine_sleep_band_sd == 0.6
+        assert settings.engine_min_window_valid_fraction == 0.8
+        assert settings.engine_tsb_very_negative == -15.0
+
+    def test_intensity_constants_parse_from_env(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(
+            "ENGINE_FIRST_THRESHOLD_PCTS",
+            "bike_power:75,run_hr:89,bike_hr:89,swim_pace:94",
+        )
+        monkeypatch.setenv(
+            "ENGINE_SECOND_THRESHOLD_PCTS",
+            "bike_power:105,run_hr:99,bike_hr:99,swim_pace:100",
+        )
+        monkeypatch.setenv(
+            "ENGINE_SPORT_MODALITY", "run:run_hr,bike:bike_hr,swim:swim_pace"
+        )
+        monkeypatch.setenv("ENGINE_POLARIZED_BANDS", "65,85,5,20,15,35")
+        monkeypatch.setenv("ENGINE_MIN_PATTERN_WEEK_SECONDS", "5400")
+        settings = _settings()
+        assert parse_threshold_pcts(
+            settings.engine_first_threshold_pcts,
+            field="ENGINE_FIRST_THRESHOLD_PCTS",
+        ) == {
+            "bike_power": 75.0,
+            "run_hr": 89.0,
+            "bike_hr": 89.0,
+            "swim_pace": 94.0,
+        }
+        assert parse_sport_modality(
+            settings.engine_sport_modality, field="ENGINE_SPORT_MODALITY"
+        ) == {"run": "run_hr", "bike": "bike_hr", "swim": "swim_pace"}
+        assert parse_reference_bands(
+            settings.engine_polarized_bands, field="ENGINE_POLARIZED_BANDS"
+        ) == ((65.0, 85.0), (5.0, 20.0), (15.0, 35.0))
+        assert settings.engine_min_pattern_week_seconds == 5400.0
+
+    def test_durability_constants_parse_from_env(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("ENGINE_DECOUPLING_REFERENCE_BAND", "0.04")
+        monkeypatch.setenv("ENGINE_MAX_HALF_INTENSITY_DRIFT", "0.20")
+        monkeypatch.setenv("ENGINE_MIN_LONG_SESSION_SECONDS", "4500")
+        monkeypatch.setenv("ENGINE_TREND_WINDOW_DAYS", "56")
+        monkeypatch.setenv("ENGINE_MIN_TREND_SESSIONS", "4")
+        settings = _settings()
+        assert settings.engine_decoupling_reference_band == 0.04
+        assert settings.engine_max_half_intensity_drift == 0.20
+        assert settings.engine_min_long_session_seconds == 4500.0
+        assert settings.engine_trend_window_days == 56
+        assert settings.engine_min_trend_sessions == 4
 
 
 class TestZoneSettingsAreConfigurableFromEnvironment:
