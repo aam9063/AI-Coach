@@ -120,3 +120,22 @@ class AthleteProfile(BaseModel):
         if isinstance(value, int) and not isinstance(value, bool):
             return str(value)
         return value
+
+
+class ActivityUploadResult(BaseModel):
+    """Outcome of ``POST /athlete/{id}/activities`` (multipart file upload).
+
+    The endpoint returns **201 when at least one activity was created and 200
+    when everything was a duplicate** (dedup by a hash of the file contents,
+    official cookbook), so a 200 is a legitimate, expected outcome — never an
+    error. ``created`` distinguishes the two: ``True`` (201) means at least
+    one activity was created and ``activity_ids`` carries the ids from the
+    response's JSON array of created activities; ``False`` (200) means the
+    file was already present — re-uploads are safe no-ops and must be
+    reported as a duplicate, not silently dropped (§ fit-intake constraints).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    created: bool
+    activity_ids: tuple[str, ...] = ()

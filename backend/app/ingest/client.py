@@ -14,6 +14,8 @@ Endpoints used (§5.1):
 - ``GET /athlete/{id}`` (athlete profile: resting HR, weight, sex; shape live-verified 2026-10-02)
 - ``GET /activity/{id}/file`` (original upload; response is GZIP-compressed)
 - ``GET /activity/{id}/fit-file`` (generated FIT file)
+- ``POST /athlete/{id}/activities`` (multipart activity-file upload; 201 =
+  created, 200 = all duplicates — dedup by file-content hash, cookbook-verified)
 
 Auth: HTTP Basic with the literal username ``API_KEY`` and the personal API
 key as the password (§5.1). Athlete id ``0`` refers to the key's owner; a
@@ -29,6 +31,7 @@ from __future__ import annotations
 import gzip
 import time
 from types import TracebackType
+from typing import Any
 
 import httpx
 
@@ -42,7 +45,14 @@ from app.ingest.exceptions import (
     IntervalsRateLimitError,
     IntervalsServerError,
 )
-from app.ingest.models import Activity, AthleteProfile, SportSettings, Stream, Wellness
+from app.ingest.models import (
+    Activity,
+    ActivityUploadResult,
+    AthleteProfile,
+    SportSettings,
+    Stream,
+    Wellness,
+)
 
 # Module-level indirection so tests can observe backoff without real sleeps.
 _sleep = time.sleep
@@ -181,6 +191,53 @@ class IntervalsClient:
         response = self._request("GET", f"/activity/{activity_id}/fit-file")
         return response.content
 
+    def upload_activity_file(
+        self,
+        data: bytes,
+        *,
+        filename: str,
+        name: str | None = None,
+        description: str | None = None,
+    ) -> ActivityUploadResult:
+        """Upload an activity file to Intervals.icu as a multipart form.
+
+        ``POST /athlete/{id}/activities`` — accepts ``multipart/form-data``
+        with the file in the form field named ``file`` plus optional ``name``
+        and ``description`` fields; ``name``/``description`` are only sent
+        when provided. The file may be ``.fit``, ``.gpx``, ``.fit.gz``,
+        ``.gpx.gz`` or a zip containing them (verified: official API
+        cookbook).
+
+        Response semantics (official cookbook): **201 when at least one
+        activity was created, 200 when everything was a duplicate** — the
+        platform de-duplicates by a hash of the file contents, so re-uploading
+        the same file is safe and reported here as a duplicate, never as an
+        error. The response body is a JSON array of the created activities;
+        their ids are carried in ``ActivityUploadResult.activity_ids``.
+
+        Auth is unchanged: HTTP Basic in the ``Authorization`` header only —
+        the API key never appears in the body or the query (§5.1).
+        4xx responses map to the client's typed exceptions and 429/5xx are
+        retried with exponential backoff, exactly like every other endpoint.
+        """
+        form: dict[str, str] = {}
+        if name is not None:
+            form["name"] = name
+        if description is not None:
+            form["description"] = description
+        response = self._request(
+            "POST",
+            f"/athlete/{self._settings.intervals_athlete_id}/activities",
+            files={"file": (filename, data)},
+            data=form,
+        )
+        created_ids = tuple(
+            str(item["id"]) for item in response.json()
+        )
+        return ActivityUploadResult(
+            created=response.status_code == 201, activity_ids=created_ids
+        )
+
     # --- Internals ---------------------------------------------------------------
 
     @staticmethod
@@ -195,12 +252,16 @@ class IntervalsClient:
         method: str,
         path: str,
         params: dict[str, str] | None = None,
+        files: dict[str, Any] | None = None,
+        data: dict[str, str] | None = None,
     ) -> httpx.Response:
         """Perform a request, retrying 429/5xx with exponential backoff."""
         max_retries = self._settings.intervals_max_retries
         backoff_factor = self._settings.intervals_backoff_factor
         for attempt in range(max_retries + 1):
-            response = self._client.request(method, path, params=params)
+            response = self._client.request(
+                method, path, params=params, files=files, data=data
+            )
             retriable = response.status_code == 429 or response.status_code >= 500
             if not retriable or attempt >= max_retries:
                 return self._raise_for_status(response)
