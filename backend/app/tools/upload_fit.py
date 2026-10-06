@@ -69,7 +69,11 @@ corrupt gzip is reported as an analysis failure. The archive keeps the
 UPLOADED bytes (compressed for ``.fit.gz``): §5.2 archives the file as the
 owner handed it over — exactly the bytes the source of record received and
 content-hash-dedups — and the decompressed FIT is always recoverable from
-the gzip.
+the gzip. Note on the archived filename: the storage key is always
+``<activity_id>.fit`` regardless of the uploaded container, so a
+``.fit.gz`` upload lands under a ``.fit`` name and consumers must detect
+gzip by magic bytes (``0x1f 0x8b``), exactly as the client does when
+downloading.
 
 Provenance rule (§5.3): the file is the owner's own recording. This tool
 NEVER talks to Strava's API and never will — it takes local paths and
