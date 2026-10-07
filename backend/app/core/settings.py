@@ -349,6 +349,18 @@ class Settings(BaseSettings):
     twilio_whatsapp_from: str = ""
     # Comma-separated list of allowed WhatsApp numbers.
     twilio_whatsapp_allowlist: str = ""
+    # Public HTTPS URL of the inbound webhook exactly as Twilio sees it
+    # (§9.1), e.g. the development tunnel https://<name>.trycloudflare.com.
+    # TRAP (documented for the operator): signature validation MUST run
+    # against the URL Twilio signed — behind a tunnel that is THIS URL, and
+    # validating against the locally served one (http://localhost:8000)
+    # silently rejects every real message with 403.
+    # Default (empty): validation still ALWAYS runs (there is no switch to
+    # skip it and the webhook fails closed without an auth token), but it
+    # validates against the locally served request URL — correct for direct
+    # local access and the test suite. Behind a development tunnel you MUST
+    # set this variable, or every real message is rejected with 403.
+    twilio_public_webhook_url: str = ""
 
     # --- LLM providers (switchable per §6; both optional placeholders) -----
     anthropic_api_key: str = ""
