@@ -1,6 +1,6 @@
 # ODD Feature: whatsapp-agent
 
-Status: pending | Feature 6 of 11 (brief section 12) | Source: PROJECT_BRIEF.md
+Status: in progress | Feature 6 of 11 (brief section 12) | Source: PROJECT_BRIEF.md
 
 ## Objective
 
@@ -70,6 +70,14 @@ To be filled when the feature is implemented (commits, test runs, cross-checks).
 
 ## Progress
 
-Not started.
+In progress (Feature 6/11) on branch `feat/whatsapp-agent`, branched from `dev` (which already carries Features 1-5, verification included — no stacking needed this time).
 
-Commits: (none yet)
+Owner decisions taken before starting (§15 and sequencing):
+- **LLM provider: OpenAI** (the provider choice the brief requires before wiring a real one). The adapter stays provider-agnostic with a deterministic fake for tests, and the real provider is wired once a key exists.
+- **Voice notes / STT: postponed** (WA-10 deferred) — the text path comes first.
+- **Webhook exposure: a development tunnel**, not a deployment.
+- Features 4-5 were built first precisely so this agent's `get_zones` / `get_readiness` tools wrap real engine outputs instead of stubs.
+
+Environment gap (blocks only the live end-to-end, not the work): **no credentials are configured yet** — `OPENAI_API_KEY`, `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_WHATSAPP_FROM` and `TWILIO_WHATSAPP_ALLOWLIST` are all empty in the gitignored env files, and Docker had to be started by hand at the beginning of this session. So every checklist item is built test-first against deterministic fakes (mocked HTTP, a fake LLM adapter, eager Celery) and `WA-12`'s live verification waits for the owner's Twilio sandbox credentials, their allowlisted number, the OpenAI key and a running tunnel.
+
+Commits: (pending)
