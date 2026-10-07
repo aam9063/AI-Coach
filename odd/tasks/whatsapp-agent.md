@@ -42,14 +42,14 @@ The coach must "talk like a chat but reason like a sports scientist" (PROJECT_BR
 - [ ] `WA-1`: RED: webhook security tests — request with invalid/missing `X-Twilio-Signature` is rejected; sender not in the allowlist is rejected; valid signature + allowlisted sender proceeds (§9.1, §12.6).
 - [ ] `WA-2`: GREEN: implement `POST /webhooks/whatsapp` with signature validation, allowlist check, fast ack and Celery task hand-off (§9.1).
 - [ ] `WA-3`: RED+GREEN: Celery task processes an inbound message end-to-end against a fake LLM adapter: reply sent via Twilio REST, `message_log` row written with tool calls and trace id (§6, §9.1).
-- [ ] `WA-4`: RED+GREEN: LLM adapter interface with a config-switchable provider and a deterministic fake implementation for tests (§6); ask the owner for the provider choice per §15 before wiring a real provider.
-- [ ] `WA-5`: RED+GREEN: tool-calling loop with max step limit and per-conversation token/cost budget; tool registry returns typed Pydantic models with `computed_at`, `engine_version`, data coverage (§9.2, §9.3).
+- [ ] `WA-4`: RED+GREEN: configure the **Strands Agents SDK** model (owner decision, see the SDK section below) — the OpenAI provider for real use and a **deterministic fake `Model`** for every test, so the suite never calls a provider. The provider stays switchable by configuration (one model object handed to the agent, per §6).
+- [ ] `WA-5`: RED+GREEN: the tool-calling **loop is the SDK's**; our work is the guardrails around it — pass `limits=Limits(turns=…, total_tokens=…)` per invocation, enforce the per-conversation token/cost budget from `result.metrics.accumulated_usage`, and audit step/tool usage through hooks (`BeforeToolCallEvent` can even cancel a call). The tool registry still returns typed Pydantic models with `computed_at`, `engine_version` and data coverage (§9.2, §9.3).
 - [ ] `WA-6`: RED+GREEN: implement engine-backed tools `get_load_status`, `get_zones`, `get_readiness`, `get_activity_analysis`, `get_intensity_distribution`, `log_subjective`, `propose_threshold_update` as thin wrappers over Features 3–5 (§9.3); `predict_race`, `plot_metric`, `search_evidence` wired to Features 8, 7, 9.
 - [ ] `WA-7`: RED+GREEN: insufficient-data rule — a tool reporting insufficient data makes the agent state what is missing and how to get it (§9.3).
 - [ ] `WA-8`: RED+GREEN: conversation memory (last N turns + rolling summary in DB) and system prompt with athlete context, metric units, language mirroring (Spanish/English) and WhatsApp formatting constraints (≤ ~1,000 chars, no markdown tables) (§9.2).
 - [ ] `WA-9`: RED+GREEN: citation rule — replies containing scientific claims include at least one `(Author, Year)` citation; unsupported claims get an explicit "no evidence" statement (§3, §8); medical/pain signals trigger reduce-load + professional referral, never diagnosis (§3).
 - [ ] `WA-10`: RED+GREEN: voice-note flow — media download, STT transcription via configurable provider, transcript treated as user message, transcript stored (audio not stored after processing) (§9.1).
-- [ ] `WA-11`: Integrate Langfuse tracing per turn: prompt version, tool calls with inputs/outputs, tokens, cost, latency; prompt versions stored in repo (§13).
+- [ ] `WA-11`: Integrate Langfuse tracing per turn (prompt version, tool calls with inputs/outputs, tokens, cost, latency) through the SDK's own OpenTelemetry surface (`strands.telemetry`) exported over OTLP, rather than a hand-rolled tracer; prompt versions stored in repo (§13).
 - [ ] `WA-12`: End-to-end verification against the running stack: "¿cómo estoy de forma?" returns CTL/ATL/TSB verified against DB values; non-allowlisted number rejected; every turn has a trace (§12.6).
 
 ## Acceptance criteria
@@ -67,6 +67,22 @@ Directly implied conditions:
 ## Verification evidence
 
 To be filled when the feature is implemented (commits, test runs, cross-checks).
+
+## Agent runtime: Strands Agents SDK (owner decision, 2026-10-07)
+
+The agent is built on the **Strands Agents SDK** (`strands-agents`, Apache-2.0, Python 3.10+, 1.58.1 at the time of the decision) instead of a hand-rolled loop. A spike against the real package verified every extension point this feature depends on, so the implementation does not have to rediscover them:
+
+| Need | Verified seam |
+| --- | --- |
+| Deterministic tests with no provider calls | A fake subclass of `strands.models.Model` runs the **real agent loop** (the spike exercised a tool-use turn plus a final answer, zero network). The loop only needs `stream`; `count_tokens`/`get_config`/`update_config`/`structured_output` complete the protocol. |
+| Max steps | `Limits(turns=…, output_tokens=…, total_tokens=…)` passed **per invocation** (`agent(prompt, limits=…)`) — the constructor has no such parameter, which is the trap to avoid. |
+| Token/cost budget | `result.metrics.accumulated_usage` (input/output/total tokens) and `accumulated_metrics` (latency) are returned per invocation; the per-conversation budget is ours to accumulate. |
+| Conversation memory across Celery tasks | `strands.session` provides `SessionManager` and a **`RepositorySessionManager` + `SessionRepository`** pair, i.e. pluggable persistence — ours backed by the project's database, because each Celery task is a separate process. |
+| Tracing to Langfuse | `strands.telemetry` (StrandsTelemetry/Tracer, OpenTelemetry-based) exported over OTLP; the exporter wiring is the part left to verify in WA-11. |
+| Tools from our engine | `@tool` derives the schema from the function's **docstring and type hints** (`days: int = 7` became `{"type": "integer", "default": 7}`) and our tools may return Pydantic models. The docstring is what the model reads, so it is part of the behaviour. |
+| Intervention | Hooks expose `BeforeToolCallEvent` with `cancel_tool`, plus `BeforeInvocationEvent`, `BeforeModelCallEvent`, `MessageAddedEvent`, and after-events carrying results. |
+
+**Security constraint that comes with the SDK**: it can load tools from a directory (`load_tools_from_directory`) and there is a companion `strands-agents-tools` package with file-editing, shell and HTTP tools. The agent must be given an **explicit list containing only this project's engine tools** — never the directory loader, never the vended tools — otherwise the model could execute commands on the host.
 
 ## Progress
 
