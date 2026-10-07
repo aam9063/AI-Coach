@@ -360,6 +360,9 @@ class Settings(BaseSettings):
     # validates against the locally served request URL — correct for direct
     # local access and the test suite. Behind a development tunnel you MUST
     # set this variable, or every real message is rejected with 403.
+    # FULL URL Twilio signs, INCLUDING the /webhooks/whatsapp path
+    # (e.g. https://<tunnel>.trycloudflare.com/webhooks/whatsapp): a bare
+    # host is used verbatim and would reject every real message.
     twilio_public_webhook_url: str = ""
 
     # --- LLM providers (switchable per §6; both optional placeholders) -----
