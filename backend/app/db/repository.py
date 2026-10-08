@@ -16,10 +16,14 @@ ZON-10 additions: ``athlete_profile`` (idempotent upsert keyed by
 ``wellness``/``daily_load``) and ``athlete_threshold_history`` (an
 APPEND-ONLY plain insert — history rows are never updated or deleted,
 brief §6/§7.3).
+
+WA-6 addition: ``subjective_log`` (idempotent upsert keyed by
+``(athlete_id, date)`` — the owner's daily subjective report from the
+conversation, the readiness engine's fatigue context signal, §7.4).
 """
 
 from collections.abc import Mapping, Sequence
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -33,6 +37,7 @@ from app.db.models import (
     DailyLoadRow,
     ReadinessSnapshotRow,
     SessionDurabilityRow,
+    SubjectiveLogRow,
     WeeklyIntensityRow,
     WellnessRow,
 )
@@ -492,6 +497,63 @@ async def upsert_session_durability(
             set_=values,
         )
         .returning(SessionDurabilityRow)
+    )
+    result = await session.execute(stmt)
+    await session.flush()
+    return result.scalar_one()
+
+
+async def upsert_subjective_log(
+    session: AsyncSession,
+    *,
+    athlete_id: int = 1,
+    date: date,
+    rpe: float | None,
+    fatigue: int | None,
+    soreness: int | None,
+    notes: str | None,
+    recorded_at: datetime | None = None,
+) -> SubjectiveLogRow:
+    """Insert or update one subjective report keyed by (athlete_id, date).
+
+    WA-6 (brief §9.3/§7.4). Idempotent per
+    ``uq_subjective_log_athlete_date``: logging the day's report twice
+    from the conversation UPDATES the row instead of duplicating it.
+    MERGE semantics: a field passed as ``None`` (not reported in this
+    call) keeps its earlier value — a later RPE note must never silently
+    erase the fatigue the athlete reported that morning — while a field
+    passed with a value overwrites it (the last value of the day is the
+    one of record). The row is OWNER-ENTERED INPUT data (the
+    ``activity.rpe`` LOAD-12 precedent): no ``engine_version``;
+    ``recorded_at`` stamps the last write. Range validation belongs to
+    the caller (the ``log_subjective`` tool rejects out-of-range values
+    with a reportable reason, never storing them silently).
+    ``recorded_at`` defaults to now (UTC) when the caller does not pin
+    it. Flushes without committing.
+    """
+    values: dict[str, Any] = {
+        "athlete_id": athlete_id,
+        "date": date,
+        "rpe": rpe,
+        "fatigue": fatigue,
+        "soreness": soreness,
+        "notes": notes,
+        "recorded_at": recorded_at if recorded_at is not None else datetime.now(UTC),
+    }
+    # Merge on conflict: None means "not reported in this call", so the
+    # update only carries the fields that carry a value (+ the stamp).
+    update_values: dict[str, Any] = {
+        key: value for key, value in values.items() if value is not None
+    }
+    update_values["recorded_at"] = values["recorded_at"]
+    stmt = (
+        pg_insert(SubjectiveLogRow)
+        .values(**values)
+        .on_conflict_do_update(
+            index_elements=[SubjectiveLogRow.athlete_id, SubjectiveLogRow.date],
+            set_=update_values,
+        )
+        .returning(SubjectiveLogRow)
     )
     result = await session.execute(stmt)
     await session.flush()

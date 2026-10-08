@@ -13,7 +13,9 @@ from app.core.settings import get_settings
 # Explicit include (ING-8): the Compose worker command loads this module
 # directly, so the task module is imported via `include` rather than
 # `autodiscover_tasks` — verifiable with `celery -A ... inspect registered`.
-TASK_MODULES = ["app.scheduler.tasks"]
+# ``whatsapp_tasks`` is the WhatsApp inbound-message hand-off target (§9.1,
+# ODD task WA-2): the webhook only validates and dispatches.
+TASK_MODULES = ["app.scheduler.tasks", "app.scheduler.whatsapp_tasks"]
 
 
 def create_celery_app() -> Celery:

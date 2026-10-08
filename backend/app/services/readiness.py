@@ -23,9 +23,15 @@ calendar days ending at ``window_end``:
    passed in MINUTES (the wellness storage unit — the engine is
    unit-agnostic as long as the series is consistent); resting HR in bpm.
    The three signals are computed and combined by
-   :func:`app.engine.readiness.readiness_assessment` (subjective fatigue
-   is not stored in ``wellness`` yet, so it is ``None`` = not reported;
-   ACWR is context-only and not persisted on ``daily_load`` — §7.2).
+   :func:`app.engine.readiness.readiness_assessment`. The subjective-
+   fatigue context signal comes from the ``subjective_log`` row of that
+   day (WA-6): a reported fatigue level (any value on the documented
+   1-10 scale) reaches the assessment as ``subjective_fatigue_reported
+   = True`` — the engine consumes a BOOL (§7.4), so the LEVEL is
+   recorded but the VERDICT only sees "reported"; a day without a
+   subjective-log row (or with fatigue NULL) passes ``None``/``False`` =
+   not reported. ACWR is context-only and not persisted on
+   ``daily_load`` — §7.2.
 4. Upsert one ``readiness_snapshot`` row per (athlete, day) via
    :func:`app.db.repository.upsert_readiness_snapshot`, stamped with
    ``engine_version`` (§6) and ``computed_at``.
@@ -49,7 +55,7 @@ from dataclasses import asdict, dataclass, field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import DailyLoadRow, WellnessRow
+from app.db.models import DailyLoadRow, SubjectiveLogRow, WellnessRow
 from app.db.repository import upsert_readiness_snapshot
 from app.engine.readiness import (
     DEFAULT_HRV_BAND_SD,
@@ -225,6 +231,27 @@ async def recompute_readiness(
     )
     tsb_by_date = {row.date: row.tsb for row in tsb_rows}
 
+    # The subjective-fatigue context signal (§7.4, WA-6): the owner's own
+    # report for each window day, from ``subjective_log``. The engine
+    # consumes a BOOL ("fatigue reported today"); any reported level
+    # counts, a day without a report (or with fatigue NULL) does not.
+    subjective_rows = (
+        (
+            await session.execute(
+                select(SubjectiveLogRow).where(
+                    SubjectiveLogRow.athlete_id == athlete_id,
+                    SubjectiveLogRow.date >= window_start,
+                    SubjectiveLogRow.date <= window_end,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    fatigue_reported_by_date: dict[dt.date, bool] = {
+        row.date: row.fatigue is not None for row in subjective_rows
+    }
+
     computed_at = dt.datetime.now(dt.UTC)
     skipped: list[SkippedDay] = []
     rows_upserted = 0
@@ -272,7 +299,7 @@ async def recompute_readiness(
         assessment: ReadinessAssessment = readiness_assessment(
             signals,
             tsb=tsb,
-            subjective_fatigue_reported=None,
+            subjective_fatigue_reported=fatigue_reported_by_date.get(as_of),
             acwr=None,
             tsb_very_negative_below=tsb_very_negative_below,
         )
