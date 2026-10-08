@@ -14,12 +14,25 @@ Celery worker:
    the system-prompt stub (:mod:`app.agent.prompt`) and the EXPLICIT tool
    list (:mod:`app.agent.tools` — never directory-loaded, never vended
    tools). **The tool-calling loop itself is the SDK's**; ours are the
-   guardrails around it (budget/limits arrive with WA-5).
+   guardrails around it (WA-5, :mod:`app.agent.budget`):
+   ``Limits(turns=…, output_tokens=…, total_tokens=…)`` from settings is
+   passed on EVERY invocation, and the per-conversation token budget (the
+   WhatsApp free-form 24 h window, §9.1) accumulated from
+   ``result.metrics.accumulated_usage`` stops the turn BEFORE the model is
+   invoked when the conversation's persisted usage has exhausted it — the
+   athlete gets an explicit budget message instead of an unbounded run. A
+   loop stop on a per-invocation limit (``limit_*`` stop reason) without a
+   final answer also yields an explicit guardrail message.
 3. **Audit persistence.** Every tool call the loop executed (name,
    input, output, status) and the outbound reply are written to
    ``message_log`` sharing the turn's ``trace_id`` and ``agent_version``
    (§6 provenance), so any number in a reply is auditable back to the
-   tool output it explains (§3).
+   tool output it explains (§3). The outbound row's payload also records
+   the turn's USAGE (``inputTokens``/``outputTokens``/``totalTokens``
+   from ``result.metrics.accumulated_usage``) and LATENCY (ms from
+   ``result.metrics.accumulated_metrics``) — the per-turn cost audit —
+   plus the sender (``payload["to"]``), the conversation key the budget
+   accumulates over.
 4. **Reply via Twilio REST.** The agent's text is sent through the
    Twilio REST client with reversed addressing (``From`` <-> ``To``).
    Rows are persisted BEFORE the send: if sending fails, the retry-safe
@@ -43,6 +56,14 @@ from uuid import uuid4
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app.agent import tools as agent_tools
+from app.agent.budget import (
+    BUDGET_EXHAUSTED_REPLY,
+    GUARDRAIL_STOP_REPLY,
+    ConversationBudget,
+    conversation_usage_tokens,
+    limits_from_settings,
+)
 from app.agent.model_factory import create_model
 from app.agent.prompt import SYSTEM_PROMPT
 from app.agent.tools import tool_list
@@ -83,13 +104,16 @@ async def process_inbound_message(
 
     # 1. Idempotency anchor: persist the inbound row FIRST. A Twilio
     # retry of the same MessageSid hits the unique constraint and is a
-    # no-op — never a second agent run, never a second reply.
+    # no-op — never a second agent run, never a second reply. The payload
+    # names the sender/receiver: the sender is the conversation key the
+    # per-conversation budget accumulates over (WA-5).
     async with session_factory() as session:
         session.add(
             MessageLogRow(
                 direction="inbound",
                 message_sid=message_sid,
                 body=body,
+                payload={"from": message.get("From", ""), "to": message.get("To", "")},
                 trace_id=trace_id,
                 agent_version=AGENT_VERSION,
             )
@@ -103,16 +127,71 @@ async def process_inbound_message(
             )
             return
 
-    # 2. Run the agent: the loop is the SDK's; the model, system prompt
-    # and explicit tool list are ours. Invoked through the SDK's native
-    # async entry point so everything stays on the caller's event loop.
+    # 2. Per-conversation budget guardrail (WA-5): seed the accumulator
+    # from the usage persisted by this conversation's earlier turns (the
+    # 24 h free-form window, §9.1). An exhausted conversation stops here —
+    # an explicit message, zero model invocations, zero new spend.
+    sender = str(message.get("From", "") or "")
+    async with session_factory() as session:
+        prior_usage = await conversation_usage_tokens(session, sender=sender)
+    budget = ConversationBudget(
+        limit_tokens=settings.agent_conversation_token_budget, used_tokens=prior_usage
+    )
+    if budget.exhausted:
+        async with session_factory() as session:
+            session.add(
+                MessageLogRow(
+                    direction="outbound",
+                    body=BUDGET_EXHAUSTED_REPLY,
+                    payload={"to": sender, "budget_exhausted": True},
+                    trace_id=trace_id,
+                    agent_version=AGENT_VERSION,
+                )
+            )
+            await session.commit()
+        twilio_client.messages.create(
+            to=message["From"], from_=message["To"], body=BUDGET_EXHAUSTED_REPLY
+        )
+        logger.warning(
+            "WhatsApp conversation with %s exhausted its token budget "
+            "(%d/%d tokens in the 24 h window); replying with the explicit "
+            "budget message (trace %s)",
+            sender,
+            budget.used_tokens,
+            budget.limit_tokens,
+            trace_id,
+        )
+        return
+
+    # 3. Run the agent: the loop is the SDK's; the model, system prompt,
+    # explicit tool list and the PER-INVOCATION LIMITS are ours. The tools
+    # share this message's DB session factory via the module seam. Invoked
+    # through the SDK's native async entry point so everything stays on the
+    # caller's event loop.
+    agent_tools.set_session_factory_provider(lambda: session_factory)
     agent = _build_agent(model)
-    result = await agent.invoke_async(body)
+    result = await agent.invoke_async(body, limits=limits_from_settings(settings))
     reply = _reply_text(result)
+    if not reply.strip():
+        # The loop stopped on a limit (limit_turns/limit_output_tokens/
+        # limit_total_tokens) or otherwise produced no final text: the
+        # athlete is told why, never left with silence.
+        logger.warning(
+            "Agent loop produced no text for trace %s (stop_reason=%s); "
+            "sending the explicit guardrail message",
+            trace_id,
+            result.stop_reason,
+        )
+        reply = GUARDRAIL_STOP_REPLY
     tool_calls = _tool_calls(agent.messages)
 
-    # 3. Persist the audit trail BEFORE sending (see module docstring):
-    # the idempotency anchor bounds any failure at one missed reply.
+    # 4. Persist the audit trail BEFORE sending (see module docstring):
+    # the idempotency anchor bounds any failure at one missed reply. The
+    # outbound payload records this turn's usage and latency (WA-5) plus
+    # the sender — the conversation key the budget accumulates over.
+    usage = dict(result.metrics.accumulated_usage)
+    latency_ms = result.metrics.accumulated_metrics.get("latencyMs")
+    budget.add_usage(usage)
     async with session_factory() as session:
         for call in tool_calls:
             session.add(
@@ -132,13 +211,18 @@ async def process_inbound_message(
             MessageLogRow(
                 direction="outbound",
                 body=reply,
+                payload={
+                    "to": sender,
+                    "usage": usage,
+                    "latency_ms": latency_ms,
+                },
                 trace_id=trace_id,
                 agent_version=AGENT_VERSION,
             )
         )
         await session.commit()
 
-    # 4. Send the reply through the Twilio REST client (reversed
+    # 5. Send the reply through the Twilio REST client (reversed
     # addressing: the inbound From is the outbound To).
     twilio_client.messages.create(to=message["From"], from_=message["To"], body=reply)
     logger.info("WhatsApp reply sent for message %s (trace %s)", message_sid, trace_id)

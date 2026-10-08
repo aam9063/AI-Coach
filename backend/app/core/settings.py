@@ -379,6 +379,30 @@ class Settings(BaseSettings):
     # Model id handed to the provider (strands OpenAIConfig.model_id).
     llm_model_id: str = "gpt-4o-mini"
 
+    # --- WhatsApp agent guardrails (Feature 6; WA-5; §9.2, §14) --------------
+    # The tool-calling loop is the Strands Agents SDK's; these are OUR
+    # guardrails around it, all documented OWNER CHOICES (§14 style) with no
+    # literature or vendor source — sized generously for a single-athlete
+    # chat coach while keeping a stuck tool loop from burning the budget.
+    # Per-invocation caps (strands Limits), passed on EVERY invocation: max
+    # loop turns (one turn = one model call plus the tool executions that
+    # follow), max cumulative output tokens and max cumulative
+    # input+output tokens of ONE message processing. The SDK checks them at
+    # turn boundaries and stops with stop_reason limit_turns /
+    # limit_output_tokens / limit_total_tokens; a stop without a final
+    # answer gets an explicit guardrail message instead of silence.
+    agent_max_turns: int = 8
+    agent_max_output_tokens: int = 4000
+    agent_max_total_tokens: int = 20000
+    # Per-conversation token budget: the sum of totalTokens of every turn in
+    # the conversation (the WhatsApp free-form window, the 24 h after the
+    # athlete's last message, §9.1), accumulated from
+    # result.metrics.accumulated_usage and persisted per turn in
+    # message_log. When the accumulated usage reaches this budget the
+    # pipeline stops BEFORE invoking the model and replies with an explicit
+    # budget message; usage frees up as turns age out of the 24 h window.
+    agent_conversation_token_budget: int = 60000
+
     # --- Observability ------------------------------------------------------
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
