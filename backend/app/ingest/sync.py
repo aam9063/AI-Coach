@@ -353,12 +353,16 @@ async def _persist_wellness(
                     session,
                     date=datetime.strptime(record.id, "%Y-%m-%d").date(),
                     hrv=record.hrv,
-                    ln_hrv=_numeric(extras.get("lnHrv")),
+                    # lnHrv is NOT on the wire (live-verified 2026-10-08):
+                    # ln(rMSSD) is derived from the genuine hrv value in
+                    # Wellness.ln_hrv — never from hrvSDNN, never NULL
+                    # while a positive hrv is present.
+                    ln_hrv=record.ln_hrv,
                     resting_hr=record.resting_hr,
                     sleep_minutes=record.sleep_minutes,
-                    sleep_score=_numeric(
-                        extras.get("sleepScore", extras.get("sleepScoreCalculated"))
-                    ),
+                    # sleepScore IS on the wire (live-verified); mapped via
+                    # the Wellness field alias, not an extras lookup.
+                    sleep_score=record.sleep_score,
                     weight=record.weight,
                     # §5.1: Intervals' own PMC values, stored ONLY in the
                     # explicitly non-authoritative cross-check columns.
