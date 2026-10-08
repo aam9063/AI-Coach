@@ -171,8 +171,9 @@ class TestToolList:
         assert names == {
             "get_load_status", "get_zones", "get_readiness",
             "get_activity_analysis", "get_intensity_distribution",
+            "log_subjective",
         }
-        assert len(listed) == 5
+        assert len(listed) == 6
 
     def test_no_directory_loader_and_no_vended_tools(self) -> None:
         listed_names = {

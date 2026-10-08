@@ -498,6 +498,51 @@ class AthleteThresholdHistoryRow(Base):
     recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class SubjectiveLogRow(Base):
+    """OWNER-ENTERED daily subjective report (WA-6, brief §9.3/§7.4).
+
+    One row per (athlete, date), unique — the idempotency anchor for
+    logging the day's report twice from the conversation (an update,
+    never a duplicate). Like ``activity.rpe`` (LOAD-12), this is
+    OWNER-ENTERED INPUT DATA the engine consumes — not an engine
+    output — so it carries no ``engine_version``; ``recorded_at`` is the
+    audit stamp of the last write.
+
+    Columns (scales documented here and in the tool's docstring, which
+    is what the model reads):
+
+    - ``rpe``: the owner's own reported RPE, the 1-10 scale (same scale
+      as ``activity.rpe``/``icu_rpe``). NULL = not reported. Values
+      outside 1-10 are rejected by the tool with a reportable reason,
+      never stored silently (the LOAD-12 rule).
+    - ``fatigue``: reported fatigue, 1-10 (1 = no fatigue at all,
+      10 = extreme fatigue). NULL = not reported. The readiness engine
+      consumes this as a BOOL context signal ("subjective fatigue
+      reported", §7.4): ANY reported level counts; a NULL never does.
+    - ``soreness``: reported soreness, 1-10 (1 = none, 10 = extreme).
+      NULL = not reported. Recorded for the owner's history; the
+      readiness engine consumes only the fatigue signal today.
+    - ``notes``: free text from the conversation.
+    """
+
+    __tablename__ = "subjective_log"
+    __table_args__ = (
+        UniqueConstraint("athlete_id", "date", name="uq_subjective_log_athlete_date"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # Same local single-athlete integer as wellness/daily_load (default 1).
+    athlete_id: Mapped[int] = mapped_column(Integer, default=1)
+    date: Mapped[date] = mapped_column(Date)
+
+    rpe: Mapped[float | None] = mapped_column(Float, default=None)
+    fatigue: Mapped[int | None] = mapped_column(Integer, default=None)
+    soreness: Mapped[int | None] = mapped_column(Integer, default=None)
+    notes: Mapped[str | None] = mapped_column(Text, default=None)
+
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 def _utcnow() -> datetime:
     """Timezone-aware UTC now (message_log.created_at default)."""
     return datetime.now(UTC)

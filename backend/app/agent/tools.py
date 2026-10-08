@@ -64,6 +64,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from strands.tools import tool
 
 from app.core.settings import Settings, get_settings
+from app.db.engine_readiness_config import readiness_constants_from_settings
 from app.db.models import (
     ActivityRow,
     AthleteProfileRow,
@@ -72,9 +73,11 @@ from app.db.models import (
     SessionDurabilityRow,
     WeeklyIntensityRow,
 )
+from app.db.repository import upsert_subjective_log
 from app.db.session import create_db_engine, make_session_factory
 from app.db.zones_config import parse_swim_boundaries
 from app.engine.zones import hr_zones, power_zones, swim_zones
+from app.services.readiness import recompute_readiness
 
 SessionFactory = async_sessionmaker[AsyncSession]
 
@@ -811,15 +814,197 @@ async def get_intensity_distribution(weeks: int = 4, sport: str | None = None) -
     }
 
 
+# ---------------------------------------------------------------------------
+# log_subjective (WA-6 write half, §9.3/§7.4)
+# ---------------------------------------------------------------------------
+
+_SUBJECTIVE_SCALE_HELP = (
+    "Accepted values: rpe 1-10 (the athlete's own session RPE, the same "
+    "scale as activity.rpe), fatigue 1-10 (1 = no fatigue at all, "
+    "10 = extreme fatigue), soreness 1-10 (1 = none, 10 = extreme); "
+    "notes is free text. Provide at least one of rpe, fatigue or "
+    "soreness — a notes-only report is not logged."
+)
+
+
+def _subjective_validation_error(
+    rpe: float | None, fatigue: int | None, soreness: int | None
+) -> str | None:
+    """The error detail for an empty/out-of-range report, or None.
+
+    The LOAD-12 rule: an invalid owner-entered value is NEVER stored
+    silently — the error names the rejected value and the accepted scale.
+    """
+    if rpe is None and fatigue is None and soreness is None:
+        return f"empty report: nothing was recorded. {_SUBJECTIVE_SCALE_HELP}"
+    for name, value, low, high in (
+        ("rpe", rpe, 1.0, 10.0),
+        ("fatigue", fatigue, 1, 10),
+        ("soreness", soreness, 1, 10),
+    ):
+        if value is None:
+            continue
+        if not low <= value <= high:
+            return (
+                f"{name} {value} is outside the 1-10 scale; rejected — "
+                f"nothing stored. {_SUBJECTIVE_SCALE_HELP}"
+            )
+    return None
+
+
+@tool
+async def log_subjective(
+    rpe: float | None = None,
+    fatigue: int | None = None,
+    soreness: int | None = None,
+    notes: str | None = None,
+) -> dict[str, Any]:
+    """Record the athlete's own daily report (RPE, fatigue, soreness,
+    notes) from the conversation and make it count for today's readiness.
+
+    Scales: ``rpe`` 1-10 (the athlete's own session RPE, the same scale
+    as activity.rpe); ``fatigue`` 1-10 (1 = no fatigue at all, 10 =
+    extreme fatigue); ``soreness`` 1-10 (1 = none, 10 = extreme);
+    ``notes`` is free text. Provide at least one of rpe, fatigue or
+    soreness — a notes-only report is not logged. The report is stored
+    once per day: logging again the same day UPDATES today's entry
+    instead of duplicating it — fields provided in the new call
+    overwrite, fields omitted keep their earlier value (a later RPE
+    note never erases the fatigue reported that morning).
+
+    Readiness effect (§7.4): a reported fatigue — ANY level on the scale
+    — becomes the engine's "subjective fatigue" adverse signal for
+    today, so it can combine with TSB or the HRV/resting-HR/sleep
+    signals in the two-signal warning rule (e.g. TSB very negative +
+    reported fatigue → the engine suggests reducing intensity). RPE,
+    soreness and notes are recorded for the owner's history but do not
+    enter the readiness rule.
+
+    Returns on success (status "ok"): ``date`` (the report's day, in the
+    owner's timezone), ``recorded`` (exactly what was stored), and
+    ``readiness`` — what it changes: ``status="updated"`` with the
+    recomputed snapshot's ``agreement_count``,
+    ``suggest_reduce_intensity``, ``adverse_signal_keys`` and
+    ``subjective_fatigue_reported``; or ``status="not_assessed"`` with a
+    ``detail`` naming what is missing (no daily_load row for today, so
+    the TSB input is unavailable) and how to get it. ``coverage``
+    reports the recomputed readiness signals; ``engine_version`` is the
+    version that stamped the recompute and ``computed_at`` the recompute
+    time.
+
+    An out-of-range value or an empty report returns ``status="error"`
+    naming the rejected value and the accepted scales — nothing is
+    stored (never a silent write).
+
+    Args:
+        rpe: Optional session RPE, 1-10.
+        fatigue: Optional reported fatigue, 1-10 (1 = none, 10 = extreme).
+        soreness: Optional reported soreness, 1-10 (1 = none, 10 = extreme).
+        notes: Optional free-text notes from the athlete.
+    """
+    settings = _settings()
+    validation_error = _subjective_validation_error(rpe, fatigue, soreness)
+    if validation_error is not None:
+        return {
+            "status": "error",
+            "detail": validation_error,
+            "engine_version": settings.engine_version,
+            "computed_at": _now(settings).isoformat(),
+        }
+
+    day = _today_local(settings)
+    computed_at = _now(settings)
+    async with tool_session() as session:
+        await upsert_subjective_log(
+            session,
+            athlete_id=1,
+            date=day,
+            rpe=rpe,
+            fatigue=fatigue,
+            soreness=soreness,
+            notes=notes,
+            recorded_at=computed_at,
+        )
+        # The report becomes a readiness signal through the service (the
+        # same pipeline the engine-outputs CLI uses): recompute today's
+        # snapshot so the reported fatigue reaches the assessment now.
+        report = await recompute_readiness(
+            session,
+            window_end=day,
+            days=1,
+            engine_version=settings.engine_version,
+            **readiness_constants_from_settings(settings),
+        )
+        snapshot = (
+            await session.execute(
+                select(ReadinessSnapshotRow).where(
+                    ReadinessSnapshotRow.athlete_id == 1,
+                    ReadinessSnapshotRow.date == day,
+                )
+            )
+        ).scalar_one_or_none()
+        await session.commit()
+
+    recorded = {
+        "rpe": rpe,
+        "fatigue": fatigue,
+        "soreness": soreness,
+        "notes": notes,
+    }
+    if snapshot is not None:
+        insufficient_keys = [
+            signal.get("key")
+            for signal in snapshot.signals
+            if signal.get("status") == "insufficient_data"
+        ]
+        readiness_out: dict[str, Any] = {
+            "status": "updated",
+            "agreement_count": snapshot.agreement_count,
+            "suggest_reduce_intensity": snapshot.suggest_reduce_intensity,
+            "adverse_signal_keys": list(snapshot.adverse_signal_keys),
+            "subjective_fatigue_reported": snapshot.subjective_fatigue_reported,
+        }
+        coverage: dict[str, Any] = {
+            "readiness_signals_total": len(snapshot.signals),
+            "readiness_signals_insufficient": insufficient_keys,
+        }
+    else:
+        readiness_out = {
+            "status": "not_assessed",
+            "detail": (
+                f"the report was recorded for {day.isoformat()}, but the "
+                "readiness snapshot could not be recomputed: no daily_load "
+                "combined row exists for this date, so the TSB context "
+                "input is unavailable. Run `python -m app.db.daily_load` "
+                "to compute training load; the report will be included in "
+                "the next readiness recompute."
+            ),
+        }
+        coverage = {
+            "readiness_signals_total": 0,
+            "readiness_signals_insufficient": [],
+        }
+        assert report.skipped, "a skipped day must be reported by the service"
+    return {
+        "status": "ok",
+        "date": day.isoformat(),
+        "recorded": recorded,
+        "readiness": readiness_out,
+        "coverage": coverage,
+        "engine_version": settings.engine_version,
+        "computed_at": computed_at.isoformat(),
+    }
+
+
 def tool_list() -> list[Any]:
     """The EXPLICIT tool list handed to the agent.
 
-    Only this project's engine-backed read tools, in this list, ever. Never
+    Only this project's engine-backed tools, in this list, ever. Never
     ``load_tools_from_directory``; never the ``strands-agents-tools``
-    vended tools (shell/file/HTTP). Write tools (``log_subjective``,
-    ``propose_threshold_update``) and the feature-delegating tools
-    (``predict_race``, ``plot_metric``, ``search_evidence``) join this list
-    with their checklist items — never silently, never from a loader.
+    vended tools (shell/file/HTTP). The remaining write tool
+    (``propose_threshold_update``) and the feature-delegating tools
+    (``predict_race``, ``plot_metric``, ``search_evidence``) join this
+    list with their checklist items — never silently, never from a loader.
     """
     return [
         get_load_status,
@@ -827,4 +1012,5 @@ def tool_list() -> list[Any]:
         get_readiness,
         get_activity_analysis,
         get_intensity_distribution,
+        log_subjective,
     ]
