@@ -22,6 +22,7 @@ dependencies = [
     "langfuse>=2.50",
     "pgvector>=0.3",
     "asyncpg>=0.29",
+    "strands-agents[openai]>=1.58",
 ]
 
 [dependency-groups]
@@ -71,6 +72,12 @@ ignore_missing_imports = true
 [[tool.mypy.overrides]]
 # Celery ships no py.typed marker (as of 5.x); untyped for mypy.
 module = "celery.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# twilio ships no py.typed marker (as of 9.11.2); untyped for mypy. Used
+# only at the WhatsApp reply boundary (app.agent.pipeline.make_twilio_client).
+module = "twilio.*"
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

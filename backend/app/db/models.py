@@ -35,7 +35,7 @@ keyed by their unique constraints, each row stamped with
 decisions are documented on each class.
 """
 
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 
 from sqlalchemy import (
@@ -496,3 +496,113 @@ class AthleteThresholdHistoryRow(Base):
     source: Mapped[str | None] = mapped_column(String(32), default=None)
     engine_version: Mapped[str] = mapped_column(String(32))
     recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class SubjectiveLogRow(Base):
+    """OWNER-ENTERED daily subjective report (WA-6, brief §9.3/§7.4).
+
+    One row per (athlete, date), unique — the idempotency anchor for
+    logging the day's report twice from the conversation (an update,
+    never a duplicate). Like ``activity.rpe`` (LOAD-12), this is
+    OWNER-ENTERED INPUT DATA the engine consumes — not an engine
+    output — so it carries no ``engine_version``; ``recorded_at`` is the
+    audit stamp of the last write.
+
+    Columns (scales documented here and in the tool's docstring, which
+    is what the model reads):
+
+    - ``rpe``: the owner's own reported RPE, the 1-10 scale (same scale
+      as ``activity.rpe``/``icu_rpe``). NULL = not reported. Values
+      outside 1-10 are rejected by the tool with a reportable reason,
+      never stored silently (the LOAD-12 rule).
+    - ``fatigue``: reported fatigue, 1-10 (1 = no fatigue at all,
+      10 = extreme fatigue). NULL = not reported. The readiness engine
+      consumes this as a BOOL context signal ("subjective fatigue
+      reported", §7.4): ANY reported level counts; a NULL never does.
+    - ``soreness``: reported soreness, 1-10 (1 = none, 10 = extreme).
+      NULL = not reported. Recorded for the owner's history; the
+      readiness engine consumes only the fatigue signal today.
+    - ``notes``: free text from the conversation.
+    """
+
+    __tablename__ = "subjective_log"
+    __table_args__ = (
+        UniqueConstraint("athlete_id", "date", name="uq_subjective_log_athlete_date"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # Same local single-athlete integer as wellness/daily_load (default 1).
+    athlete_id: Mapped[int] = mapped_column(Integer, default=1)
+    date: Mapped[date] = mapped_column(Date)
+
+    rpe: Mapped[float | None] = mapped_column(Float, default=None)
+    fatigue: Mapped[int | None] = mapped_column(Integer, default=None)
+    soreness: Mapped[int | None] = mapped_column(Integer, default=None)
+    notes: Mapped[str | None] = mapped_column(Text, default=None)
+
+    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+def _utcnow() -> datetime:
+    """Timezone-aware UTC now (message_log.created_at default)."""
+    return datetime.now(UTC)
+
+
+class MessageLogRow(Base):
+    """WhatsApp conversation log: inbound/outbound messages, tool calls (WA-3).
+
+    Brief §6 ``message_log`` ("inbound/outbound messages, tool calls, trace
+    id"): the WhatsApp agent's per-turn audit trail. One table, three
+    ``direction`` values:
+
+    - ``inbound``: a validated Twilio message. ``message_sid`` carries the
+      Twilio ``MessageSid`` and the UNIQUE constraint
+      ``uq_message_log_message_sid`` is the IDEMPOTENCY ANCHOR: a Twilio
+      retry of the same message cannot produce a second inbound row (Postgres
+      rejects it), so the Celery pipeline can never double-process — and
+      therefore never double-reply — one message. The anchor is the database
+      itself, not an in-memory check, so it survives worker restarts and
+      concurrent retries.
+    - ``outbound``: the reply actually handed to the Twilio REST client.
+      ``message_sid`` stays NULL — outbound rows are not keyed by Twilio ids
+      at insert time, and Postgres unique constraints admit multiple NULLs,
+      so many outbound/tool rows may share one conversation.
+    - ``tool_call``: one agent tool invocation. ``tool_name`` names the tool
+      and ``payload`` (JSONB) records the input and the output the agent saw,
+      so every number in a reply is auditable back to its engine source (§3).
+
+    ``trace_id`` groups every row written by one processing turn (a fresh
+    UUID per turn; the Langfuse trace id arrives with WA-11 and will reuse
+    this column's semantics).
+
+    Provenance: messages and tool calls are NOT engine outputs, so they do
+    not carry ``engine_version``; the equivalent provenance column is
+    ``agent_version`` (engine_version-style, §6) — the version of the agent
+    pipeline (prompt + tool set) that produced the turn, so a reply can be
+    attributed to the code that generated it.
+    """
+
+    __tablename__ = "message_log"
+    __table_args__ = (
+        UniqueConstraint("message_sid", name="uq_message_log_message_sid"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # "inbound" | "outbound" | "tool_call" (validated by the pipeline).
+    direction: Mapped[str] = mapped_column(String(16))
+    # Twilio MessageSid; the idempotency anchor. NULL for outbound/tool rows.
+    message_sid: Mapped[str | None] = mapped_column(String(64), default=None)
+    # Message text; NULL for tool_call rows.
+    body: Mapped[str | None] = mapped_column(Text, default=None)
+    # tool_call rows only.
+    tool_name: Mapped[str | None] = mapped_column(String(64), default=None)
+    # tool_call rows: {"input": ..., "output": ...}; other rows may carry
+    # auxiliary metadata (e.g. the Twilio outbound sid).
+    payload: Mapped[dict[str, Any] | None] = mapped_column(JSONB, default=None)
+    # Groups all rows written by one processing turn.
+    trace_id: Mapped[str] = mapped_column(String(64))
+    # engine_version-style provenance (§6) for the agent pipeline.
+    agent_version: Mapped[str] = mapped_column(String(32))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )

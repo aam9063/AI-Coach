@@ -349,10 +349,59 @@ class Settings(BaseSettings):
     twilio_whatsapp_from: str = ""
     # Comma-separated list of allowed WhatsApp numbers.
     twilio_whatsapp_allowlist: str = ""
+    # Public HTTPS URL of the inbound webhook exactly as Twilio sees it
+    # (§9.1), e.g. the development tunnel https://<name>.trycloudflare.com.
+    # TRAP (documented for the operator): signature validation MUST run
+    # against the URL Twilio signed — behind a tunnel that is THIS URL, and
+    # validating against the locally served one (http://localhost:8000)
+    # silently rejects every real message with 403.
+    # Default (empty): validation still ALWAYS runs (there is no switch to
+    # skip it and the webhook fails closed without an auth token), but it
+    # validates against the locally served request URL — correct for direct
+    # local access and the test suite. Behind a development tunnel you MUST
+    # set this variable, or every real message is rejected with 403.
+    # FULL URL Twilio signs, INCLUDING the /webhooks/whatsapp path
+    # (e.g. https://<tunnel>.trycloudflare.com/webhooks/whatsapp): a bare
+    # host is used verbatim and would reject every real message.
+    twilio_public_webhook_url: str = ""
 
     # --- LLM providers (switchable per §6; both optional placeholders) -----
     anthropic_api_key: str = ""
     openai_api_key: str = ""
+
+    # --- WhatsApp agent (Feature 6; WA-3/WA-4) -------------------------------
+    # Which model object the agent gets — ONE object per §6, chosen purely
+    # by configuration. "openai" builds the real strands OpenAIModel from
+    # openai_api_key/llm_model_id; "fake" builds the deterministic
+    # app.agent.fake_model.FakeModel (tests, dry runs — zero network).
+    # Anything else fails loudly instead of silently dialling a provider.
+    llm_provider: str = "openai"
+    # Model id handed to the provider (strands OpenAIConfig.model_id).
+    llm_model_id: str = "gpt-4o-mini"
+
+    # --- WhatsApp agent guardrails (Feature 6; WA-5; §9.2, §14) --------------
+    # The tool-calling loop is the Strands Agents SDK's; these are OUR
+    # guardrails around it, all documented OWNER CHOICES (§14 style) with no
+    # literature or vendor source — sized generously for a single-athlete
+    # chat coach while keeping a stuck tool loop from burning the budget.
+    # Per-invocation caps (strands Limits), passed on EVERY invocation: max
+    # loop turns (one turn = one model call plus the tool executions that
+    # follow), max cumulative output tokens and max cumulative
+    # input+output tokens of ONE message processing. The SDK checks them at
+    # turn boundaries and stops with stop_reason limit_turns /
+    # limit_output_tokens / limit_total_tokens; a stop without a final
+    # answer gets an explicit guardrail message instead of silence.
+    agent_max_turns: int = 8
+    agent_max_output_tokens: int = 4000
+    agent_max_total_tokens: int = 20000
+    # Per-conversation token budget: the sum of totalTokens of every turn in
+    # the conversation (the WhatsApp free-form window, the 24 h after the
+    # athlete's last message, §9.1), accumulated from
+    # result.metrics.accumulated_usage and persisted per turn in
+    # message_log. When the accumulated usage reaches this budget the
+    # pipeline stops BEFORE invoking the model and replies with an explicit
+    # budget message; usage frees up as turns age out of the 24 h window.
+    agent_conversation_token_budget: int = 60000
 
     # --- Observability ------------------------------------------------------
     langfuse_public_key: str = ""
