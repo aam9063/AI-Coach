@@ -25,11 +25,21 @@ Documented ING-7 contract (these tests are its executable specification):
 - **Pacing** (§5.1, ≤10 req/s) is enforced inside ``sync_date_range``'s
   Pacer and the backfill forwards its own clock/sleep without bypassing
   it.
+- **Chunked windows (documented ING-7 follow-up)**: ``compute_day_windows``
+  accepts ``chunk_days`` (default ``1`` = today's one-window-per-day
+  behaviour, unchanged). ``chunk_days`` consecutive calendar days share one
+  sync window: ``sync_date_range`` already fetches a whole range in a
+  single ``list_activities``/``get_wellness`` call pair, so fewer windows
+  mean fewer calls (~2 calls per window + per-activity fetches) at the
+  cost of coarser per-window failure reporting — acceptable because the
+  whole path is idempotent and retries are cheap. The remainder chunk
+  (when ``days`` is not a multiple of ``chunk_days``) is the **last**
+  (newest) window and is shorter, still ending exactly at ``end_date``.
 - **Entry points**: ``async backfill(...)`` is the ING-8 reuse surface
   (Celery task will call it); ``main(argv)`` is the argparse CLI wrapper
-  (``python -m app.ingest.backfill --days N [--end YYYY-MM-DD]``),
-  exercised here in-process with an injected client/session factory —
-  no real network.
+  (``python -m app.ingest.backfill --days N [--end YYYY-MM-DD]
+  [--chunk-days N]``), exercised here in-process with an injected
+  client/session factory — no real network.
 """
 
 from __future__ import annotations
@@ -370,6 +380,156 @@ def test_main_exits_nonzero_when_window_fails(
 
 
 # ---------------------------------------------------------------------------
+# Chunked windows (follow-up): chunk_days > 1, default unchanged
+# ---------------------------------------------------------------------------
+
+
+def _assert_windows_cover_span(
+    windows: list[tuple[date, date]], days: int, end_date: date
+) -> None:
+    """Shared invariant: windows cover exactly ``days`` days, no gaps/overlaps."""
+    assert windows, "at least one window"
+    assert windows[0][0] == date.fromordinal(end_date.toordinal() - days + 1)
+    assert windows[-1][1] == end_date
+    covered: set[date] = set()
+    for index, (oldest, newest) in enumerate(windows):
+        assert oldest <= newest
+        if index:
+            assert oldest.toordinal() == windows[index - 1][1].toordinal() + 1, "no gaps"
+        covered |= {
+            date.fromordinal(ordinal)
+            for ordinal in range(oldest.toordinal(), newest.toordinal() + 1)
+        }
+    assert len(covered) == days, "no overlapping days"
+    expected = {
+        date.fromordinal(end_date.toordinal() - offset) for offset in range(days)
+    }
+    assert covered == expected
+
+
+@pytest.mark.parametrize(
+    ("days", "end_date", "chunk_days"),
+    [
+        # Explicit default: one window per day, unchanged.
+        (5, date(2026, 1, 19), 1),
+        # chunk 7, days not a multiple: remainder (2 days) is the last window.
+        (16, date(2026, 1, 19), 7),
+        # chunk 7 across a month boundary.
+        (20, date(2026, 1, 15), 7),
+        # chunk 7 across a year boundary.
+        (10, date(2026, 1, 3), 7),
+        # chunk 30 across month and year boundaries; days not a multiple.
+        (75, date(2026, 1, 15), 30),
+        (2200, date(2026, 1, 31), 30),
+        # days exactly a multiple of the chunk size: equal windows.
+        (21, date(2026, 1, 31), 7),
+        # chunk larger than days: one single short window.
+        (5, date(2026, 1, 19), 30),
+    ],
+)
+def test_chunked_windows_cover_exactly_n_days(
+    days: int, end_date: date, chunk_days: int
+) -> None:
+    windows = compute_day_windows(days, end_date, chunk_days=chunk_days)
+
+    expected_windows = -(-days // chunk_days)  # ceil division
+    assert len(windows) == expected_windows
+    # Every window except (possibly) the last spans exactly chunk_days days;
+    # the remainder chunk is the last (newest) window and is shorter.
+    for window in windows[:-1]:
+        span = window[1].toordinal() - window[0].toordinal() + 1
+        assert span == chunk_days
+    last_span = windows[-1][1].toordinal() - windows[-1][0].toordinal() + 1
+    assert 1 <= last_span <= chunk_days
+    assert last_span == days - (expected_windows - 1) * chunk_days
+    _assert_windows_cover_span(windows, days, end_date)
+
+
+def test_chunked_windows_default_chunk_is_one_day_per_window() -> None:
+    """chunk_days=1 (the default) must yield exactly today's behaviour."""
+    assert compute_day_windows(3, date(2026, 1, 31)) == [
+        (date(2026, 1, 29), date(2026, 1, 29)),
+        (date(2026, 1, 30), date(2026, 1, 30)),
+        (date(2026, 1, 31), date(2026, 1, 31)),
+    ]
+    assert compute_day_windows(3, date(2026, 1, 31), chunk_days=1) == (
+        compute_day_windows(3, date(2026, 1, 31))
+    )
+
+
+@pytest.mark.parametrize("chunk_days", [0, -3])
+def test_chunked_windows_reject_non_positive_chunk(chunk_days: int) -> None:
+    with pytest.raises(ValueError, match="chunk_days"):
+        compute_day_windows(5, date(2026, 1, 31), chunk_days=chunk_days)
+
+
+@pytest.mark.anyio
+async def test_backfill_chunked_windows_sync_once_per_chunk() -> None:
+    """chunk_days=7 over 20 days: three windows, one sync each."""
+    client = DayWindowClient()
+
+    result = await backfill(
+        20,
+        date(2026, 1, 31),
+        _unused_factory,  # type: ignore[arg-type]
+        client,
+        settings=FAST_SETTINGS,
+        chunk_days=7,
+    )
+
+    assert client.window_calls == [
+        ("2026-01-12", "2026-01-18"),
+        ("2026-01-19", "2026-01-25"),
+        ("2026-01-26", "2026-01-31"),  # remainder chunk: 6 days
+    ]
+    assert result.ok
+    assert len(result.windows) == 3
+
+
+@pytest.mark.anyio
+async def test_backfill_chunk_failure_reports_and_remaining_chunks_run(
+    db_engine: AsyncEngine, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A failed chunk is reported; the remaining chunks still run."""
+    client = DayWindowClient(
+        {
+            date(2026, 1, 15): [_activity("i163428838", date(2026, 1, 15))],
+            date(2026, 1, 29): [_activity("i163419945", date(2026, 1, 29))],
+        },
+        fail_on_day=date(2026, 1, 18),  # oldest day of the middle chunk
+    )
+
+    with caplog.at_level(logging.ERROR, logger="app.ingest.backfill"):
+        result = await backfill(
+            21,
+            date(2026, 1, 31),
+            _factory(db_engine),
+            client,
+            settings=FAST_SETTINGS,
+            chunk_days=7,
+        )
+
+    # All three chunks attempted despite the middle one failing.
+    assert len(client.window_calls) == 3
+    assert len(result.windows) == 3
+    assert result.windows[0].ok
+    assert not result.windows[1].ok
+    assert result.windows[1].oldest == "2026-01-18"
+    assert result.windows[1].error is not None and "HTTP 500" in result.windows[1].error
+    assert result.windows[2].ok
+    assert result.ok is False
+    assert result.total.activities_synced == 2
+
+    error_logs = [
+        record.getMessage()
+        for record in _backfill_log_records(caplog)
+        if record.levelno == logging.ERROR
+    ]
+    assert len(error_logs) == 1
+    assert "2026-01-18" in error_logs[0] and "2026-01-24" in error_logs[0]
+
+
+# ---------------------------------------------------------------------------
 # CLI wiring (in-process, injected dependencies, no real network)
 # ---------------------------------------------------------------------------
 
@@ -394,6 +554,41 @@ def test_main_success_prints_summary_and_exits_zero(
     out = capsys.readouterr().out
     assert "2/2" in out
     assert "activities=0" in out
+
+
+def test_main_chunk_days_flag_chunks_windows(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """--chunk-days N groups N days per sync window (fewer client calls)."""
+    client = DayWindowClient()
+
+    exit_code = main(
+        ["--days", "20", "--end", "2026-01-31", "--chunk-days", "7"],
+        session_factory=_unused_factory,  # type: ignore[arg-type]
+        client=client,
+        settings=FAST_SETTINGS,
+    )
+
+    assert exit_code == 0
+    assert client.window_calls == [
+        ("2026-01-12", "2026-01-18"),
+        ("2026-01-19", "2026-01-25"),
+        ("2026-01-26", "2026-01-31"),
+    ]
+    out = capsys.readouterr().out
+    assert "3/3" in out
+
+
+@pytest.mark.parametrize("value", ["0", "-2", "abc"])
+def test_main_rejects_invalid_chunk_days(value: str) -> None:
+    with pytest.raises(SystemExit) as excinfo:
+        main(
+            ["--days", "5", "--end", "2026-01-31", "--chunk-days", value],
+            session_factory=_unused_factory,  # type: ignore[arg-type]
+            client=DayWindowClient(),
+            settings=FAST_SETTINGS,
+        )
+    assert excinfo.value.code == 2
 
 
 def test_main_rejects_non_positive_days() -> None:

@@ -81,6 +81,25 @@ class SwimLength:
     swim_stroke: str | None
 
 
+@dataclass(frozen=True)
+class FitSessionInfo:
+    """Sport and durations of a FIT session (intake analysis, FI-4).
+
+    Extracted from the (last) ``session`` message — with the (last)
+    ``sport`` message as fallback when the file carries no session
+    message. ``sport``/``sub_sport`` are fitdecode's decoded enum names
+    (e.g. ``"cycling"``, ``"running"``, ``"swimming"``); a numeric
+    unmapped value surfaces as ``None`` so callers can never mistake it
+    for a sport string. The durations are the session's FIT-declared
+    ``total_timer_time`` / ``total_elapsed_time`` in seconds.
+    """
+
+    sport: str | None
+    sub_sport: str | None
+    total_timer_time_s: float | None
+    total_elapsed_time_s: float | None
+
+
 def _frame_to_message(frame: fitdecode.FitDataMessage) -> Message:
     """Convert a fitdecode frame to the plain ``Message`` dict shape."""
     fields: dict[str, object] = {}
@@ -183,6 +202,63 @@ def _optional_float(value: object) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
     return float(value)
+
+
+def _optional_str(value: object) -> str | None:
+    """Pass decoded enum names through; anything else (e.g. an unmapped
+    numeric enum value) becomes ``None``."""
+    return value if isinstance(value, str) else None
+
+
+def messages_to_session_info(messages: Iterable[Message]) -> FitSessionInfo:
+    """Pure: fold ``session``/``sport`` messages into one session info.
+
+    The LAST ``session`` message wins (multi-session files exist, but the
+    intake CLI analyses whole single-activity files); when the file carries
+    no ``session`` message, the LAST ``sport`` message supplies the sport.
+    Missing fields stay ``None`` — the caller reports them, never guesses.
+    """
+    sport: str | None = None
+    sub_sport: str | None = None
+    timer_time: float | None = None
+    elapsed_time: float | None = None
+    fallback_sport: str | None = None
+    fallback_sub_sport: str | None = None
+    for message in messages:
+        name = message["name"]
+        if name == "session":
+            fields = message["fields"]
+            sport = _optional_str(fields.get("sport"))
+            sub_sport = _optional_str(fields.get("sub_sport"))
+            timer_time = _optional_float(fields.get("total_timer_time"))
+            elapsed_time = _optional_float(fields.get("total_elapsed_time"))
+        elif name == "sport":
+            fields = message["fields"]
+            fallback_sport = _optional_str(fields.get("sport"))
+            fallback_sub_sport = _optional_str(fields.get("sub_sport"))
+    if sport is None:
+        sport = fallback_sport
+        if sub_sport is None:
+            sub_sport = fallback_sub_sport
+    return FitSessionInfo(
+        sport=sport,
+        sub_sport=sub_sport,
+        total_timer_time_s=timer_time,
+        total_elapsed_time_s=elapsed_time,
+    )
+
+
+def parse_fit_session_info(data: bytes) -> FitSessionInfo:
+    """Parse raw FIT bytes into the session's sport and durations.
+
+    Raises ``ValueError`` when ``data`` is not a readable FIT file.
+    """
+    if not data:
+        raise ValueError("not a valid FIT file: empty input")
+    try:
+        return messages_to_session_info(_iter_data_messages(data))
+    except (FitError, ValueError, UnicodeDecodeError) as exc:
+        raise ValueError(f"not a valid FIT file: {exc}") from exc
 
 
 def parse_fit_swim_lengths(data: bytes) -> list[SwimLength]:

@@ -120,3 +120,27 @@ class AthleteProfile(BaseModel):
         if isinstance(value, int) and not isinstance(value, bool):
             return str(value)
         return value
+
+
+class ActivityUploadResult(BaseModel):
+    """Outcome of ``POST /athlete/{id}/activities`` (multipart file upload).
+
+    The endpoint returns **201 when the activity was created and 200 when
+    the file was already present** (live-verified 2026-10: in BOTH cases
+    the body is a JSON object carrying the activity id(s) — a 200 duplicate
+    names the EXISTING activity it matched, it is never an empty body).
+    ``created`` distinguishes the two: ``True`` (201) means at least one
+    activity was created and ``activity_ids`` carries the ids from the
+    response's ``activities`` array (top-level ``id`` fallback; a bare
+    array tolerated); ``False`` (200) means the file matched an
+    already-present activity — re-uploads of byte-identical files are safe
+    no-ops and must be reported as a duplicate WITH the matched id, never
+    silently dropped (§ fit-intake constraints). Note the dedup is
+    byte-identical only: the same ride arriving as a different file (e.g.
+    from Garmin Connect vs this upload) creates a SECOND activity.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    created: bool
+    activity_ids: tuple[str, ...] = ()
