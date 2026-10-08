@@ -109,8 +109,18 @@ class TestInsufficientDataEndToEnd:
         tools.reset_session_factory_provider()
         await engine.dispose()
 
+    @pytest.fixture
+    def session_repository(self) -> Any:
+        """Repository on the DEDICATED test database (never the dev DB)."""
+        from app.agent.session_store import DbSessionRepository
+        from tests.dbsupport import test_database_url
+
+        return DbSessionRepository(test_database_url())
+
     async def test_reply_states_what_is_missing_and_how_to_get_it(
-        self, session_factory: async_sessionmaker[Any]
+        self,
+        session_factory: async_sessionmaker[Any],
+        session_repository: Any,
     ) -> None:
         """The scripted model calls ``get_load_status`` against an empty
         DB: the tool returns ``insufficient_data`` and the final reply
@@ -149,6 +159,7 @@ class TestInsufficientDataEndToEnd:
             session_factory=session_factory,
             model=model,
             twilio_client=twilio,
+            session_repository=session_repository,
         )
 
         # The loop handed the insufficient_data RESULT back to the model

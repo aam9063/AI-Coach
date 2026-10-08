@@ -403,6 +403,24 @@ class Settings(BaseSettings):
     # budget message; usage frees up as turns age out of the 24 h window.
     agent_conversation_token_budget: int = 60000
 
+    # --- WhatsApp agent conversation memory (Feature 6; WA-8; §9.2) ----------
+    # Conversation memory persists through the Strands SDK's own session seam
+    # (``RepositorySessionManager`` + OUR ``SessionRepository`` on the project
+    # database, one session per sender — a different Celery process reloads
+    # the earlier turns). Both values are documented OWNER CHOICES (§14
+    # style, no literature or vendor source).
+    # Number of most-recent messages kept VERBATIM in the conversation (N);
+    # older messages are folded into the stored rolling summary.
+    agent_memory_window_messages: int = 10
+    # Rolling-summary trigger: a NEW summary is generated only when at least
+    # this many not-yet-summarized messages have aged past the verbatim
+    # window since the last summary. Between crossings the stored summary is
+    # REUSED verbatim — it is never regenerated on every message. The
+    # summary generation IS a model invocation: its token usage counts
+    # against the conversation budget and is persisted with the turn's
+    # provenance (trace id, agent version).
+    agent_summary_trigger_messages: int = 6
+
     # --- Observability ------------------------------------------------------
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
