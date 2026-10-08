@@ -9,6 +9,29 @@ jobs:
   backend:
     name: lint, types, tests
     runs-on: ubuntu-latest
+    services:
+      # Without this service the suite SKIPS every database test (the conftest
+      # skips when Postgres is unreachable), so CI was green while migrations,
+      # the engine tools, log_subjective and the conversation memory never ran:
+      # ~140 tests were silently skipped on every run.
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: tri_coach
+          POSTGRES_PASSWORD: tri_coach
+          POSTGRES_DB: tri_coach
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      # The DB tests derive a dedicated <database>_test database from this DSN
+      # (tests/dbsupport.py) and refuse to run against the configured one, so
+      # the runner's own database is never dropped or recreated.
+      DATABASE_URL: postgresql+asyncpg://tri_coach:tri_coach@localhost:5432/tri_coach
     steps:
       - uses: actions/checkout@v4
 
