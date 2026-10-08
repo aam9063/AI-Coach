@@ -55,6 +55,7 @@ from uuid import uuid4
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+from strands.session import RepositorySessionManager, SessionManager, SessionRepository
 
 from app.agent import tools as agent_tools
 from app.agent.budget import (
@@ -64,11 +65,13 @@ from app.agent.budget import (
     conversation_usage_tokens,
     limits_from_settings,
 )
+from app.agent.memory import RollingSummaryConversationManager
 from app.agent.model_factory import create_model
 from app.agent.prompt import SYSTEM_PROMPT
+from app.agent.session_store import DbSessionRepository
 from app.agent.tools import tool_list
 from app.core.settings import Settings, get_settings
-from app.db.models import MessageLogRow
+from app.db.models import AgentConversationSummaryRow, MessageLogRow
 from app.db.session import create_db_engine, make_session_factory
 
 logger = logging.getLogger(__name__)
@@ -87,6 +90,7 @@ async def process_inbound_message(
     session_factory: SessionFactory,
     model: Any,
     twilio_client: Any,
+    session_repository: SessionRepository,
 ) -> None:
     """Process one validated inbound message (async body of the task).
 
@@ -97,6 +101,13 @@ async def process_inbound_message(
         session_factory: Async session factory on the application database.
         model: The ONE Strands model object for the agent (factory-built).
         twilio_client: The Twilio REST client used to send the reply.
+        session_repository: REQUIRED: the SDK ``SessionRepository``
+            backing the conversation memory (WA-8). Deliberately not
+            defaulted here: a settings-derived default would silently
+            point DB-touching tests at the configured (development)
+            database. The production default is built once, in
+            :func:`handle_inbound_message`, from settings; tests inject a
+            repository on the dedicated test database.
     """
     message_sid = str(message.get("MessageSid", "") or "")
     body = str(message.get("Body", "") or "")
@@ -168,8 +179,23 @@ async def process_inbound_message(
     # share this message's DB session factory via the module seam. Invoked
     # through the SDK's native async entry point so everything stays on the
     # caller's event loop.
+    #
+    # Conversation memory (WA-8) rides the SDK's own session seam: the
+    # session id is the SENDER (one session per conversation — isolation
+    # by construction, and a message processed by a different Celery
+    # process reloads the earlier turns), persistence goes through the
+    # SDK's RepositorySessionManager on OUR SessionRepository, and the
+    # rolling-summary policy is a ConversationManager subclass.
     agent_tools.set_session_factory_provider(lambda: session_factory)
-    agent = _build_agent(model)
+    memory = RollingSummaryConversationManager(
+        window_size=settings.agent_memory_window_messages,
+        trigger_messages=settings.agent_summary_trigger_messages,
+    )
+    session_manager = RepositorySessionManager(
+        session_id=sender,
+        session_repository=session_repository,
+    )
+    agent = _build_agent(model, session_manager=session_manager, conversation_manager=memory)
     result = await agent.invoke_async(body, limits=limits_from_settings(settings))
     reply = _reply_text(result)
     if not reply.strip():
@@ -192,6 +218,13 @@ async def process_inbound_message(
     usage = dict(result.metrics.accumulated_usage)
     latency_ms = result.metrics.accumulated_metrics.get("latencyMs")
     budget.add_usage(usage)
+    # The rolling summary's generation IS a model turn (WA-8): its usage
+    # counts against the same conversation budget and is persisted with the
+    # same provenance as any turn (agent_conversation_summary), where the
+    # next turn's budget seed reads it back.
+    generated_summaries = list(memory.generated_summaries)
+    for generated in generated_summaries:
+        budget.add_usage(generated["usage"])
     async with session_factory() as session:
         for call in tool_calls:
             session.add(
@@ -203,6 +236,17 @@ async def process_inbound_message(
                         "output": call["output"],
                         "status": call["status"],
                     },
+                    trace_id=trace_id,
+                    agent_version=AGENT_VERSION,
+                )
+            )
+        for generated in generated_summaries:
+            session.add(
+                AgentConversationSummaryRow(
+                    session_id=sender,
+                    summary=str(generated["summary"]),
+                    covered_message_count=int(generated["covered_messages"]),
+                    usage=generated["usage"],
                     trace_id=trace_id,
                     agent_version=AGENT_VERSION,
                 )
@@ -228,11 +272,24 @@ async def process_inbound_message(
     logger.info("WhatsApp reply sent for message %s (trace %s)", message_sid, trace_id)
 
 
-def _build_agent(model: Any) -> Any:
-    """Build the Strands agent with OUR system prompt and explicit tools."""
+def _build_agent(
+    model: Any,
+    *,
+    session_manager: SessionManager | None = None,
+    conversation_manager: Any | None = None,
+) -> Any:
+    """Build the Strands agent with OUR system prompt, explicit tools and
+    the conversation-memory seam (WA-8: a session manager over our
+    repository + the rolling-summary conversation manager)."""
     from strands import Agent
 
-    return Agent(model=model, system_prompt=SYSTEM_PROMPT, tools=tool_list())
+    return Agent(
+        model=model,
+        system_prompt=SYSTEM_PROMPT,
+        tools=tool_list(),
+        session_manager=session_manager,
+        conversation_manager=conversation_manager,
+    )
 
 
 def _reply_text(result: Any) -> str:
@@ -293,14 +350,17 @@ def handle_inbound_message(
     session_factory: SessionFactory | None = None,
     model: Any | None = None,
     twilio_client: Any | None = None,
+    session_repository: SessionRepository | None = None,
 ) -> None:
     """Synchronous seam the Celery task calls; runs the async pipeline.
 
     Every dependency can be injected for tests; the defaults derive each
     from configuration (``get_settings``, the async DB engine, the model
-    factory, the Twilio REST client). This module-level function is the
-    seam tests patch to observe the hand-off (same pattern as
-    ``_backfill`` in :mod:`app.scheduler.tasks`).
+    factory, the Twilio REST client, and — for the conversation memory —
+    :class:`app.agent.session_store.DbSessionRepository` on the configured
+    database). This module-level function is the seam tests patch to
+    observe the hand-off (same pattern as ``_backfill`` in
+    :mod:`app.scheduler.tasks`).
     """
     resolved_settings = settings if settings is not None else get_settings()
     resolved_sessions = session_factory if session_factory is not None else make_session_factory(
@@ -316,6 +376,11 @@ def handle_inbound_message(
                 twilio_client
                 if twilio_client is not None
                 else make_twilio_client(resolved_settings)
+            ),
+            session_repository=(
+                session_repository
+                if session_repository is not None
+                else DbSessionRepository(resolved_settings.database_url)
             ),
         )
     )

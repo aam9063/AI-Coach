@@ -96,9 +96,20 @@ async def session_factory() -> AsyncGenerator[async_sessionmaker[Any], None]:
     await engine.dispose()
 
 
+@pytest.fixture
+def session_repository() -> Any:
+    """Repository on the DEDICATED test database (never the dev DB)."""
+    from app.agent.session_store import DbSessionRepository
+    from tests.dbsupport import test_database_url
+
+    return DbSessionRepository(test_database_url())
+
+
 class TestEndToEndPipeline:
     async def test_reply_sent_and_all_rows_written(
-        self, session_factory: async_sessionmaker[Any]
+        self,
+        session_factory: async_sessionmaker[Any],
+        session_repository: Any,
     ) -> None:
         model = FakeModel(
             [
@@ -114,6 +125,7 @@ class TestEndToEndPipeline:
             session_factory=session_factory,
             model=model,
             twilio_client=twilio,
+            session_repository=session_repository,
         )
 
         # 1. Reply sent through the Twilio REST client, exactly once, with
@@ -151,7 +163,9 @@ class TestEndToEndPipeline:
         assert all(r.agent_version == AGENT_VERSION for r in rows)
 
     async def test_retry_of_same_message_sid_is_a_no_op(
-        self, session_factory: async_sessionmaker[Any]
+        self,
+        session_factory: async_sessionmaker[Any],
+        session_repository: Any,
     ) -> None:
         model = FakeModel(["primera respuesta"])
         twilio = FakeTwilioClient()
@@ -163,6 +177,7 @@ class TestEndToEndPipeline:
                 session_factory=session_factory,
                 model=model,
                 twilio_client=twilio,
+                session_repository=session_repository,
             )
 
         # One Twilio send, one set of rows, ONE agent invocation.
@@ -175,7 +190,9 @@ class TestEndToEndPipeline:
         assert len(model.invocations) == 1
 
     async def test_rows_without_tool_calls_when_agent_answers_directly(
-        self, session_factory: async_sessionmaker[Any]
+        self,
+        session_factory: async_sessionmaker[Any],
+        session_repository: Any,
     ) -> None:
         model = FakeModel(["Respuesta directa."])
         twilio = FakeTwilioClient()
@@ -186,6 +203,7 @@ class TestEndToEndPipeline:
             session_factory=session_factory,
             model=model,
             twilio_client=twilio,
+            session_repository=session_repository,
         )
 
         async with session_factory() as session:
@@ -196,7 +214,9 @@ class TestEndToEndPipeline:
 
 class TestHandleInboundMessageSeam:
     def test_injections_pass_through_to_the_pipeline(
-        self, monkeypatch: pytest.MonkeyPatch
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        session_repository: Any,
     ) -> None:
         """``handle_inbound_message`` forwards every injected dependency."""
         received: dict[str, Any] = {}
@@ -218,6 +238,7 @@ class TestHandleInboundMessageSeam:
             session_factory=session_factory,  # type: ignore[arg-type]
             model=model,
             twilio_client=twilio,
+            session_repository=session_repository,
         )
 
         assert received["message"] == make_message()
@@ -225,6 +246,7 @@ class TestHandleInboundMessageSeam:
         assert received["session_factory"] is session_factory
         assert received["model"] is model
         assert received["twilio_client"] is twilio
+        assert received["session_repository"] is session_repository
 
     def test_default_wiring_is_derived_from_configuration(
         self, monkeypatch: pytest.MonkeyPatch

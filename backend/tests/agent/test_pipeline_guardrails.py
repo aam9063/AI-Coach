@@ -91,6 +91,15 @@ async def session_factory() -> AsyncGenerator[async_sessionmaker[Any], None]:
     await engine.dispose()
 
 
+@pytest.fixture
+def session_repository() -> Any:
+    """Repository on the DEDICATED test database (never the dev DB)."""
+    from app.agent.session_store import DbSessionRepository
+    from tests.dbsupport import test_database_url
+
+    return DbSessionRepository(test_database_url())
+
+
 async def outbound_rows(factory: async_sessionmaker[Any]) -> list[MessageLogRow]:
     async with factory() as session:
         rows = (await session.execute(
@@ -101,7 +110,9 @@ async def outbound_rows(factory: async_sessionmaker[Any]) -> list[MessageLogRow]
 
 class TestPerInvocationLimits:
     async def test_loop_stops_at_the_turn_limit_and_replies_explicitly(
-        self, session_factory: async_sessionmaker[Any]
+        self,
+        session_factory: async_sessionmaker[Any],
+        session_repository: Any,
     ) -> None:
         """Two scripted tool-use turns + agent_max_turns=2: the SDK loop
         stops with ``limit_turns``, no final text exists, and the athlete
@@ -118,6 +129,7 @@ class TestPerInvocationLimits:
             session_factory=session_factory,
             model=model,
             twilio_client=twilio,
+            session_repository=session_repository,
         )
 
         # The loop stopped on OUR limit (no third model call happened).
@@ -130,7 +142,9 @@ class TestPerInvocationLimits:
 
 class TestUsagePersistenceAndBudget:
     async def test_usage_and_latency_are_persisted_per_turn(
-        self, session_factory: async_sessionmaker[Any]
+        self,
+        session_factory: async_sessionmaker[Any],
+        session_repository: Any,
     ) -> None:
         model = FakeModel(["Respuesta directa."])
         twilio = FakeTwilioClient()
@@ -141,6 +155,7 @@ class TestUsagePersistenceAndBudget:
             session_factory=session_factory,
             model=model,
             twilio_client=twilio,
+            session_repository=session_repository,
         )
 
         rows = await outbound_rows(session_factory)
@@ -155,7 +170,9 @@ class TestUsagePersistenceAndBudget:
         assert payload["to"] == FROM
 
     async def test_exhausted_budget_stops_before_invoking(
-        self, session_factory: async_sessionmaker[Any]
+        self,
+        session_factory: async_sessionmaker[Any],
+        session_repository: Any,
     ) -> None:
         """Prior conversation usage at/over the budget: the model is never
         invoked and the athlete gets the explicit budget message."""
@@ -180,6 +197,7 @@ class TestUsagePersistenceAndBudget:
             session_factory=session_factory,
             model=model,
             twilio_client=twilio,
+            session_repository=session_repository,
         )
 
         assert len(model.invocations) == 0
@@ -190,7 +208,9 @@ class TestUsagePersistenceAndBudget:
         assert len(rows) == 2  # prior seeded row + the budget message row
 
     async def test_budget_accumulates_across_turns_of_one_conversation(
-        self, session_factory: async_sessionmaker[Any]
+        self,
+        session_factory: async_sessionmaker[Any],
+        session_repository: Any,
     ) -> None:
         """Turn 1 runs and persists its usage; turn 2 of the SAME
         conversation sees the accumulated usage over the budget and stops."""
@@ -203,6 +223,7 @@ class TestUsagePersistenceAndBudget:
             session_factory=session_factory,
             model=FakeModel(["primera respuesta."]),
             twilio_client=twilio,
+            session_repository=session_repository,
         )
         second_model = FakeModel([])  # would raise if invoked
         await process_inbound_message(
@@ -211,6 +232,7 @@ class TestUsagePersistenceAndBudget:
             session_factory=session_factory,
             model=second_model,
             twilio_client=twilio,
+            session_repository=session_repository,
         )
 
         assert len(twilio.messages.calls) == 2
@@ -219,7 +241,9 @@ class TestUsagePersistenceAndBudget:
         assert len(second_model.invocations) == 0
 
     async def test_other_senders_usage_does_not_count(
-        self, session_factory: async_sessionmaker[Any]
+        self,
+        session_factory: async_sessionmaker[Any],
+        session_repository: Any,
     ) -> None:
         """The budget is per conversation: another sender's persisted usage
         must not exhaust this one."""
@@ -240,5 +264,6 @@ class TestUsagePersistenceAndBudget:
             session_factory=session_factory,
             model=model,
             twilio_client=twilio,
+            session_repository=session_repository,
         )
         assert twilio.messages.calls[0]["body"] == "respuesta."

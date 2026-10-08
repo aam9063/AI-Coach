@@ -14,11 +14,14 @@ is the Strands Agents SDK's. Ours are the guardrails around it:
   the budget is exhausted, so the pipeline can stop with an explicit
   message instead of letting a conversation run unbounded.
 - :func:`conversation_usage_tokens` seeds that accumulator from the usage
-  persisted in ``message_log`` by previous turns of the same conversation.
-  A conversation is the WhatsApp free-form window (§9.1): the 24 h after
-  the athlete's last message. The seed query reads the OUTBOUND rows whose
-  payload names the sender (``payload["to"]``), summed over that window —
-  the persistence side is written by the pipeline on every turn.
+  persisted by previous turns of the same conversation. A conversation is
+  the WhatsApp free-form window (§9.1): the 24 h after the athlete's last
+  message. The seed query reads the OUTBOUND rows whose payload names the
+  sender (``payload["to"]``), summed over that window — the persistence
+  side is written by the pipeline on every turn — plus the token cost of
+  the conversation's stored ROLLING SUMMARY generations (WA-8), whose
+  invocations are model turns exactly like the replies and count against
+  the same budget.
 """
 
 from __future__ import annotations
@@ -31,7 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from strands.types.agent import Limits
 
 from app.core.settings import Settings
-from app.db.models import MessageLogRow
+from app.db.models import AgentConversationSummaryRow, MessageLogRow
 
 __all__ = [
     "BUDGET_EXHAUSTED_REPLY",
@@ -127,8 +130,11 @@ async def conversation_usage_tokens(session: AsyncSession, *, sender: str) -> in
 
     Reads the outbound ``message_log`` rows written within the free-form
     window whose payload names this sender (``payload["to"]``) and sums
-    their ``payload["usage"]["totalTokens"]``. Rows without usable usage
-    payloads contribute nothing — never guessed.
+    their ``payload["usage"]["totalTokens"]``, plus the usage persisted
+    for the conversation's rolling-summary generations (WA-8) in
+    ``agent_conversation_summary`` — a summary's model invocation costs
+    exactly like a reply's. Rows without usable usage payloads contribute
+    nothing — never guessed.
     """
     cutoff = datetime.now(UTC) - CONVERSATION_WINDOW
     rows = (
@@ -152,4 +158,22 @@ async def conversation_usage_tokens(session: AsyncSession, *, sender: str) -> in
             tokens = usage.get("totalTokens")
             if isinstance(tokens, int):
                 total += tokens
+
+    summary_rows = (
+        (
+            await session.execute(
+                select(AgentConversationSummaryRow).where(
+                    AgentConversationSummaryRow.session_id == sender,
+                    AgentConversationSummaryRow.created_at >= cutoff,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    for summary_row in summary_rows:
+        usage = summary_row.usage or {}
+        tokens = usage.get("totalTokens")
+        if isinstance(tokens, int):
+            total += tokens
     return total
