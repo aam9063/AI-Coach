@@ -5,37 +5,27 @@ and hands the message off here: all real work — the agent loop, DB access,
 the Twilio REST reply — happens in the worker, never in the request path
 (§9.1: respond fast, Twilio retries slow responses).
 
-The processing pipeline itself lands with WA-3 (end-to-end against a fake
-LLM adapter). ``handle_inbound_message`` is the module-level seam tests
-patch (same pattern as ``_backfill`` in :mod:`app.scheduler.tasks`), so the
-hand-off is observable in eager-mode tests without a database, an LLM or a
-broker. Until WA-3 lands it logs at WARNING so an unpatched run is
-observable rather than silent; it never logs message bodies or secrets.
+**What is the SDK's and what is ours** (WA-3): the Celery task wrapper is
+ours; the agent's tool-calling loop inside the pipeline is the Strands
+Agents SDK's; ours are the persistence (``message_log`` with the
+``MessageSid`` idempotency anchor), the budget/guardrails (WA-5), the
+explicit tool list and the safety prompt (§3).
+
+``handle_inbound_message`` is the module-level seam tests patch (same
+pattern as ``_backfill`` in :mod:`app.scheduler.tasks`) and the injectable
+entry point (every dependency — settings, session factory, model, Twilio
+client — can be injected; defaults derive from configuration). It runs
+the full pipeline :func:`app.agent.pipeline.process_inbound_message`
+with ``asyncio.run`` (the codebase is async-first; Celery tasks are sync).
 """
 
 from __future__ import annotations
 
-import logging
-from typing import Any
-
+from app.agent.pipeline import handle_inbound_message
 from app.scheduler.celery_app import celery_app
-
-logger = logging.getLogger(__name__)
-
-
-def handle_inbound_message(message: dict[str, Any]) -> None:
-    """Process one inbound WhatsApp message (pipeline arrives with WA-3).
-
-    ``message`` is the Twilio form payload the webhook validated (keys like
-    ``MessageSid``, ``From``, ``To``, ``Body``).
-    """
-    logger.warning(
-        "WhatsApp message %s received but processing is not implemented yet (WA-3)",
-        message.get("MessageSid", "<no MessageSid>"),
-    )
 
 
 @celery_app.task(name="app.scheduler.whatsapp_tasks.process_whatsapp_message")  # type: ignore[untyped-decorator]
-def process_whatsapp_message(message: dict[str, Any]) -> None:
+def process_whatsapp_message(message: dict[str, str]) -> None:
     """Celery task: process one validated inbound WhatsApp message."""
     handle_inbound_message(message)

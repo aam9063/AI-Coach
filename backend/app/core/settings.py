@@ -369,6 +369,16 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     openai_api_key: str = ""
 
+    # --- WhatsApp agent (Feature 6; WA-3/WA-4) -------------------------------
+    # Which model object the agent gets — ONE object per §6, chosen purely
+    # by configuration. "openai" builds the real strands OpenAIModel from
+    # openai_api_key/llm_model_id; "fake" builds the deterministic
+    # app.agent.fake_model.FakeModel (tests, dry runs — zero network).
+    # Anything else fails loudly instead of silently dialling a provider.
+    llm_provider: str = "openai"
+    # Model id handed to the provider (strands OpenAIConfig.model_id).
+    llm_model_id: str = "gpt-4o-mini"
+
     # --- Observability ------------------------------------------------------
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
