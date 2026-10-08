@@ -257,7 +257,7 @@ class TestGzipInput:
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         fit_bytes = FIXTURE_PATH.read_bytes()
-        compressed = gzip.compress(fit_bytes)
+        compressed = gz(fit_bytes)
         path = write_tmp_fit(tmp_path, compressed, name="ride.fit.gz")
         client = StubUploadClient(
             ActivityUploadResult(created=True, activity_ids=("i77",))
@@ -289,7 +289,7 @@ class TestGzipInput:
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         path = write_tmp_fit(
-            tmp_path, gzip.compress(FIT_BYTES), name="dup.fit.gz"
+            tmp_path, gz(FIT_BYTES), name="dup.fit.gz"
         )
         client = StubUploadClient(
             ActivityUploadResult(created=False, activity_ids=("i140561802",))
@@ -335,7 +335,7 @@ class TestDirectoryDiscovery:
         one.write_bytes(fit_bytes)
         two = tmp_path / "x" / "two.fit.gz"
         two.parent.mkdir()
-        two.write_bytes(gzip.compress(fit_bytes))
+        two.write_bytes(gz(fit_bytes))
         (tmp_path / "notes.txt").write_text("not an activity")
         (tmp_path / "y").mkdir()
         (tmp_path / "y" / "other.gpx").write_bytes(b"<gpx/>")
@@ -423,6 +423,34 @@ class TestDirectoryDiscovery:
 # ---------------------------------------------------------------------------
 
 
+def gz(data: bytes) -> bytes:
+    """Gzip fixture with a PINNED zero timestamp (never the current time).
+
+    ``gzip.compress`` writes the wall-clock time into the gzip header, so two
+    compressions of identical bytes are different artifacts one second apart:
+    the only differing bytes are the MTIME at offset 4..8. This file compares
+    a stored ``.gz`` member against a compressed blob, and the assertion once
+    compressed a SECOND time at that moment, which made the test depend on
+    whether the CLI run in between crossed a whole second. It did: CI was
+    green at 11:26 and red at 13:24 on byte-identical content (same run id
+    family, same tree). Pinning ``mtime=0`` makes every gzip artifact here
+    reproducible byte for byte, so the comparison can never race the clock.
+    """
+    return gzip.compress(data, mtime=0)
+
+
+def test_gz_fixture_is_time_independent() -> None:
+    """Regression guard: the gzip fixtures carry a zero MTIME.
+
+    Bytes 4..8 of a gzip stream are the MTIME field. If this ever goes back
+    to the implicit ``time.time()``, a byte comparison against a re-compressed
+    blob becomes clock-dependent and turns into an intermittent CI failure.
+    """
+    first = gz(b"payload")
+    assert first[4:8] == b"\x00\x00\x00\x00"
+    assert first == gz(b"payload")
+
+
 def zip_members(zipped: bytes) -> dict[str, bytes]:
     with zipfile.ZipFile(io.BytesIO(zipped)) as zf:
         return {name: zf.read(name) for name in zf.namelist()}
@@ -434,7 +462,8 @@ class TestZipBatching:
     ) -> None:
         fit_bytes = FIXTURE_PATH.read_bytes()
         (tmp_path / "a.fit").write_bytes(fit_bytes)
-        (tmp_path / "b.fit.gz").write_bytes(gzip.compress(fit_bytes))
+        gz_fit = gz(fit_bytes)
+        (tmp_path / "b.fit.gz").write_bytes(gz_fit)
         client = StubUploadClient(
             ActivityUploadResult(created=True, activity_ids=("i1", "i2"))
         )
@@ -456,7 +485,7 @@ class TestZipBatching:
         members = zip_members(uploaded)
         assert set(members) == {"a.fit", "b.fit.gz"}
         assert members["a.fit"] == fit_bytes
-        assert members["b.fit.gz"] == gzip.compress(fit_bytes)
+        assert members["b.fit.gz"] == gz_fit
 
         # Per-batch accounting: created count and the response's ids.
         assert "activities-001.zip" in out
@@ -505,7 +534,7 @@ class TestZipBatching:
         fit_bytes = FIXTURE_PATH.read_bytes()
         for name in ("one.fit", "two.fit.gz", "three.fit"):
             (tmp_path / name).write_bytes(
-                gzip.compress(fit_bytes) if name.endswith(".gz") else fit_bytes
+                gz(fit_bytes) if name.endswith(".gz") else fit_bytes
             )
         client = StubUploadClient(
             [
