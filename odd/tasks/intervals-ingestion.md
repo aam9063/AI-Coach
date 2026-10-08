@@ -105,3 +105,11 @@ Running the real 180-day backfill with the owner's API key exposed a contract bu
 - **The original file endpoint is not always gzipped**: `/activity/{id}/file` returned an uncompressed FIT (`b'.FIT'`, 35,828 bytes). The magic-byte gzip detection in the client already handled both cases — no change needed, and the assumption is now documented.
 
 Both findings are recorded in `docs/adr/0001-intervals-icu-api-verification.md` context: mocked tests alone are not sufficient evidence for an external API contract.
+
+## Follow-up fixed: wellness wire field mapping (2026-10-08)
+
+A live `GET /athlete/{id}/wellness` probe, run the same day the owner enabled the Garmin "Download Wellness" import, proved that three of the fields this feature consumes had been mapped from the API cookbook instead of the wire. The real payload carries `restingHR`, `sleepSecs` (SECONDS) and `hrvSDNN`; the model declared `alias="RHR"`, `sleep_minutes`, and read `extras["lnHrv"]`. Resting HR, sleep and ln(HRV) therefore persisted as NULL. The defect was invisible by construction: those values were always absent, so no fixture and no real-data run could surface it.
+
+Fixed in the commit above: wire aliases with `AliasChoices` (the legacy `RHR` name is still accepted, the wire name wins), a single seconds-to-minutes conversion in the model validator, `sleepScore` as a real typed field, `hrvSDNN` typed but not persisted (no column, and migrations are immutable), and `ln_hrv` derived from the genuine rMSSD instead of from SDNN. The guard is `tests/ingest/test_wellness_wire.py`, built from the captured wire payload: 8 failed on the old code, 11 passed after the fix.
+
+Verified against real data, not only fixtures: `backfill --days 30 --chunk-days 7` synced 30 wellness records with 0 failures, and the database now holds **30 days of `resting_hr`** (52-65 bpm), **2 nights of `hrv`/`sleep_minutes`/`sleep_score`**, with `ln_hrv` matching independent arithmetic (ln 37 = 3.6109, ln 45 = 3.8067). Still unmapped and preserved in extras: `sleepQuality`, `avgSleepingHR`, `readiness` (Garmin Training Readiness), `steps`, `vo2max`, `baevskySI`, `tempRestingHR` and the subjective fields.
