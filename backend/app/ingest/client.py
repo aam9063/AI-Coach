@@ -14,6 +14,8 @@ Endpoints used (§5.1):
 - ``GET /athlete/{id}`` (athlete profile: resting HR, weight, sex; shape live-verified 2026-10-02)
 - ``GET /activity/{id}/file`` (original upload; response is GZIP-compressed)
 - ``GET /activity/{id}/fit-file`` (generated FIT file)
+- ``POST /athlete/{id}/activities`` (multipart activity-file upload; 201 =
+  created, 200 = all duplicates — dedup by file-content hash, cookbook-verified)
 
 Auth: HTTP Basic with the literal username ``API_KEY`` and the personal API
 key as the password (§5.1). Athlete id ``0`` refers to the key's owner; a
@@ -29,6 +31,7 @@ from __future__ import annotations
 import gzip
 import time
 from types import TracebackType
+from typing import Any
 
 import httpx
 
@@ -42,7 +45,14 @@ from app.ingest.exceptions import (
     IntervalsRateLimitError,
     IntervalsServerError,
 )
-from app.ingest.models import Activity, AthleteProfile, SportSettings, Stream, Wellness
+from app.ingest.models import (
+    Activity,
+    ActivityUploadResult,
+    AthleteProfile,
+    SportSettings,
+    Stream,
+    Wellness,
+)
 
 # Module-level indirection so tests can observe backoff without real sleeps.
 _sleep = time.sleep
@@ -181,6 +191,64 @@ class IntervalsClient:
         response = self._request("GET", f"/activity/{activity_id}/fit-file")
         return response.content
 
+    def upload_activity_file(
+        self,
+        data: bytes,
+        *,
+        filename: str,
+        name: str | None = None,
+        description: str | None = None,
+    ) -> ActivityUploadResult:
+        """Upload an activity file to Intervals.icu as a multipart form.
+
+        ``POST /athlete/{id}/activities`` — accepts ``multipart/form-data``
+        with the file in the form field named ``file`` plus optional ``name``
+        and ``description`` fields; ``name``/``description`` are only sent
+        when provided. The file may be ``.fit``, ``.gpx``, ``.fit.gz``,
+        ``.gpx.gz`` or a zip containing them (verified: official API
+        cookbook).
+
+        Response semantics (LIVE-VERIFIED 2026-10 by uploading one of the
+        owner's real files twice — the cookbook's array/empty-body
+        description is wrong): **201 when the activity was created and 200
+        when the file was already present** — and in BOTH cases the body is
+        a JSON OBJECT::
+
+            {"icu_athlete_id":"i555003","id":"i194265861",
+             "activities":[{"icu_athlete_id":"i555003","id":"i194265861"}]}
+
+        A 200 duplicate carries the EXISTING activity's id (it is NOT an
+        empty body): the platform de-duplicates by a hash of the file
+        contents, so a re-upload of a byte-identical file is safe and is
+        reported here as a duplicate WITH the id it matched. Note the dedup
+        is byte-identical only: the same ride arriving as a different file
+        (e.g. sourced from Garmin Connect vs this upload) creates a SECOND
+        activity. The ids carried in ``ActivityUploadResult.activity_ids``
+        come from the ``activities`` array, falling back to the top-level
+        ``id``; a bare JSON array of objects is tolerated as a documented
+        fallback (the API may serve both).
+
+        Auth is unchanged: HTTP Basic in the ``Authorization`` header only —
+        the API key never appears in the body or the query (§5.1).
+        4xx responses map to the client's typed exceptions and 429/5xx are
+        retried with exponential backoff, exactly like every other endpoint.
+        """
+        form: dict[str, str] = {}
+        if name is not None:
+            form["name"] = name
+        if description is not None:
+            form["description"] = description
+        response = self._request(
+            "POST",
+            f"/athlete/{self._settings.intervals_athlete_id}/activities",
+            files={"file": (filename, data)},
+            data=form,
+        )
+        return ActivityUploadResult(
+            created=response.status_code == 201,
+            activity_ids=upload_response_activity_ids(response.json()),
+        )
+
     # --- Internals ---------------------------------------------------------------
 
     @staticmethod
@@ -195,12 +263,16 @@ class IntervalsClient:
         method: str,
         path: str,
         params: dict[str, str] | None = None,
+        files: dict[str, Any] | None = None,
+        data: dict[str, str] | None = None,
     ) -> httpx.Response:
         """Perform a request, retrying 429/5xx with exponential backoff."""
         max_retries = self._settings.intervals_max_retries
         backoff_factor = self._settings.intervals_backoff_factor
         for attempt in range(max_retries + 1):
-            response = self._client.request(method, path, params=params)
+            response = self._client.request(
+                method, path, params=params, files=files, data=data
+            )
             retriable = response.status_code == 429 or response.status_code >= 500
             if not retriable or attempt >= max_retries:
                 return self._raise_for_status(response)
@@ -226,4 +298,35 @@ class IntervalsClient:
         raise IntervalsServerError(status, message)
 
 
-__all__ = ["IntervalsClient", "IntervalsHTTPError"]
+__all__ = [
+    "IntervalsClient",
+    "IntervalsHTTPError",
+    "upload_response_activity_ids",
+]
+
+
+def upload_response_activity_ids(body: Any) -> tuple[str, ...]:
+    """Activity ids from an upload response body (live-verified shape).
+
+    The real body is a JSON OBJECT with an ``activities`` array of objects
+    carrying ``id`` (and a top-level ``id`` duplicating the single created
+    id); a bare JSON array of objects is tolerated as a fallback. A 200
+    duplicate body carries the EXISTING activity's id — never discarded.
+    Anything unrecognised yields ``()`` (the caller reports it).
+    """
+    if isinstance(body, dict):
+        raw_items: list[Any] = body.get("activities") or []
+        top_id = body.get("id")
+    elif isinstance(body, list):
+        raw_items = list(body)
+        top_id = None
+    else:
+        raw_items, top_id = [], None
+    ids = [
+        str(item["id"])
+        for item in raw_items
+        if isinstance(item, dict) and item.get("id") is not None
+    ]
+    if not ids and top_id is not None:
+        ids.append(str(top_id))
+    return tuple(ids)
