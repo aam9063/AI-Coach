@@ -26,6 +26,7 @@ Design choices documented here:
 
 from __future__ import annotations
 
+import math
 from datetime import UTC, datetime
 from itertools import pairwise
 from pathlib import Path
@@ -175,10 +176,13 @@ async def test_sync_happy_path_persists_activities_streams_wellness(
                 {
                     "id": "2026-01-15",
                     "hrv": 58.0,
-                    "RHR": 48.0,
-                    "sleep_minutes": 420,
+                    # Real wire names (live-verified 2026-10-08): "RHR" is
+                    # NOT on the wire, "restingHR" is; sleep arrives as
+                    # sleepSecs in SECONDS; there is no "lnHrv" key —
+                    # ln_hrv is derived from the rMSSD value.
+                    "restingHR": 48.0,
+                    "sleepSecs": 25200,
                     "weight": 70.2,
-                    "lnHrv": 4.06,
                     "sleepScore": 77.0,
                     # Intervals' own PMC values: stored as NON-authoritative
                     # cross-check columns only (§5.1, §12.3 LOAD-10).
@@ -258,7 +262,8 @@ async def test_sync_happy_path_persists_activities_streams_wellness(
         assert wellness.resting_hr == 48.0
         assert wellness.sleep_minutes == 420
         assert wellness.weight == 70.2
-        assert wellness.ln_hrv == 4.06
+        # lnHrv is not on the wire: derived as ln(58.0 rMSSD ms).
+        assert wellness.ln_hrv == pytest.approx(math.log(58.0))
         assert wellness.sleep_score == 77.0
         # §5.1 cross-check columns: Intervals' own CTL/ATL, never truth.
         assert wellness.intervals_icu_ctl == 71.2
