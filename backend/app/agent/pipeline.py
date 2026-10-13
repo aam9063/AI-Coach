@@ -74,6 +74,11 @@ from app.agent.budget import (
     limits_from_settings,
 )
 from app.agent.context import build_athlete_context
+from app.agent.medical_backstop import (
+    MEDICAL_PROMPT_REINFORCEMENT,
+    detect_medical_signal,
+    ensure_medical_disclosure,
+)
 from app.agent.memory import RollingSummaryConversationManager
 from app.agent.model_factory import create_model
 from app.agent.prompt import SYSTEM_PROMPT
@@ -255,9 +260,16 @@ async def process_inbound_message(
     # SDK's RepositorySessionManager on OUR SessionRepository, and the
     # rolling-summary policy is a ConversationManager subclass.
     agent_tools.set_session_factory_provider(lambda: session_factory)
+    # Medical-disclosure backstop, layer 1 (WA-9, §3): on a medical signal
+    # the instruction to include the disclosure is EXPLICIT for this turn —
+    # a mandatory sentence appended to the system prompt (the deterministic
+    # outcome layer below guarantees the reply itself).
+    medical_signal = detect_medical_signal(body)
     system_prompt = SYSTEM_PROMPT + "\n\n" + await build_athlete_context(
         session_factory, settings
     )
+    if medical_signal:
+        system_prompt += "\n\n" + MEDICAL_PROMPT_REINFORCEMENT
     memory = RollingSummaryConversationManager(
         window_size=settings.agent_memory_window_messages,
         trigger_messages=settings.agent_summary_trigger_messages,
@@ -274,6 +286,14 @@ async def process_inbound_message(
     )
     result = await agent.invoke_async(body, limits=limits_from_settings(settings))
     reply = _reply_text(result)
+    # Medical-disclosure backstop, layer 2 (WA-9, §3): the outcome is
+    # guaranteed deterministically. If the model forgot the disclosure on a
+    # medical turn, it is APPENDED as one more natural sentence — never
+    # replacing the model's content — and the intervention is recorded in
+    # the outbound audit payload below instead of staying silent.
+    disclosure_applied = False
+    if medical_signal and reply.strip():
+        reply, disclosure_applied = ensure_medical_disclosure(reply)
     if not reply.strip():
         # The loop stopped on a limit (limit_turns/limit_output_tokens/
         # limit_total_tokens) or otherwise produced no final text: the
@@ -334,17 +354,21 @@ async def process_inbound_message(
                 )
             )
         for part, chunk in enumerate(chunks, start=1):
+            payload: dict[str, Any] = {
+                "to": sender,
+                "usage": usage,
+                "latency_ms": latency_ms,
+                "part": part,
+                "total": total_chunks,
+            }
+            if disclosure_applied:
+                # Observable, not silent: the audit names the backstop.
+                payload["medical_disclosure_backstop"] = True
             session.add(
                 MessageLogRow(
                     direction="outbound",
                     body=chunk,
-                    payload={
-                        "to": sender,
-                        "usage": usage,
-                        "latency_ms": latency_ms,
-                        "part": part,
-                        "total": total_chunks,
-                    },
+                    payload=payload,
                     trace_id=trace_id,
                     agent_version=AGENT_VERSION,
                 )
