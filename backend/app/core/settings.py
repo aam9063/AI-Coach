@@ -84,6 +84,10 @@ class Settings(BaseSettings):
     athlete_threshold_run_speed_mps: float | None = None
     # Body weight in kg (athlete profile weight; null for this owner).
     athlete_weight_kg: float | None = None
+    # The athlete's name as the agent addresses them in the per-turn
+    # context block (WA-8, §9.2). Empty = not configured: the context
+    # block simply omits the name line. OWNER CHOICE.
+    athlete_name: str = ""
 
     # --- Engine constants (LOAD-11; §7, §14) --------------------------------
     # Every constant of the deterministic load engine is explicit, sourced
@@ -402,6 +406,18 @@ class Settings(BaseSettings):
     # pipeline stops BEFORE invoking the model and replies with an explicit
     # budget message; usage frees up as turns age out of the 24 h window.
     agent_conversation_token_budget: int = 60000
+
+    # --- WhatsApp reply formatting (Feature 6; WA-8; §9.2) -------------------
+    # WhatsApp formatting constraint (§9.2): short paragraphs, no markdown
+    # tables, and a maximum of ~1,000 CHARACTERS per message. The pipeline
+    # splits a longer reply into consecutive messages at this budget
+    # (split_reply in app.agent.pipeline). The budget is counted in
+    # CHARACTERS, not UTF-8 bytes: the constraint is stated in characters,
+    # Twilio's own WhatsApp message cap is likewise enforced in characters,
+    # and byte counting would needlessly fragment accented Spanish text
+    # while never protecting anything the character count misses. OWNER
+    # CHOICE (the "~" in §9.2).
+    agent_whatsapp_message_char_limit: int = 1000
 
     # --- WhatsApp agent conversation memory (Feature 6; WA-8; §9.2) ----------
     # Conversation memory persists through the Strands SDK's own session seam

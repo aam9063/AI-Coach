@@ -89,6 +89,40 @@ class TestInsufficientDataRuleInPrompt:
         assert "kilómetro" in prompt.lower()  # distance (km)
 
 
+class TestLanguageMirroringAndWhatsAppFormatting:
+    """WA-8 second half: the language rule and the WhatsApp formatting
+    constraints (short paragraphs, no markdown tables, the ~1,000-character
+    per-message budget) are pinned in the prompt the model ACTUALLY
+    receives (§9.2; reply language = the owner's language)."""
+
+    async def test_reply_language_mirrors_the_user_and_names_the_ambiguous_case(
+        self,
+    ) -> None:
+        prompt = await delivered_prompt()
+
+        # Reply in the language the owner wrote in (Spanish or English).
+        assert "español" in prompt.lower()
+        assert "inglés" in prompt.lower()
+        # The rule is EXPLICIT about ambiguous or mixed messages: the
+        # predominant language of the message decides.
+        assert "ambiguo" in prompt.lower()
+        assert "mezcla" in prompt.lower()
+        assert "predominante" in prompt.lower()
+
+    async def test_whatsapp_formatting_constraints_are_stated(self) -> None:
+        prompt = await delivered_prompt()
+
+        # Short paragraphs; no markdown tables (§9.2).
+        assert "párrafos cortos" in prompt.lower()
+        assert "tablas markdown" in prompt.lower()
+        # The ~1,000-character per-message budget is stated, and the prompt
+        # explains the pipeline splits a longer reply into consecutive
+        # messages (so paragraphs must stand on their own).
+        assert "1.000" in prompt or "1000" in prompt
+        assert "caracter" in prompt.lower()
+        assert "mensajes consecutivos" in prompt.lower()
+
+
 class TestInsufficientDataEndToEnd:
     @pytest.fixture
     async def session_factory(

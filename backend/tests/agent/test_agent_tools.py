@@ -199,10 +199,16 @@ class TestGetLoadStatus:
     async def test_returns_engine_ctl_atl_tsb_from_persisted_rows(
         self, tool_db: async_sessionmaker[Any]
     ) -> None:
+        # Seed the last three days RELATIVE to the real today (the same
+        # "today" the tools use): the tool's "7d" window ends at the real
+        # today, so seeding around the fixed TODAY constant made this test
+        # silently decay once the calendar moved past TODAY+4 (observed
+        # 2026-10-13: only 1 of 3 seeded rows fell inside the window).
+        today = real_today_local()
         async with tool_db() as session:
             for offset in range(3):
                 await seed(session, make_daily_load(
-                    TODAY - timedelta(days=2 - offset),
+                    today - timedelta(days=2 - offset),
                     ctl=40.0 + offset, atl=60.0 + offset, tsb=-20.0 + offset, tss=90.0,
                 ))
 
@@ -213,7 +219,7 @@ class TestGetLoadStatus:
         assert result["ctl"] == pytest.approx(42.0)
         assert result["atl"] == pytest.approx(62.0)
         assert result["tsb"] == pytest.approx(-18.0)
-        assert result["date"] == TODAY.isoformat()
+        assert result["date"] == today.isoformat()
         # Provenance from the persisted engine row (§6).
         assert result["engine_version"] == ENGINE_VERSION
         assert result["computed_at"] == COMPUTED_AT.isoformat()
@@ -224,10 +230,16 @@ class TestGetLoadStatus:
     async def test_sport_filter_reads_the_per_sport_rows(
         self, tool_db: async_sessionmaker[Any]
     ) -> None:
+        # Seeded relative to the real today, for the same reason as the CTL/ATL/TSB
+        # test above: the tool's "7d" window ends at the real today, so seeding on
+        # the fixed TODAY constant put this row exactly on the window's trailing
+        # edge and it would fall outside the day after (observed 2026-10-13: the
+        # 2026-10-07 row was still inside; on 2026-10-14 it is not).
+        today = real_today_local()
         async with tool_db() as session:
-            await seed(session, make_daily_load(TODAY, ctl=50.0, atl=70.0, tsb=-20.0,
+            await seed(session, make_daily_load(today, ctl=50.0, atl=70.0, tsb=-20.0,
                                                 sport="ride"))
-            await seed(session, make_daily_load(TODAY, ctl=45.0, atl=65.0, tsb=-20.0,
+            await seed(session, make_daily_load(today, ctl=45.0, atl=65.0, tsb=-20.0,
                                                 sport="combined"))
 
         result = await tools.get_load_status("7d", sport="ride")
