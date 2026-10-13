@@ -45,8 +45,19 @@ Celery worker:
    Twilio REST client with reversed addressing (``From`` <-> ``To``).
    Rows are persisted BEFORE the send: if sending fails, the retry-safe
    anchor guarantees the failure is at most a missed reply, never a
-   duplicated one. (Langfuse tracing per turn arrives with WA-11 and
-   reuses the trace-id semantics.)
+   duplicated one.
+6. **Tracing (WA-11, §13).** Every turn is traced through the Strands
+   SDK's own OpenTelemetry surface (the Agent's own ``Tracer`` spans:
+   ``invoke_agent``, ``chat``, ``execute_tool``) exported to Langfuse over
+   OTLP — :mod:`app.agent.tracing`, wired once per worker process by
+   :func:`handle_inbound_message` and ONLY when the Langfuse settings are
+   fully configured (otherwise a clean no-op, exactly as pre-WA-11). The
+   turn's agent span carries the repo prompt version
+   (``ai.coach.prompt_version``), the model id for cost derivation, the
+   turn latency and the SDK-reported token usage; tool calls arrive as
+   the SDK's own ``execute_tool`` spans. Tracing is never a failure path:
+   exporter failures are swallowed by the OTel processors and wiring
+   failures disable tracing for the process instead of breaking a turn.
 
 Dependencies are all injectable (settings, session factory, model,
 Twilio client); the defaults derive each from configuration so the
@@ -84,6 +95,11 @@ from app.agent.model_factory import create_model
 from app.agent.prompt import SYSTEM_PROMPT
 from app.agent.session_store import DbSessionRepository
 from app.agent.tools import tool_list
+from app.agent.tracing import (
+    configure_langfuse_tracing,
+    turn_latency_callback,
+    turn_trace_attributes,
+)
 from app.core.settings import Settings, get_settings
 from app.db.models import AgentConversationSummaryRow, MessageLogRow
 from app.db.session import create_db_engine, make_session_factory
@@ -278,12 +294,19 @@ async def process_inbound_message(
         session_id=sender,
         session_repository=session_repository,
     )
+    # The latency stamp rides the SDK's callback seam (the handler runs
+    # before the SDK ends the agent span — see app.agent.tracing). The
+    # holder is resolved during the invocation, after the agent exists.
+    agent_holder: list[Any] = []
     agent = _build_agent(
         model,
         session_manager=session_manager,
         conversation_manager=memory,
         system_prompt=system_prompt,
+        trace_attributes=turn_trace_attributes(settings),
+        callback_handler=turn_latency_callback(agent_holder),
     )
+    agent_holder.append(agent)
     result = await agent.invoke_async(body, limits=limits_from_settings(settings))
     reply = _reply_text(result)
     # Medical-disclosure backstop, layer 2 (WA-9, §3): the outcome is
@@ -394,11 +417,19 @@ def _build_agent(
     session_manager: SessionManager | None = None,
     conversation_manager: Any | None = None,
     system_prompt: str | None = None,
+    trace_attributes: dict[str, Any] | None = None,
+    callback_handler: Any | None = None,
 ) -> Any:
     """Build the Strands agent with OUR system prompt (optionally extended
     with the per-turn athlete context, WA-8), explicit tools and the
     conversation-memory seam (a session manager over our repository + the
-    rolling-summary conversation manager)."""
+    rolling-summary conversation manager).
+
+    ``trace_attributes`` are the SDK's constructor seam for custom
+    attributes on the agent's ``invoke_agent`` span (strands/agent/agent.py
+    ``trace_attributes`` -> ``custom_trace_attributes``); the pipeline passes
+    the prompt version and model id (WA-11). With tracing unconfigured the
+    spans are non-recording and the attributes are no-ops — no cost."""
     from strands import Agent
 
     return Agent(
@@ -409,6 +440,8 @@ def _build_agent(
         tools=tool_list(),
         session_manager=session_manager,
         conversation_manager=conversation_manager,
+        trace_attributes=trace_attributes,
+        callback_handler=callback_handler,
     )
 
 
@@ -483,6 +516,10 @@ def handle_inbound_message(
     :mod:`app.scheduler.tasks`).
     """
     resolved_settings = settings if settings is not None else get_settings()
+    # WA-11: wire the Langfuse OTLP exporter once per worker process BEFORE
+    # the first turn. Unconfigured settings take the clean no-op path; a
+    # wiring failure only disables tracing, never the reply.
+    configure_langfuse_tracing(resolved_settings)
     resolved_sessions = session_factory if session_factory is not None else make_session_factory(
         create_db_engine(resolved_settings.database_url)
     )

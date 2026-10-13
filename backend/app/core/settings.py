@@ -22,6 +22,16 @@ class Settings(BaseSettings):
         # .env.example to .env as the README instructs raises a validation
         # error for the optional numeric fields (developer-visible regression).
         env_ignore_empty=True,
+        # Entries in .env that Settings does not declare are IGNORED, not
+        # errors. The .env files legitimately carry ecosystem variables this
+        # class deliberately does not own — e.g. LANGFUSE_BASE_URL, which the
+        # Langfuse/OpenTelemetry ecosystem reads directly from the process
+        # environment (strands' own Langfuse detection checks it). Before
+        # this setting, one such undeclared key crashed EVERY process at
+        # startup (observed: pydantic "extra inputs are not permitted" at
+        # test collection). Real environment variables were never validated
+        # this way — this only aligns .env-file entries with them.
+        extra="ignore",
     )
 
     # --- Application -------------------------------------------------------
@@ -438,6 +448,24 @@ class Settings(BaseSettings):
     agent_summary_trigger_messages: int = 6
 
     # --- Observability ------------------------------------------------------
+    # Langfuse tracing of every WhatsApp agent turn (WA-11, §13), exported
+    # over OTLP/HTTP from the Strands SDK's own OpenTelemetry surface
+    # (app.agent.tracing). Tracing is enabled ONLY when ALL THREE variables
+    # are non-empty; with anything missing it is a clean no-op (the agent
+    # behaves exactly as untraced) — and a PARTIAL configuration (keys set
+    # but the host empty) additionally logs ONE warning naming LANGFUSE_HOST
+    # so it is visible, never silent.
+    # TRAP (documented OWNER decision): a default endpoint is NEVER guessed
+    # when LANGFUSE_HOST is empty — a guessed endpoint that is not the
+    # owner's would send traces nowhere with zero signal, the exact silent
+    # failure mode this project keeps hitting.
+    # The containerised worker reads the repository-root `.env` (Compose
+    # env_file) while local `uv run` reads `backend/.env` — keep both in
+    # sync. LANGFUSE_BASE_URL, if present in those files, belongs to the
+    # Langfuse/OTel ecosystem (read from the process environment by the
+    # SDK's Langfuse detection); it is deliberately NOT a Settings field and
+    # does not replace LANGFUSE_HOST, which stays the single source of truth
+    # for the host.
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
     langfuse_host: str = ""
