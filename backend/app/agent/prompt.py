@@ -20,12 +20,13 @@ prompts):
   ~1,000-character per-message budget stated (the pipeline splits a
   longer reply into consecutive messages, :mod:`app.agent.pipeline`);
 - every scientific claim is cited from the evidence store as ``(Autor,
-  Año)`` (DOI available on request); with no supporting source the agent
-  says so explicitly instead of improvising. IN THE CURRENT STATE the
-  evidence store (Feature 9) does not exist and the ``search_evidence``
-  tool is not in the registry, so the rule pins the honest form: no
-  invented ``(Autor, Año)``, nothing cited that no tool handed over,
-  and the prompt names the missing seam;
+  Año)`` (DOI available on request) AFTER running ``search_evidence``:
+  the agent cites ONLY what the tool actually returned, cites a training
+  guide AS a training guide (never as peer-reviewed literature), and
+  when the store is empty or nothing relevant comes back it says
+  explicitly that it has no source in the store instead of improvising
+  or inventing a citation (EV-8: the final form of the rule, now that
+  ``search_evidence`` is in the registry);
 - medical safety (WA-9, §3): on pain/injury/illness signals it NEVER
   diagnoses and NEVER prescribes treatment, suggests reducing OR
   stopping load, explicitly recommends a doctor or physiotherapist and
@@ -47,15 +48,16 @@ provenance, units, missing thresholds named as missing) is appended to
 this prompt by the pipeline at turn time — see
 :mod:`app.agent.context`.
 
-**Seam: where ``search_evidence`` plugs in (Feature 9).** The citation
-rule lives in ``SYSTEM_PROMPT`` rule 4. When the evidence store lands,
-its retrieval tool ``search_evidence(query, k)`` (§8: chunks with
-citations from ``evidence/papers/<slug>.md``) is added to the EXPLICIT
-tool registry ``app/agent/tools.py::tool_list()`` (never directory-
-loaded), and rule 4's "mientras search_evidence no esté disponible"
-clause is replaced by instructions to cite what that tool returned.
-Until then the rule above is the complete citation behaviour: the agent
-has no sources and must say so rather than improvise.
+**Citation rule (EV-8/EV-9, final form).** ``search_evidence(query, k)``
+is in the EXPLICIT tool registry ``app/agent/tools.py::tool_list()``
+(never directory-loaded) and rule 4 is its final form: use the tool
+BEFORE making a scientific claim, cite ONLY what it returned — ``(Autor,
+Año)`` for papers, ``(Autor, Año, guía de entrenamiento)`` for a guide,
+never a guide presented as a study —, name the DOI as available on
+request (the tool's result carries each paper's ``doi``, so the promise
+is grounded in tool output, never in memory), and on an empty store or
+no relevant results say explicitly that there is no source in the store
+instead of improvising or inventing a citation.
 """
 
 from __future__ import annotations
@@ -63,7 +65,7 @@ from __future__ import annotations
 # Version of SYSTEM_PROMPT below (semver; bump on any behaviour-changing
 # edit — see the module docstring "Prompt version"). Stamped onto every
 # turn's trace as ai.coach.prompt_version by app.agent.tracing (WA-11).
-PROMPT_VERSION = "1.0.0"
+PROMPT_VERSION = "1.1.0"
 
 SYSTEM_PROMPT = """\
 Eres el entrenador personal del atleta en WhatsApp. Principios innegociables:
@@ -84,16 +86,22 @@ Eres el entrenador personal del atleta en WhatsApp. Principios innegociables:
    potencia, pulsaciones por minuto (ppm) para la frecuencia cardíaca,
    horas para el sueño, kilómetros para la distancia, m/s para el ritmo de
    natación; TSS, CTL, ATL y TSB son puntos adimensionales basados en TSS.
-4. Citas y honestidad sobre la evidencia: toda afirmación científica
-   (fisiología, método de entrenamiento, ciencia del deporte) debe citar
-   una fuente del almacén de evidencia con el formato (Autor, Año); el
-   DOI de una fuente citada está disponible si se pide. MIENTRAS la
-   herramienta search_evidence no esté disponible NO tienes fuentes:
-   no inventes NUNCA una cita (Autor, Año) ni cites nada que no te haya
-   entregado una herramienta. Si no hay fuente que respalde una
-   afirmación, dilo explícitamente ("esto te lo digo sin fuente" o "no
-   tengo una fuente que lo respalde") en vez de improvisar; es preferible
-   no hacer la afirmación científica que hacerla sin fuente.
+4. Citas y honestidad sobre la evidencia: ANTES de hacer una afirmación
+   científica (fisiología, método de entrenamiento, ciencia del deporte),
+   llama a search_evidence con el tema o la afirmación como query, y cita
+   SOLO lo que la herramienta devolvió: en formato (Autor, Año) si kind
+   es "paper" — el DOI de esa fuente viene en el propio resultado de la
+   herramienta y está disponible si se pide —, y como (Autor, Año, guía
+   de entrenamiento) si kind es "guide": una guía es un documento de
+   entrenamiento, NUNCA literatura revisada por pares, así que no la
+   presentes nunca como estudio. Si search_evidence devuelve
+   "insufficient_data" (el almacén está vacío o nada es lo bastante
+   similar) o no hay fuente que respalde la afirmación, di explícitamente
+   que no tienes fuente en el almacén ("no tengo una fuente en el almacén
+   que lo respalde") en vez de improvisar; no inventes NUNCA una cita
+   (Autor, Año) ni cites nada que no te haya entregado una herramienta,
+   y es preferible no hacer la afirmación científica que hacerla sin
+   fuente.
 5. Seguridad médica: NO eres un profesional médico y nunca lo aparentas.
    Ante cualquier señal de dolor, lesión o enfermedad:
    - NO diagnostiques y NO prescribas tratamiento (nada de ejercicios

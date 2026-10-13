@@ -19,14 +19,15 @@ Medical safety (§3):
 2. An engine number is not medical clearance: a comfortable readiness
    score does not clear an injury.
 
-Citation honesty (§3, §8):
-3. Every scientific claim cites a source as ``(Autor, Año)`` (DOI
-   available on request); with no supporting source the agent says so
-   explicitly. In the CURRENT state the evidence store (Feature 9) does
-   not exist and there is no ``search_evidence`` tool, so the honest form
-   is pinned: the agent must NOT invent an ``(Autor, Año)``, must not
-   cite anything it was not given by a tool, and the prompt names the
-   ``search_evidence`` seam that Feature 9 will plug in.
+Citation honesty (§3, §8; final form, EV-8): the ``search_evidence`` tool
+   is IN the registry now, so rule 4 pins its final form: use
+   ``search_evidence`` before making a scientific claim, cite ONLY what
+   the tool returned — ``(Autor, Año)`` for papers, ``(Autor, Año, guía
+   de entrenamiento)`` for a guide, never presented as peer-reviewed
+   literature —, name the DOI as available on request, and when the store
+   is empty or nothing relevant comes back say explicitly that there is
+   no source instead of improvising. The prompt must no longer contain
+   the obsolete "mientras search_evidence no esté disponible" wording.
 """
 
 from __future__ import annotations
@@ -108,14 +109,62 @@ class TestCitationHonestyRuleInPrompt:
     ) -> None:
         prompt = await delivered_prompt()
 
-        # The HONEST form while the evidence store does not exist: the
-        # prompt names the missing seam (search_evidence) and forbids
-        # invented citations — no fabricated (Autor, Año), nothing cited
-        # that no tool handed over.
+        # The FINAL form (EV-8): the tool exists, so the honesty rule is
+        # anchored on it — no fabricated (Autor, Año), nothing cited that
+        # no tool handed over.
         assert "search_evidence" in prompt
         assert "no inventes" in prompt.lower()
         # With no supporting source, the agent says so explicitly.
         assert "sin fuente" in prompt.lower() or "no tengo una fuente" in prompt.lower()
+
+    async def test_rule_says_to_search_evidence_before_a_scientific_claim(
+        self,
+    ) -> None:
+        """EV-8 RED: rule 4's final form orders the agent to run
+        ``search_evidence`` BEFORE making a scientific claim — not merely
+        to stay silent about a store it was told does not exist."""
+        prompt = await delivered_prompt()
+
+        assert "search_evidence" in prompt
+        assert "antes de" in prompt.lower()
+        assert "afirmación científica" in prompt.lower()
+
+    async def test_cite_only_what_the_tool_returned(self) -> None:
+        """EV-8 RED: the citation rests on what the tool actually gave
+        back, never on the model's memory."""
+        prompt = await delivered_prompt()
+
+        assert "solo lo que" in prompt.lower()
+        assert "devolv" in prompt.lower()  # devolvió/devuelva
+
+    async def test_guide_cited_as_training_guide_never_peer_reviewed(
+        self,
+    ) -> None:
+        """EV-8 RED: a guide source is cited AS a training guide and never
+        presented as peer-reviewed literature (owner decision, EV-7/§8)."""
+        prompt = await delivered_prompt()
+
+        assert "guía de entrenamiento" in prompt.lower()
+        assert "nunca" in prompt.lower()
+        assert "revisada por pares" in prompt.lower() or "literatura" in prompt.lower()
+
+    async def test_empty_store_or_no_relevant_results_gets_explicit_no_source(
+        self,
+    ) -> None:
+        """EV-8 RED: empty store or nothing relevant → the agent says
+        explicitly that it has no source in the store (never improvises)."""
+        prompt = await delivered_prompt()
+
+        assert "almacén" in prompt.lower()
+        assert "vacío" in prompt.lower() or "insufficient_data" in prompt
+        assert "no tienes fuente en el almacén" in prompt.lower()
+
+    async def test_obsolete_missing_seam_wording_is_gone(self) -> None:
+        """EV-8 RED: the now-false "while search_evidence is not
+        available" clause must not survive anywhere in the prompt."""
+        prompt = await delivered_prompt()
+
+        assert "no esté disponible" not in prompt.lower()
 
 
 class TestMedicalSafetyEndToEnd:

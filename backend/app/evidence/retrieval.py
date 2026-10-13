@@ -7,7 +7,11 @@ module keeps (and the ``search_evidence`` tool relays):
   most similar first, capped at ``k``.
 - **Citations travel with every chunk** (§8) — plus the source's slug and
   ``kind`` (owner decision: the agent must cite a guide as a training
-  guide, never as a study).
+  guide, never as a study). The paper's ``doi`` also travels with every
+  result (EV-9): "DOI available on request" (§8) is a promise the agent
+  can only keep if the tool output itself carries the DOI — never one
+  recalled from the model's memory. A guide has no DOI, so its results
+  carry ``doi=None``, never an invented identifier.
 - **An empty store is an EXPLICIT result**, never an empty list passed
   off as an answer: ``status="empty_store"`` with a ``detail`` naming
   what is missing and how to get it. No paper/guide files exist yet
@@ -59,11 +63,21 @@ _NO_RESULTS_DETAIL = (
 
 
 class RetrievedChunk(BaseModel):
-    """One retrieved chunk with its truthful citation (§8)."""
+    """One retrieved chunk with its truthful citation (§8).
+
+    ``doi`` (EV-9): the source's DOI for papers — the payload behind the
+    prompt's "DOI available on request" promise — and ``None`` for a
+    guide (a training document has no DOI; absence is explicit, never a
+    guess).
+    """
 
     source_slug: str
     kind: str
     citation: str
+    doi: str | None = Field(
+        default=None,
+        description="DOI of the source (papers only; a guide has none)",
+    )
     chunk_index: int
     text: str
     similarity: float = Field(description="cosine similarity, in [-1, 1]")
@@ -125,6 +139,7 @@ async def retrieve_chunks(
             source_slug=source.slug,
             kind=source.kind,
             citation=chunk.citation,
+            doi=source.doi,
             chunk_index=chunk.chunk_index,
             text=chunk.text,
             similarity=1.0 - db_distance,

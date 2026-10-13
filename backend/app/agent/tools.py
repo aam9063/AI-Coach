@@ -1059,11 +1059,12 @@ async def search_evidence(query: str, k: int = 4) -> dict[str, Any]:
     Returns the most similar chunks of the owner-curated library
     (``evidence/papers/`` for studies, ``evidence/guides/`` for training
     documents), each with its ``citation`` string and its ``kind``.
-    Cite what you use as ``(Author, Year)`` for papers — the DOI is
-    available in the store on request — and as
+    Cite what you use as ``(Author, Year)`` for papers and as
     ``(Author, Year, training guide)`` for guides: a guide is a training
     document, NEVER peer-reviewed literature, so never present it as a
-    study.
+    study. Each result carries the source's ``doi`` — the paper's DOI,
+    ``None`` for a guide — so the DOI stays available on request
+    straight from the tool result, never from memory.
 
     The store may LEGITIMATELY be empty today (the owner curates its
     files by hand and may not have ingested any yet). When the result is
@@ -1073,14 +1074,15 @@ async def search_evidence(query: str, k: int = 4) -> dict[str, Any]:
     memory.
 
     Returns on success (status "ok"): ``results`` — up to ``k`` chunks,
-    each with ``text``, ``citation``, ``kind`` ("paper" or "guide"),
-    ``source_slug``, ``chunk_index`` and ``similarity`` (cosine, most
-    similar first); ``coverage`` (``k_requested`` vs ``chunks_returned``
-    and the ``min_similarity`` floor); ``engine_version`` and
-    ``computed_at``. An empty store or no chunk above the similarity
-    floor returns ``status="insufficient_data"`` with a ``detail``
-    saying what it means and what you must tell the athlete. A blank
-    query or an out-of-range ``k`` returns ``status="error"``.
+    each with ``text``, ``citation``, ``doi``, ``kind`` ("paper" or
+    "guide"), ``source_slug``, ``chunk_index`` and ``similarity`` (cosine,
+    most similar first); ``coverage`` (``k_requested`` vs
+    ``chunks_returned`` and the ``min_similarity`` floor);
+    ``engine_version`` and ``computed_at``. An empty store or no chunk
+    above the similarity floor returns ``status="insufficient_data"``
+    with a ``detail`` saying what it means and what you must tell the
+    athlete. A blank query or an out-of-range ``k`` returns
+    ``status="error"``.
 
     Args:
         query: The scientific claim or topic to find evidence for.

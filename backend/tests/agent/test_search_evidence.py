@@ -118,6 +118,17 @@ class TestSearchEvidenceOk:
         assert result["coverage"]["chunks_returned"] == len(result["results"])
         assert result["coverage"]["min_similarity"] > 0
 
+    async def test_paper_results_carry_the_doi(self, seeded_store: None) -> None:
+        """EV-9 RED: the tool result itself carries the DOI, so the
+        "DOI available on request" promise is keepable from the result
+        the model sees — never from memory."""
+        result = await tools.search_evidence(
+            "training volume and intensity for cyclists", k=4
+        )
+
+        assert result["status"] == "ok"
+        assert result["results"][0]["doi"] == "10.1080/1"
+
 
 class TestSearchEvidenceExplicitEmpty:
     async def test_empty_store_is_insufficient_data_telling_the_agent_to_say_so(
@@ -206,3 +217,12 @@ class TestDocstringIsTheModelFacingSchema:
         # Papers: (Author, Year). Guides: a training guide, never a study.
         assert "Author, Year" in doc
         assert "training guide" in doc.lower()
+
+    def test_docstring_says_results_include_the_doi(self) -> None:
+        """EV-9 RED: the model-facing schema must say the result carries
+        the DOI (papers), so the "DOI available on request" promise in
+        the system prompt is grounded in the tool's own output."""
+        doc = tools.search_evidence.__doc__ or ""
+
+        assert "doi" in doc.lower()
+        assert "on request" in doc.lower()

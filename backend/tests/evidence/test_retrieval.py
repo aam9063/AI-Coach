@@ -141,6 +141,29 @@ class TestTopKRetrieval:
         assert guide_results
         assert all("training guide" in c.citation for c in guide_results)
 
+    async def test_paper_results_carry_the_doi(
+        self, db_session: AsyncSession, store_with_sources: dict[str, Any]
+    ) -> None:
+        """EV-9 RED: "DOI available on request" is a promise the agent can
+        only keep if the tool's result carries the DOI — so retrieval must
+        deliver the source's DOI with every paper chunk."""
+        result = await retrieve(db_session, "How should endurance training be polarized?")
+
+        paper_results = [c for c in result.results if c.kind == "paper"]
+        assert paper_results
+        assert all(c.doi == "10.1080/1" for c in paper_results)
+
+    async def test_guide_results_have_no_doi(
+        self, db_session: AsyncSession, store_with_sources: dict[str, Any]
+    ) -> None:
+        """EV-9 RED: a training document has no DOI — the field is None,
+        never an invented identifier."""
+        result = await retrieve(db_session, "threshold work for trained cyclists")
+
+        guide_results = [c for c in result.results if c.kind == "guide"]
+        assert guide_results
+        assert all(c.doi is None for c in guide_results)
+
 
 class TestExplicitEmptyAndNoRelevance:
     async def test_empty_store_is_an_explicit_status_not_a_bare_list(
