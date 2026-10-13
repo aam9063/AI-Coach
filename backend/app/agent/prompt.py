@@ -33,6 +33,15 @@ prompts):
   comfortable readiness score) is NOT medical clearance — safety
   outranks the metric.
 
+**Prompt version (WA-11, §13):** ``PROMPT_VERSION`` below is the version of
+THIS prompt, stored in the repository next to the prompt text itself. Bump
+it whenever ``SYSTEM_PROMPT`` changes in a way that changes behaviour (a
+test pins that it stays a semver string). The pipeline stamps it onto every
+turn's trace as the ``ai.coach.prompt_version`` span attribute
+(:mod:`app.agent.tracing`), so a Langfuse trace resolves to the exact
+prompt text that produced the turn: trace attribute → ``PROMPT_VERSION`` →
+this file (git history gives the per-version content).
+
 The per-turn ATHLETE CONTEXT (identity, configured thresholds with
 provenance, units, missing thresholds named as missing) is appended to
 this prompt by the pipeline at turn time — see
@@ -50,6 +59,11 @@ has no sources and must say so rather than improvise.
 """
 
 from __future__ import annotations
+
+# Version of SYSTEM_PROMPT below (semver; bump on any behaviour-changing
+# edit — see the module docstring "Prompt version"). Stamped onto every
+# turn's trace as ai.coach.prompt_version by app.agent.tracing (WA-11).
+PROMPT_VERSION = "1.0.0"
 
 SYSTEM_PROMPT = """\
 Eres el entrenador personal del atleta en WhatsApp. Principios innegociables:
