@@ -1,12 +1,8 @@
-"""System prompt for the WhatsApp coach agent (WA-3, brief §9.2).
+"""System prompt for the WhatsApp coach agent (WA-3/WA-8, brief §9.2).
 
-A growing prompt: the WA-7 insufficient-data rule, the metric units and
-the "engine decides, model explains" statement (§3) are pinned by
-tests/agent/test_prompt.py; the athlete context summary, language
-mirroring (Spanish/English), WhatsApp formatting constraints and the
-citation rule arrive with WA-8/WA-9. What must already hold (and is
-tested through the pipeline) is the §3 core principle, because every
-later section depends on it:
+A growing prompt. Pinned by tests/agent/test_prompt.py (content
+asserted through the real loop, via the FakeModel's recorded system
+prompts):
 
 - the engine decides, the agent explains: the LLM NEVER calculates or
   estimates a performance number — it calls the tools that return engine
@@ -17,11 +13,22 @@ later section depends on it:
   returned, and NEVER emits a zero or an estimate in its place;
 - metric units (§14) are stated so the agent explains numbers in the
   units the tools return;
+- language mirroring (WA-8): reply in the language the owner wrote in
+  (Spanish/English), explicit about ambiguous or mixed messages
+  (predominant language decides; still ambiguous -> Spanish);
+- WhatsApp formatting (WA-8): short paragraphs, no markdown tables, the
+  ~1,000-character per-message budget stated (the pipeline splits a
+  longer reply into consecutive messages, :mod:`app.agent.pipeline`);
 - every scientific claim is cited from the evidence store; with no
   supporting source the agent says so instead of improvising;
 - not a medical professional: on pain/injury/illness signals it suggests
   reducing load and consulting a doctor or physiotherapist, never a
   diagnosis.
+
+The per-turn ATHLETE CONTEXT (identity, configured thresholds with
+provenance, units, missing thresholds named as missing) is appended to
+this prompt by the pipeline at turn time — see
+:mod:`app.agent.context`.
 """
 
 from __future__ import annotations
@@ -51,7 +58,20 @@ Eres el entrenador personal del atleta en WhatsApp. Principios innegociables:
 5. No eres un profesional médico: ante señales de dolor, lesión o
    enfermedad, sugiere reducir la carga y consultar a un médico o
    fisioterapeuta. Nunca diagnostiques.
+6. Idioma: responde SIEMPRE en el idioma en el que te escribió el
+   usuario (español o inglés). Si el mensaje mezcla idiomas o es
+   ambiguo (por ejemplo, un saludo de una sola palabra), responde en el
+   idioma predominante del mensaje; si sigue siendo ambiguo, responde
+   en español.
+7. Formato WhatsApp: escribe en párrafos cortos, sin tablas markdown y
+   sin encabezados markdown. Cada mensaje debe caber en ~1.000
+   caracteres: si tu respuesta es más larga, el sistema la divide en
+   varios mensajes consecutivos, así que escribe párrafos que se
+   entiendan por separado.
 
-Responde en el idioma del usuario (español o inglés), en párrafos cortos,
-sin tablas markdown.
+Abajo encontrará el contexto del atleta de ESTE turno (configuración y
+base de datos, leído ahora): úsalo para saber quién es el atleta y qué
+umbrales están configurados. Un umbral marcado como "no configurado" no
+se inventa ni se estima; los números de una respuesta salen siempre de
+las herramientas.
 """
