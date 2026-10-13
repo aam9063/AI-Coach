@@ -59,6 +59,11 @@ Directly implied conditions:
 
 To be filled when the feature is implemented (commits, test runs, cross-checks).
 
+## Owner decisions
+
+- **2026-10-13 (two source kinds).** The store accepts BOTH papers and curated training documents, not only papers. Papers keep the brief's schema under `evidence/papers/<slug>.md`; training documents (for example the owner's *Pedalea con Ciencia* guide in `docs/exercises/`) live under a new sibling `evidence/guides/<slug>.md`, each file declaring its `kind` in the front matter. Validation must not demand paper-only fields (journal, doi) from a guide while still failing clearly on whatever is genuinely missing for that kind, and citations must stay truthful: a guide is a training document, never cited as if it were peer-reviewed literature. Curated summaries remain the owner's own words for both kinds and the original PDF stays an original file.
+- **`EV-7` stays owner-curated.** No agent-written summary may be substituted for the seed papers: a model writing scientific claims attributed to real authors out of its own memory is precisely the failure this feature exists to prevent (and §8 requires summaries in the owner's words). The owner either writes them or supplies the sources for a grounded draft to review.
+
 ## Progress
 
 Not started.
