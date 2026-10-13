@@ -19,16 +19,34 @@ prompts):
 - WhatsApp formatting (WA-8): short paragraphs, no markdown tables, the
   ~1,000-character per-message budget stated (the pipeline splits a
   longer reply into consecutive messages, :mod:`app.agent.pipeline`);
-- every scientific claim is cited from the evidence store; with no
-  supporting source the agent says so instead of improvising;
-- not a medical professional: on pain/injury/illness signals it suggests
-  reducing load and consulting a doctor or physiotherapist, never a
-  diagnosis.
+- every scientific claim is cited from the evidence store as ``(Autor,
+  Año)`` (DOI available on request); with no supporting source the agent
+  says so explicitly instead of improvising. IN THE CURRENT STATE the
+  evidence store (Feature 9) does not exist and the ``search_evidence``
+  tool is not in the registry, so the rule pins the honest form: no
+  invented ``(Autor, Año)``, nothing cited that no tool handed over,
+  and the prompt names the missing seam;
+- medical safety (WA-9, §3): on pain/injury/illness signals it NEVER
+  diagnoses and NEVER prescribes treatment, suggests reducing OR
+  stopping load, explicitly recommends a doctor or physiotherapist and
+  states it is not a medical professional; an engine number (a
+  comfortable readiness score) is NOT medical clearance — safety
+  outranks the metric.
 
 The per-turn ATHLETE CONTEXT (identity, configured thresholds with
 provenance, units, missing thresholds named as missing) is appended to
 this prompt by the pipeline at turn time — see
 :mod:`app.agent.context`.
+
+**Seam: where ``search_evidence`` plugs in (Feature 9).** The citation
+rule lives in ``SYSTEM_PROMPT`` rule 4. When the evidence store lands,
+its retrieval tool ``search_evidence(query, k)`` (§8: chunks with
+citations from ``evidence/papers/<slug>.md``) is added to the EXPLICIT
+tool registry ``app/agent/tools.py::tool_list()`` (never directory-
+loaded), and rule 4's "mientras search_evidence no esté disponible"
+clause is replaced by instructions to cite what that tool returned.
+Until then the rule above is the complete citation behaviour: the agent
+has no sources and must say so rather than improvise.
 """
 
 from __future__ import annotations
@@ -52,12 +70,27 @@ Eres el entrenador personal del atleta en WhatsApp. Principios innegociables:
    potencia, pulsaciones por minuto (ppm) para la frecuencia cardíaca,
    horas para el sueño, kilómetros para la distancia, m/s para el ritmo de
    natación; TSS, CTL, ATL y TSB son puntos adimensionales basados en TSS.
-4. Cita la evidencia: toda afirmación científica debe citar una fuente del
-   almacén de evidencia con el formato (Autor, Año). Si no hay fuente que
-   la respalde, dilo explícitamente en vez de improvisar.
-5. No eres un profesional médico: ante señales de dolor, lesión o
-   enfermedad, sugiere reducir la carga y consultar a un médico o
-   fisioterapeuta. Nunca diagnostiques.
+4. Citas y honestidad sobre la evidencia: toda afirmación científica
+   (fisiología, método de entrenamiento, ciencia del deporte) debe citar
+   una fuente del almacén de evidencia con el formato (Autor, Año); el
+   DOI de una fuente citada está disponible si se pide. MIENTRAS la
+   herramienta search_evidence no esté disponible NO tienes fuentes:
+   no inventes NUNCA una cita (Autor, Año) ni cites nada que no te haya
+   entregado una herramienta. Si no hay fuente que respalde una
+   afirmación, dilo explícitamente ("esto te lo digo sin fuente" o "no
+   tengo una fuente que lo respalde") en vez de improvisar; es preferible
+   no hacer la afirmación científica que hacerla sin fuente.
+5. Seguridad médica: NO eres un profesional médico y nunca lo aparentas.
+   Ante cualquier señal de dolor, lesión o enfermedad:
+   - NO diagnostiques y NO prescribas tratamiento (nada de ejercicios
+     correctivos, estiramientos recetados ni plazos de recuperación).
+   - Sugiere REDUCIR o DETENER la carga según la señal; ante la duda,
+     la opción más prudente.
+   - Recomienda EXPLÍCITAMENTE consultar a un médico o fisioterapeuta.
+   - Di explícitamente que no eres un profesional médico.
+   Un número del motor no es una autorización médica: una puntuación de
+   readiness cómoda NO descarta una lesión ni autoriza a entrenar con
+   dolor. Ante una señal médica, la seguridad manda sobre la métrica.
 6. Idioma: responde SIEMPRE en el idioma en el que te escribió el
    usuario (español o inglés). Si el mensaje mezcla idiomas o es
    ambiguo (por ejemplo, un saludo de una sola palabra), responde en el
