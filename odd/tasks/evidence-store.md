@@ -33,12 +33,12 @@ The brief's core principle requires that "every scientific claim in a reply must
 
 ## Checklist
 
-- [ ] `EV-1`: RED: front-matter loader tests — parse a sample `evidence/papers/<slug>.md` with `title`, `authors`, `year`, `journal`, `doi`, `topics`, `key_findings`, `limitations` and fail clearly on missing required fields (§8).
-- [ ] `EV-2`: GREEN: implement the markdown loader with front-matter validation (§8).
-- [ ] `EV-3`: RED+GREEN: chunker tests — deterministic chunking with overlap, chunk boundaries preserving sentences, each chunk carrying its paper's citation string (§8).
-- [ ] `EV-4`: RED+GREEN: embedding + pgvector storage tests against a fake embedding adapter; `evidence_chunk` rows with paper id, chunk text, embedding, citation string (§6, §8).
-- [ ] `EV-5`: RED+GREEN: retrieval tests — top-k by cosine similarity returns chunks with correct citation strings; empty store or no relevant results handled explicitly (§8).
-- [ ] `EV-6`: GREEN: implement the `search_evidence(query, k)` tool returning typed Pydantic output with `computed_at`, `engine_version`, coverage info (§9.3).
+- [x] `EV-1`: RED: front-matter loader tests — parse a sample `evidence/papers/<slug>.md` with `title`, `authors`, `year`, `journal`, `doi`, `topics`, `key_findings`, `limitations` and fail clearly on missing required fields (§8).
+- [x] `EV-2`: GREEN: implement the markdown loader with front-matter validation (§8).
+- [x] `EV-3`: RED+GREEN: chunker tests — deterministic chunking with overlap, chunk boundaries preserving sentences, each chunk carrying its paper's citation string (§8).
+- [x] `EV-4`: RED+GREEN: embedding + pgvector storage tests against a fake embedding adapter; `evidence_chunk` rows with paper id, chunk text, embedding, citation string (§6, §8).
+- [x] `EV-5`: RED+GREEN: retrieval tests — top-k by cosine similarity returns chunks with correct citation strings; empty store or no relevant results handled explicitly (§8).
+- [x] `EV-6`: GREEN: implement the `search_evidence(query, k)` tool returning typed Pydantic output with `computed_at`, `engine_version`, coverage info (§9.3).
 - [ ] `EV-7`: Create the seed paper files for the §8 minimum list (owner-curated summaries, own words) under `evidence/papers/`.
 - [ ] `EV-8`: RED+GREEN: citation rule in the agent prompt — replies with scientific claims include at least one `(Author, Year)` citation; a question with no supporting evidence gets an explicit "no evidence in store" answer (§3, §8, §12.9), tested against the fake LLM adapter.
 - [ ] `EV-9`: Wire citation behavior through Feature 6's agent loop and document DOI-on-request behavior in the prompt (§8).
@@ -68,4 +68,6 @@ To be filled when the feature is implemented (commits, test runs, cross-checks).
 
 Not started.
 
-Commits: (none yet)
+- EV-1..EV-6 done at `2f28780`: the pipeline and its tool exist in TWO source kinds (owner decision recorded above). The loader walks `evidence/papers/` and the new `evidence/guides/`, fails naming file and field, demands journal and doi from a paper and never from a guide, and decides the citation once at load time so a training document is cited as `(Author, Year, training guide)` and can never pass for peer-reviewed literature. Ingestion is loader -> deterministic sentence-preserving chunker with overlap -> config-switchable embedding adapter (fake for every test, OpenAI for production, unknown value raises) -> idempotent pgvector upsert; the migration creates the extension and both tables and was applied to the dev database. Retrieval is top-k cosine with explicit `empty_store` and `no_relevant_results` statuses instead of a bare empty list, and `search_evidence` is the seventh tool in the explicit registry, its docstring (the model-facing schema) instructing the agent to say it has no source rather than improvise. Parent-verified: `tests/evidence` + `tests/agent` 230 passed, ruff clean, mypy strict clean (186 files), one head, the tool names read back from the registry. EV-7 content remains the owner's; `evidence/` holds only `.gitkeep` files.
+
+Commits: 2f28780 (EV-1..EV-6)
