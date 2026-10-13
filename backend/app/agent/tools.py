@@ -56,7 +56,7 @@ import re
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime, timedelta
-from typing import Any
+from typing import Any, Final
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
@@ -76,10 +76,22 @@ from app.db.models import (
 from app.db.repository import upsert_subjective_log
 from app.db.session import create_db_engine, make_session_factory
 from app.db.zones_config import parse_swim_boundaries
+from app.engine.load import _KNOWN_SPORTS
 from app.engine.zones import hr_zones, power_zones, swim_zones
 from app.services.readiness import recompute_readiness
 
 SessionFactory = async_sessionmaker[AsyncSession]
+
+# The engine's closed sport vocabulary (app/engine/load.py) is the SINGLE
+# source of truth for what a "sport" is: the tool registry re-exports it
+# (identity, not a copy) so a new engine sport family is accepted here
+# automatically and the two can never drift. It is imported as-is rather
+# than duplicated or re-declared: adding a public alias in the engine
+# module would be an engine-surface change outside this task's scope.
+ENGINE_KNOWN_SPORTS: Final[frozenset[str]] = _KNOWN_SPORTS
+"""Sports the engine recognises (matched lower-case): cycling, running,
+swimming, walking and strength activity types. An unknown sport is an
+ARGUMENT error, never missing data (see :func:`_unknown_sport_error`)."""
 
 # --- Injectable seams (production defaults derive from configuration) ------
 
@@ -141,6 +153,28 @@ async def tool_session() -> AsyncIterator[AsyncSession]:
 
 def _now(settings: Settings) -> datetime:
     return datetime.now(UTC)
+
+
+def _unknown_sport_error(settings: Settings, sport: str) -> dict[str, Any]:
+    """The result for a sport the ENGINE does not know (registry-wide
+    contract): ``status="error"`` naming the accepted values.
+
+    An unknown sport is an ARGUMENT error, not missing data (§9.3):
+    reporting it as ``insufficient_data`` sends the owner to connect a
+    device when the real problem is the sport name itself — the observed
+    live failure this helper prevents. The accepted set is the engine's
+    own vocabulary (:data:`ENGINE_KNOWN_SPORTS`), never a local list.
+    """
+    return {
+        "status": "error",
+        "detail": (
+            f"unknown sport {sport!r}: expected one of "
+            f"{sorted(ENGINE_KNOWN_SPORTS)}. Use an engine sport name, or "
+            "omit the sport for the all-sports view."
+        ),
+        "engine_version": settings.engine_version,
+        "computed_at": _now(settings).isoformat(),
+    }
 
 
 def _today_local(settings: Settings) -> date:
@@ -212,12 +246,16 @@ async def get_load_status(date_range: str = "7d", sport: str | None = None) -> d
     If there are no engine rows in the window, returns
     ``status="insufficient_data"`` with a ``detail`` naming what is missing
     (synced activities) and how to get it — never a zero. An unparseable
-    ``date_range`` returns ``status="error"`` with the accepted formats.
+    ``date_range`` returns ``status="error"`` with the accepted formats. An
+    unknown ``sport`` (not in the engine's known sport vocabulary) returns
+    ``status="error"`` naming the accepted values — it is an argument
+    error, NEVER reported as missing data.
 
     Args:
         date_range: Trailing window ending today ("7d", "30d") or an
             explicit inclusive range "YYYY-MM-DD/YYYY-MM-DD".
-        sport: Optional sport filter ("ride", "run", "swim"); omit for the
+        sport: Optional sport filter (an engine sport name such as "ride",
+            "run", "swim", "walk", "weighttraining"); omit for the
             combined all-sports series.
     """
     settings = _settings()
@@ -230,7 +268,10 @@ async def get_load_status(date_range: str = "7d", sport: str | None = None) -> d
             "computed_at": _now(settings).isoformat(),
         }
     window_start, window_end = window
-    sport_key = (sport or "combined").strip().lower()
+    sport_input = (sport or "").strip().lower()
+    if sport_input and sport_input not in ENGINE_KNOWN_SPORTS:
+        return _unknown_sport_error(settings, sport or sport_input)
+    sport_key = sport_input or "combined"
 
     async with tool_session() as session:
         rows = (
@@ -709,13 +750,16 @@ async def get_intensity_distribution(weeks: int = 4, sport: str | None = None) -
     If no week in the window has intensity data, returns
     ``status="insufficient_data"`` with a ``detail`` naming what is missing
     (per-second streams) and how to get it — never fabricated percentages.
-    A non-positive ``weeks`` returns ``status="error"``.
+    A non-positive ``weeks`` returns ``status="error"``. An unknown
+    ``sport`` (not in the engine's known sport vocabulary) returns
+    ``status="error"`` naming the accepted values — an argument error,
+    never missing data.
 
     Args:
         weeks: How many ISO weeks to report, ending with the current week
             (1-52).
-        sport: Optional sport filter ("ride"/"bike", "run", "swim"); omit
-            for all sports.
+        sport: Optional sport filter (an engine sport name such as "ride",
+            "run", "swim"); omit for all sports.
     """
     settings = _settings()
     if weeks <= 0 or weeks > 52:
@@ -725,6 +769,9 @@ async def get_intensity_distribution(weeks: int = 4, sport: str | None = None) -
             "engine_version": settings.engine_version,
             "computed_at": _now(settings).isoformat(),
         }
+    sport_input = (sport or "").strip().lower()
+    if sport_input and sport_input not in ENGINE_KNOWN_SPORTS:
+        return _unknown_sport_error(settings, sport or sport_input)
 
     today = _today_local(settings)
     iso_year, iso_week, _ = today.isocalendar()
@@ -738,7 +785,7 @@ async def get_intensity_distribution(weeks: int = 4, sport: str | None = None) -
             week = date(year, 12, 28).isocalendar()[1]
     window.reverse()
 
-    sport_key = (sport or "").strip().lower() or None
+    sport_key = sport_input or None
     async with tool_session() as session:
         rows = (
             (
