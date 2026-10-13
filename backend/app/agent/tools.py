@@ -76,7 +76,7 @@ from app.db.models import (
 from app.db.repository import upsert_subjective_log
 from app.db.session import create_db_engine, make_session_factory
 from app.db.zones_config import parse_swim_boundaries
-from app.engine.load import _KNOWN_SPORTS
+from app.engine.load import KNOWN_SPORTS
 from app.engine.zones import hr_zones, power_zones, swim_zones
 from app.services.readiness import recompute_readiness
 
@@ -88,7 +88,7 @@ SessionFactory = async_sessionmaker[AsyncSession]
 # automatically and the two can never drift. It is imported as-is rather
 # than duplicated or re-declared: adding a public alias in the engine
 # module would be an engine-surface change outside this task's scope.
-ENGINE_KNOWN_SPORTS: Final[frozenset[str]] = _KNOWN_SPORTS
+ENGINE_KNOWN_SPORTS: Final[frozenset[str]] = KNOWN_SPORTS
 """Sports the engine recognises (matched lower-case): cycling, running,
 swimming, walking and strength activity types. An unknown sport is an
 ARGUMENT error, never missing data (see :func:`_unknown_sport_error`)."""

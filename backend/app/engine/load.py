@@ -877,6 +877,16 @@ _KNOWN_SPORTS: Final[frozenset[str]] = (
 """Recognised activity types (matched case-insensitively). Unknown sports raise
 ``ValueError`` rather than being silently guessed into a method bucket."""
 
+KNOWN_SPORTS: Final[frozenset[str]] = _KNOWN_SPORTS
+"""Public name for the closed sport vocabulary above.
+
+Consumers OUTSIDE the engine import THIS name instead of the private one: the
+agent's tool registry reports the accepted set to the model, so an unknown
+sport can be named as what it is (a name the engine does not know) rather than
+being masked as missing data. It is an alias, never a second list, so the
+engine stays the single source of truth for the vocabulary.
+"""
+
 
 @dataclass(frozen=True, slots=True)
 class ActivityLoadInput:
