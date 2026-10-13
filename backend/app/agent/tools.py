@@ -78,6 +78,8 @@ from app.db.session import create_db_engine, make_session_factory
 from app.db.zones_config import parse_swim_boundaries
 from app.engine.load import KNOWN_SPORTS
 from app.engine.zones import hr_zones, power_zones, swim_zones
+from app.evidence.embeddings import create_embedding
+from app.evidence.retrieval import retrieve_chunks
 from app.services.readiness import recompute_readiness
 
 SessionFactory = async_sessionmaker[AsyncSession]
@@ -1043,15 +1045,98 @@ async def log_subjective(
     }
 
 
+# ---------------------------------------------------------------------------
+# search_evidence (Feature 9, §8/§9.3)
+# ---------------------------------------------------------------------------
+
+_K_RANGE_HELP = "k must be between 1 and 10."
+
+
+@tool
+async def search_evidence(query: str, k: int = 4) -> dict[str, Any]:
+    """Search the evidence store for curated sources supporting a claim.
+
+    Returns the most similar chunks of the owner-curated library
+    (``evidence/papers/`` for studies, ``evidence/guides/`` for training
+    documents), each with its ``citation`` string and its ``kind``.
+    Cite what you use as ``(Author, Year)`` for papers — the DOI is
+    available in the store on request — and as
+    ``(Author, Year, training guide)`` for guides: a guide is a training
+    document, NEVER peer-reviewed literature, so never present it as a
+    study.
+
+    The store may LEGITIMATELY be empty today (the owner curates its
+    files by hand and may not have ingested any yet). When the result is
+    ``status="insufficient_data"`` — empty store or nothing similar
+    enough — you have NO SOURCE in the store for this claim: say so
+    explicitly in your reply instead of improvising or citing from
+    memory.
+
+    Returns on success (status "ok"): ``results`` — up to ``k`` chunks,
+    each with ``text``, ``citation``, ``kind`` ("paper" or "guide"),
+    ``source_slug``, ``chunk_index`` and ``similarity`` (cosine, most
+    similar first); ``coverage`` (``k_requested`` vs ``chunks_returned``
+    and the ``min_similarity`` floor); ``engine_version`` and
+    ``computed_at``. An empty store or no chunk above the similarity
+    floor returns ``status="insufficient_data"`` with a ``detail``
+    saying what it means and what you must tell the athlete. A blank
+    query or an out-of-range ``k`` returns ``status="error"``.
+
+    Args:
+        query: The scientific claim or topic to find evidence for.
+        k: Maximum number of chunks to return, 1-10 (default 4).
+    """
+    settings = _settings()
+    if not query.strip():
+        return {
+            "status": "error",
+            "detail": "query must be non-empty text describing the claim "
+            "to find evidence for.",
+            "engine_version": settings.engine_version,
+            "computed_at": _now(settings).isoformat(),
+        }
+    if k < 1 or k > 10:
+        return {
+            "status": "error",
+            "detail": _K_RANGE_HELP,
+            "engine_version": settings.engine_version,
+            "computed_at": _now(settings).isoformat(),
+        }
+
+    # §6 adapter principle: ONE embedding adapter per configuration; in
+    # tests this is the deterministic fake (offline, §14).
+    adapter = create_embedding(settings)
+    query_embedding = adapter.embed([query])[0]
+    async with tool_session() as session:
+        retrieval = await retrieve_chunks(session, query_embedding, k=k)
+
+    if retrieval.status == "ok":
+        return {
+            "status": "ok",
+            "results": [chunk.model_dump() for chunk in retrieval.results],
+            "coverage": retrieval.coverage,
+            "engine_version": settings.engine_version,
+            "computed_at": _now(settings).isoformat(),
+        }
+    return {
+        "status": "insufficient_data",
+        "detail": retrieval.detail,
+        "results": [],
+        "coverage": retrieval.coverage,
+        "engine_version": settings.engine_version,
+        "computed_at": _now(settings).isoformat(),
+    }
+
+
 def tool_list() -> list[Any]:
     """The EXPLICIT tool list handed to the agent.
 
     Only this project's engine-backed tools, in this list, ever. Never
     ``load_tools_from_directory``; never the ``strands-agents-tools``
     vended tools (shell/file/HTTP). The remaining write tool
-    (``propose_threshold_update``) and the feature-delegating tools
-    (``predict_race``, ``plot_metric``, ``search_evidence``) join this
-    list with their checklist items — never silently, never from a loader.
+    (``propose_threshold_update``) joins this list with its checklist
+    items — never silently, never from a loader. Feature 9 added
+    ``search_evidence`` (§8/§9.3) and grew the list by exactly one.
     """
     return [
         get_load_status,
@@ -1060,4 +1145,5 @@ def tool_list() -> list[Any]:
         get_activity_analysis,
         get_intensity_distribution,
         log_subjective,
+        search_evidence,
     ]

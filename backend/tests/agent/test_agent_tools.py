@@ -168,12 +168,13 @@ class TestToolList:
     def test_explicit_list_contains_exactly_the_engine_tools(self) -> None:
         listed = tools.tool_list()
         names = {t.__name__ if hasattr(t, "__name__") else t.tool_spec["name"] for t in listed}
+        # Feature 9 (EV-6) grew the registry by exactly one: search_evidence.
         assert names == {
             "get_load_status", "get_zones", "get_readiness",
             "get_activity_analysis", "get_intensity_distribution",
-            "log_subjective",
+            "log_subjective", "search_evidence",
         }
-        assert len(listed) == 6
+        assert len(listed) == 7
 
     def test_no_directory_loader_and_no_vended_tools(self) -> None:
         listed_names = {

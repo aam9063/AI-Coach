@@ -393,6 +393,18 @@ class Settings(BaseSettings):
     # Model id handed to the provider (strands OpenAIConfig.model_id).
     llm_model_id: str = "gpt-4o-mini"
 
+    # --- Evidence store embeddings (Feature 9; §6 adapter principle) --------
+    # Which embedding adapter the evidence ingestion/retrieval gets — ONE
+    # adapter per §6, chosen purely by configuration. "openai" builds the
+    # real OpenAI embeddings adapter from openai_api_key/embedding_model_id
+    # (constructing it wires a local client only); "fake" builds the
+    # deterministic app.evidence.embeddings.FakeEmbedding (tests, dry runs
+    # — zero network, zero credentials). Anything else fails loudly
+    # instead of silently dialling a provider.
+    embedding_provider: str = "openai"
+    # Model id handed to the embeddings provider.
+    embedding_model_id: str = "text-embedding-3-small"
+
     # --- WhatsApp agent guardrails (Feature 6; WA-5; §9.2, §14) --------------
     # The tool-calling loop is the Strands Agents SDK's; these are OUR
     # guardrails around it, all documented OWNER CHOICES (§14 style) with no

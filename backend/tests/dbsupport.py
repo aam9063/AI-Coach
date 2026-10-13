@@ -129,4 +129,11 @@ async def create_test_engine() -> AsyncEngine:
     """Ensure the test database exists and return an engine bound to it."""
     url = test_database_url()
     await ensure_database(url)
-    return create_async_engine(url)
+    engine = create_async_engine(url)
+    # Feature 9 (EV-4): the pgvector extension must exist before the
+    # create_all fixtures build ``evidence_chunk``. Idempotent; the compose
+    # image (pgvector/pgvector:pg16) ships the extension files. Runs on the
+    # dedicated test database only.
+    async with engine.begin() as conn:
+        await conn.execute(text("create extension if not exists vector"))
+    return engine
