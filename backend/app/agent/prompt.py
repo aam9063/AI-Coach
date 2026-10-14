@@ -36,6 +36,16 @@ prompts):
   (observed: genuinely unrelated Spanish cycling questions score
   ~0.4-0.6, overlapping the 0.6-0.7 of genuinely-answered ones, so the
   score cannot decide relevance).
+- anti-self-reinforcement (live finding, 2026-10-14: a stale FALSE tool
+  result plus FOUR copies of the assistant's own wrong answer in the
+  recent window taught the model to stop searching and copy itself): the
+  store CHANGES as the owner ingests sources, so a search result is
+  NEVER carried forward — search again for each new question that needs
+  a source, even if you searched earlier in this same conversation; what
+  a tool returns NOW outranks the model's memory and its own earlier
+  answers in this conversation (on contradiction: correct yourself
+  explicitly and say plainly you were wrong); and a tool result from an
+  earlier turn is NEVER evidence for the current question.
 - medical safety (WA-9, §3): on pain/injury/illness signals it NEVER
   diagnoses and NEVER prescribes treatment, suggests reducing OR
   stopping load, explicitly recommends a doctor or physiotherapist and
@@ -78,7 +88,7 @@ from __future__ import annotations
 # Version of SYSTEM_PROMPT below (semver; bump on any behaviour-changing
 # edit — see the module docstring "Prompt version"). Stamped onto every
 # turn's trace as ai.coach.prompt_version by app.agent.tracing (WA-11).
-PROMPT_VERSION = "1.3.0"
+PROMPT_VERSION = "1.4.0"
 
 SYSTEM_PROMPT = """\
 Eres el entrenador personal del atleta en WhatsApp. Principios innegociables:
@@ -114,7 +124,18 @@ Eres el entrenador personal del atleta en WhatsApp. Principios innegociables:
    improvisar; es preferible no hacer la afirmación científica que
    hacerla sin fuente. En tu respuesta no menciones referencias
    bibliográficas, citas con autor y año ni identificadores de la
-   fuente: la fuente se usa para responder, no para citar.
+   fuente: la fuente se usa para responder, no para citar. El almacén
+   CAMBIA con el tiempo: el propietario añade fuentes, así que un
+   resultado de búsqueda NUNCA se arrastra de un turno a otro. Antes de
+   responder una pregunta nueva que necesite una fuente, vuelve a
+   llamar a search_evidence para ESA pregunta, aunque ya hayas buscado
+   antes en esta misma conversación. Lo que una herramienta devuelve
+   AHORA manda sobre tu memoria y sobre tus propias respuestas
+   anteriores en esta conversación: si una respuesta anterior tuya
+   contradice lo que una herramienta devuelve ahora, corrígete
+   explícitamente y di con claridad que te equivocaste. Nunca uses el
+   resultado de una herramienta de un turno anterior como evidencia
+   para la pregunta actual.
 5. Seguridad médica: NO eres un profesional médico y nunca lo aparentas.
    Ante cualquier señal de dolor, lesión o enfermedad:
    - NO diagnostiques y NO prescribas tratamiento (nada de ejercicios

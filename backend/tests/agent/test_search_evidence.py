@@ -274,6 +274,21 @@ class TestDocstringIsTheModelFacingSchema:
         assert "no source" in doc.lower()
         assert "improvis" in doc.lower()
 
+    def test_docstring_says_results_are_per_turn_never_cached_and_the_library_grows(
+        self,
+    ) -> None:
+        """Anti-self-reinforcement RED (live finding, 2026-10-14): the
+        model stopped searching because an earlier turn's (stale, false)
+        tool result and its own earlier answers sat in the window. The
+        model-facing schema must say results are per-turn, never cached,
+        and the library grows — call again, never reuse an older answer."""
+        doc = tools.search_evidence.__doc__ or ""
+
+        assert "per-turn" in doc.lower()
+        assert "never cached" in doc.lower()
+        assert "grows" in doc.lower()
+        assert "older answer" in doc.lower()
+
     def test_docstring_does_not_instruct_printing_citations(self) -> None:
         """OWNER DECISION (2026-10-14) RED: the tool schema must NOT
         instruct the model to print citations — the store grounds the

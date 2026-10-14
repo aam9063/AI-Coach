@@ -1070,6 +1070,13 @@ async def search_evidence(query: str, k: int = 4) -> dict[str, Any]:
     no returned chunk supports the claim, you have no source: say so
     instead of relying on it.
 
+    Results are PER-TURN and NEVER cached: the library GROWS as the
+    owner ingests sources, so what this tool returned — or what you
+    answered — earlier in the conversation says nothing about what the
+    store holds NOW. For each new question that needs a source, call
+    this tool again instead of reusing an older answer or an older
+    search result.
+
     The store may LEGITIMATELY be empty today (the owner curates its
     files by hand and may not have ingested any yet), or it may hold
     sources that simply do not cover this question. When the result is
