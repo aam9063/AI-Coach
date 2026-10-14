@@ -18,7 +18,9 @@ Safety rules enforced here:
 
 ``pytest.skip`` stays in the fixture layer (tests/conftest.py), not here:
 these functions raise, so a broken configuration fails loudly instead of
-being mistaken for "Postgres unavailable".
+being mistaken for "Postgres unavailable". The same layer decides what an
+unreachable Postgres means: a plain skip for developers, or a hard failure
+when ``TESTS_REQUIRE_POSTGRES=1`` (CI) — see ``postgres_required``.
 """
 
 from __future__ import annotations
@@ -33,12 +35,27 @@ from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 from app.core.settings import get_settings
 
 ALLOW_DEV_DATABASE_ENV = "TESTS_ALLOW_DEV_DATABASE"
+REQUIRE_POSTGRES_ENV = "TESTS_REQUIRE_POSTGRES"
 DEFAULT_MAINTENANCE_DATABASE = "postgres"
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9_]+$")
 
 
 class DevDatabaseRefusedError(RuntimeError):
     """The resolved test database IS the configured one; refusing to run."""
+
+
+def postgres_required() -> bool:
+    """Whether an unreachable Postgres must FAIL instead of skip.
+
+    ``TESTS_REQUIRE_POSTGRES=1`` is how CI (.github/workflows/ci.yml)
+    declares that the postgres service is supposed to be there: when it is
+    not reachable the pipeline is broken, and a silent skip would let the
+    runner approve changes the database tests never exercised (it once
+    reported "1213 passed" while 138 database tests were skipped). Without
+    the variable — a developer machine — this is False and the fixture
+    layer skips with its usual hint.
+    """
+    return os.environ.get(REQUIRE_POSTGRES_ENV) == "1"
 
 
 def database_name(database_url: str) -> str:
