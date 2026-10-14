@@ -103,6 +103,7 @@ from app.agent.tracing import (
 from app.core.settings import Settings, get_settings
 from app.db.models import AgentConversationSummaryRow, MessageLogRow
 from app.db.session import create_db_engine, make_session_factory
+from app.evidence.injection import build_evidence_injection
 
 logger = logging.getLogger(__name__)
 
@@ -286,6 +287,16 @@ async def process_inbound_message(
     )
     if medical_signal:
         system_prompt += "\n\n" + MEDICAL_PROMPT_REINFORCEMENT
+    # Evidence-injection backstop (live finding 2026-10-14, third strike):
+    # prompt rules cannot make the model CALL the tool, so the store's
+    # material for the owner's CURRENT message is put in front of it — the
+    # SAME retrieval + embedding adapters search_evidence uses, injected
+    # into THIS turn's system prompt (visible on the DELIVERED prompt,
+    # per-turn, never carried forward). Fail-open: nothing qualifies or
+    # anything raises -> empty string -> the turn runs exactly as today.
+    evidence_block = await build_evidence_injection(session_factory, settings, body)
+    if evidence_block:
+        system_prompt += "\n\n" + evidence_block
     memory = RollingSummaryConversationManager(
         window_size=settings.agent_memory_window_messages,
         trigger_messages=settings.agent_summary_trigger_messages,

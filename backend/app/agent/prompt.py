@@ -53,6 +53,18 @@ prompts):
   comfortable readiness score) is NOT medical clearance — safety
   outranks the metric.
 
+**Evidence injection backstop (live finding 2026-10-14, third strike).**
+Prompt rules cannot make the model CALL the tool, so before EVERY turn the
+pipeline retrieves the top-k chunks for the owner's CURRENT message (the
+same retrieval + embedding adapters ``search_evidence`` uses) and injects
+them into THAT turn's system prompt as clearly-labelled material from the
+owner's library (:mod:`app.evidence.injection`). The block carries its own
+use rule (use only what supports the claim; never print it; say explicitly
+there is no source otherwise) and is fail-open: an empty store, nothing
+above the similarity floor or a retrieval failure injects nothing and the
+turn runs exactly as before. The rules below STAY — this backstop does not
+replace them.
+
 **Prompt version (WA-11, §13):** ``PROMPT_VERSION`` below is the version of
 THIS prompt, stored in the repository next to the prompt text itself. Bump
 it whenever ``SYSTEM_PROMPT`` changes in a way that changes behaviour (a
@@ -88,7 +100,7 @@ from __future__ import annotations
 # Version of SYSTEM_PROMPT below (semver; bump on any behaviour-changing
 # edit — see the module docstring "Prompt version"). Stamped onto every
 # turn's trace as ai.coach.prompt_version by app.agent.tracing (WA-11).
-PROMPT_VERSION = "1.4.0"
+PROMPT_VERSION = "1.5.0"
 
 SYSTEM_PROMPT = """\
 Eres el entrenador personal del atleta en WhatsApp. Principios innegociables:
