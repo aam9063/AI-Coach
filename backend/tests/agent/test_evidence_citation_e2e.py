@@ -5,12 +5,15 @@ loop with the real tool registry, the fake model scripting the turns and
 the fake embedding adapter doing every embedding — so the two §12.9
 acceptance behaviours are verified as the athlete experiences them:
 
-(a) **Cited answer**: with a synthetic TEST-ONLY paper ingested into the
-    dedicated test database (via the REAL ingest pipeline: loader →
-    chunker → fake embeddings → pgvector), a scientific question produces
-    a reply carrying that source's ``(Author, Year)`` citation — and the
+(a) **Grounded answer, no printed citations**: with a synthetic TEST-ONLY
+    paper ingested into the dedicated test database (via the REAL ingest
+    pipeline: loader → chunker → fake embeddings → pgvector), a scientific
+    question produces a reply grounded in what ``search_evidence``
+    returned — and NO citation, ``(Author, Year)`` or DOI anywhere in it
+    (OWNER DECISION, 2026-10-14: the agent never displays sources). The
     ``search_evidence`` tool REALLY was called (its result reached the
-    model before the final answer and an audit row was persisted).
+    model before the final answer and an audit row was persisted); its
+    ``citation``/``doi`` fields stay internal data on the payload.
 (b) **Empty store**: with an EMPTY store, the reply states explicitly
     that it has no source in the store and contains NO invented
     ``(Author, Year)``.
@@ -173,23 +176,22 @@ async def seeded_store(
         await session.commit()
 
 
-class TestCitedAnswerEndToEnd:
-    async def test_scientific_question_gets_a_cited_answer_and_the_tool_really_ran(
+class TestGroundedAnswerEndToEnd:
+    async def test_scientific_question_gets_a_grounded_answer_without_citations(
         self,
         session_factory: async_sessionmaker[Any],
         session_repository: Any,
         seeded_store: None,
     ) -> None:
         """(a) A scientific question against a seeded store: the scripted
-        agent calls ``search_evidence``, SEES the result (citation AND
-        DOI travel in it), and the delivered reply carries the source's
-        ``(Author, Year)`` citation."""
-        cited_reply = (
+        agent calls ``search_evidence``, SEES the result (citation and
+        DOI travel in it as internal data), and the delivered reply is
+        grounded in the returned content but prints NO citation and NO
+        DOI (OWNER DECISION, 2026-10-14)."""
+        grounded_reply = (
             "Para el reparto de intensidades, la evidencia apunta a un "
             "modelo polarizado: la mayoría del volumen en intensidad baja "
-            "y una pequeña parte en intensidad alta "
-            f"{PAPER_CITATION}. El DOI de la fuente está disponible si lo "
-            "pides."
+            "y una pequeña parte en intensidad alta."
         )
         model = FakeModel(
             [
@@ -197,7 +199,7 @@ class TestCitedAnswerEndToEnd:
                     "name": "search_evidence",
                     "input": {"query": "training volume and intensity for cyclists"},
                 },
-                cited_reply,
+                grounded_reply,
             ]
         )
         twilio = FakeTwilioClient()
@@ -222,13 +224,16 @@ class TestCitedAnswerEndToEnd:
             r"\s+", " ", model.invocations[0]["system_prompt"] or ""
         ).lower()
         assert "search_evidence" in system_prompt
-        assert "guía de entrenamiento" in system_prompt
+        # OWNER DECISION (2026-10-14): no citation instruction survives.
+        assert "guía de entrenamiento" not in system_prompt
+        assert "(autor, año)" not in system_prompt
 
         # The tool REALLY was called and its result reached the model.
         seen = await _tool_results_seen_by_model(model)
         assert seen, "search_evidence must have run inside the loop"
         evidence = seen[0]
         assert evidence["status"] == "ok"
+        # citation/doi remain INTERNAL data on the payload...
         assert evidence["results"][0]["citation"] == PAPER_CITATION
         assert evidence["results"][0]["doi"] == PAPER_DOI
 
@@ -236,9 +241,14 @@ class TestCitedAnswerEndToEnd:
         audited = await _tool_call_rows(session_factory)
         assert any(row.tool_name == "search_evidence" for row in audited)
 
-        # The delivered reply carries the source's citation.
+        # The delivered reply is grounded but prints NO citation or DOI.
         reply = twilio.messages.calls[0]["body"]
-        assert PAPER_CITATION in reply
+        assert "modelo polarizado" in reply.lower()
+        assert PAPER_CITATION not in reply
+        assert PAPER_DOI not in reply
+        assert _INVENTED_CITATION.search(reply) is None, (
+            f"reply must not contain a citation: {reply!r}"
+        )
 
     async def test_the_tool_output_reaches_the_model_before_the_final_answer(
         self,
@@ -251,7 +261,7 @@ class TestCitedAnswerEndToEnd:
         model = FakeModel(
             [
                 {"name": "search_evidence", "input": {"query": "polarized training"}},
-                f"Citado: {PAPER_CITATION}.",
+                "El modelo polarizado reparte el volumen en intensidad baja.",
             ]
         )
         await process_inbound_message(
@@ -265,6 +275,8 @@ class TestCitedAnswerEndToEnd:
 
         assert len(model.invocations) == 2
         assert model.invocations[1]["messages"], "the second invocation must replay history"
+        # The tool RESULT (with its internal citation/doi data) reached
+        # the model before the final answer.
         history = json.dumps(model.invocations[1]["messages"])
         assert PAPER_CITATION in history
 

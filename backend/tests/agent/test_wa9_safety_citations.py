@@ -97,24 +97,43 @@ class TestMedicalSafetyRuleInPrompt:
 
 
 class TestCitationHonestyRuleInPrompt:
-    async def test_citation_format_is_pinned(self) -> None:
-        prompt = await delivered_prompt()
-
-        # §8: the exact citation format, DOI available on request.
-        assert "(autor, año)" in prompt.lower()
-        assert "doi" in prompt.lower()
-
-    async def test_never_invent_a_citation_and_say_when_there_is_no_source(
+    async def test_no_citation_format_or_doi_promise_in_the_prompt(
         self,
     ) -> None:
+        """OWNER DECISION (2026-10-14) RED: the agent must NOT display
+        source citations — no ``(Autor, Año)`` format, no guide-vs-study
+        citation wording, no DOI-on-request promise. The store is used to
+        GROUND the answer, never to cite."""
         prompt = await delivered_prompt()
 
-        # The FINAL form (EV-8): the tool exists, so the honesty rule is
-        # anchored on it — no fabricated (Autor, Año), nothing cited that
-        # no tool handed over.
+        assert "(autor, año)" not in prompt.lower()
+        assert "doi" not in prompt.lower()
+        assert "guía de entrenamiento" not in prompt.lower()
+        assert "revisada por pares" not in prompt.lower()
+
+    async def test_unsupported_claims_still_get_explicit_no_source(
+        self,
+    ) -> None:
+        """OWNER DECISION keeps the honesty half: when the store is empty
+        or nothing relevant comes back, the agent says explicitly that it
+        has no source instead of improvising (the live 2026-10-14 failure
+        it prevents: it answered '220 - edad' while the ingested guide
+        says Tanaka)."""
+        prompt = await delivered_prompt()
+
         assert "search_evidence" in prompt
-        assert "no inventes" in prompt.lower()
+        assert "improvis" in prompt.lower()
         # With no supporting source, the agent says so explicitly.
+        assert "sin fuente" in prompt.lower() or "no tienes fuente" in prompt.lower()
+
+    async def test_no_invented_sources_and_explicit_no_source(self) -> None:
+        prompt = await delivered_prompt()
+
+        # The FINAL form (EV-8, post OWNER DECISION 2026-10-14): the
+        # honesty rule is anchored on the tool — with no supporting
+        # source, the agent says so explicitly instead of improvising.
+        assert "search_evidence" in prompt
+        assert "improvisar" in prompt.lower()
         assert "sin fuente" in prompt.lower() or "no tengo una fuente" in prompt.lower()
 
     async def test_rule_says_to_search_evidence_before_a_scientific_claim(
@@ -129,24 +148,52 @@ class TestCitationHonestyRuleInPrompt:
         assert "antes de" in prompt.lower()
         assert "afirmación científica" in prompt.lower()
 
-    async def test_cite_only_what_the_tool_returned(self) -> None:
-        """EV-8 RED: the citation rests on what the tool actually gave
-        back, never on the model's memory."""
+    async def test_store_usage_survives_without_citations(self) -> None:
+        """OWNER DECISION (2026-10-14): the citation FORMAT is gone but
+        the store usage is not — the agent still answers only with what
+        ``search_evidence`` returned."""
         prompt = await delivered_prompt()
 
-        assert "solo lo que" in prompt.lower()
+        assert "solo con lo que" in prompt.lower()
         assert "devolv" in prompt.lower()  # devolvió/devuelva
 
-    async def test_guide_cited_as_training_guide_never_peer_reviewed(
+    async def test_no_training_guide_citation_wording_in_prompt(
         self,
     ) -> None:
-        """EV-8 RED: a guide source is cited AS a training guide and never
-        presented as peer-reviewed literature (owner decision, EV-7/§8)."""
+        """OWNER DECISION (2026-10-14) RED: with citations no longer
+        displayed, the guide-vs-study citation instruction is gone too."""
         prompt = await delivered_prompt()
 
-        assert "guía de entrenamiento" in prompt.lower()
-        assert "nunca" in prompt.lower()
-        assert "revisada por pares" in prompt.lower() or "literatura" in prompt.lower()
+        assert "guía de entrenamiento" not in prompt.lower()
+        assert "literatura" not in prompt.lower()
+
+    async def test_a_chunk_counts_as_a_source_only_if_it_supports_the_claim(
+        self,
+    ) -> None:
+        """DEFECT-2 RED (live finding, 2026-10-14): the similarity floor
+        lets same-domain-irrelevant chunks through, so rule 4 must put the
+        honesty check where it actually works: a returned chunk counts as
+        a source ONLY IF its content really supports the claim — the
+        similarity is a hint, not a verdict — and a chunk that does not
+        support the claim means NO source, said explicitly."""
+        prompt = await delivered_prompt()
+
+        assert "apoy" in prompt.lower()  # apoya/apoye — content must support it
+        assert "pista" in prompt.lower()  # similarity is only a hint
+        assert "veredicto" in prompt.lower()  # ...never a verdict
+        assert "no tienes fuente" in prompt.lower()
+
+    async def test_the_search_query_is_the_owner_current_question(
+        self,
+    ) -> None:
+        """DEFECT-1b RED (live finding, 2026-10-14): the model called
+        search_evidence with the PREVIOUS turn's topic, so the tool
+        answered about the wrong question. Rule 4 must state the query is
+        the owner's CURRENT question, never a carried-over topic."""
+        prompt = await delivered_prompt()
+
+        assert "pregunta actual" in prompt.lower()
+        assert "turno anterior" in prompt.lower()
 
     async def test_empty_store_or_no_relevant_results_gets_explicit_no_source(
         self,

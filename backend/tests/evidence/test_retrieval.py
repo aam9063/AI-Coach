@@ -22,11 +22,13 @@ Contract pinned here:
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
-from typing import Any
+from typing import Any, cast
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.db.models import EvidenceChunkRow
 from app.db.repository import upsert_evidence_chunk, upsert_evidence_source
 from app.evidence.embeddings import FakeEmbedding
 from app.evidence.retrieval import MIN_SIMILARITY, RetrievalResult, retrieve_chunks
@@ -187,6 +189,81 @@ class TestExplicitEmptyAndNoRelevance:
         assert result.detail is not None
         assert "similar" in result.detail.lower()
         assert str(MIN_SIMILARITY) in result.detail
+
+    async def test_no_relevant_detail_reports_the_store_real_chunk_count(
+        self, db_session: AsyncSession, store_with_sources: dict[str, Any]
+    ) -> None:
+        """DEFECT-1 RED (live finding): the detail the MODEL reads must
+        never show a false number. Observed live: the store held 10 chunks
+        and the model was told it has 3 — the old code printed
+        ``len(results)``, which is capped at the requested ``k``. The
+        count in the detail must be the store's REAL chunk count."""
+        real_count = len(
+            (await db_session.execute(select(EvidenceChunkRow.id))).all()
+        )
+        assert real_count == 2  # the fixture's store; k=1 below caps results at 1
+
+        result = await retrieve(
+            db_session, "quantum chromodynamics gluon fields", k=1
+        )
+
+        assert result.status == "no_relevant_results"
+        assert result.detail is not None
+        assert f"{real_count} chunks" in result.detail
+
+    async def test_no_relevant_detail_never_claims_the_store_is_empty(
+        self, db_session: AsyncSession, store_with_sources: dict[str, Any]
+    ) -> None:
+        """DEFECT-1 RED (live finding, 2026-10-14): the model was told the
+        store was empty while it held 10 chunks, believed it had no
+        sources at all and answered a scientific question from memory.
+        The no-relevant-results wording must be the per-query truth —
+        nothing matches THIS query — never a store-level emptiness claim."""
+        result = await retrieve(db_session, "quantum chromodynamics gluon fields")
+
+        assert result.status == "no_relevant_results"
+        assert result.detail is not None
+        assert "empty" not in result.detail.lower()
+        assert (
+            "this query" in result.detail.lower()
+            or "this claim" in result.detail.lower()
+        )
+
+    async def test_store_never_told_empty_while_it_holds_chunks(
+        self,
+    ) -> None:
+        """DEFECT-1 RED (the live acceptance case): the agent must NEVER
+        be told ``empty_store`` while the store holds chunks.
+
+        The distance query returning no rows is not by itself proof the
+        store is empty, so the empty wording must be contingent on an
+        actual count check. That anomaly is unreachable through the public
+        interface with valid data (the distance query returns up to ``k``
+        rows of whatever exists), so this test pins the guard at its seam:
+        a session whose similarity search yields no rows while a COUNT
+        proves chunks exist."""
+
+        class _Result:
+            def all(self) -> list[Any]:
+                return []
+
+        class _UnreachableChunks:
+            async def execute(self, stmt: Any) -> _Result:
+                return _Result()
+
+            async def scalar(self, stmt: Any) -> int:
+                return 10
+
+        result = await retrieve_chunks(
+            cast(AsyncSession, _UnreachableChunks()),
+            fake.embed(["any question"])[0],
+            k=4,
+        )
+
+        assert result.status == "no_relevant_results"
+        assert result.detail is not None
+        assert "empty" not in result.detail.lower()
+        assert "10 chunks" in result.detail
 
     async def test_min_similarity_floor_is_below_the_fake_related_pair(
         self, store_with_sources: dict[str, Any]

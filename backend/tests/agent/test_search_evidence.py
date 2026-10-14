@@ -147,6 +147,51 @@ class TestSearchEvidenceExplicitEmpty:
         assert result["engine_version"] == "test-engine-1.0"
         assert result["computed_at"]
 
+    async def test_no_relevant_detail_reports_the_real_store_count_not_k(
+        self, seeded_store: None, tool_db: async_sessionmaker[Any]
+    ) -> None:
+        """DEFECT-1 RED (live finding): the tool relays the detail the
+        model reads — its count must be the store's REAL chunk count,
+        never ``len(results)`` (capped at ``k``). The store here holds 2
+        chunks; with k=1 the old code reported "1 chunks"."""
+        async with tool_db() as session:
+            guide = await upsert_evidence_source(
+                session,
+                kind="guide",
+                slug="pedalea-con-ciencia",
+                title="Pedalea con Ciencia",
+                authors=["Owner"],
+                year=2024,
+                journal=None,
+                doi=None,
+                citation="(Owner, 2024, training guide)",
+            )
+            await upsert_evidence_chunk(
+                session,
+                source_id=guide.id,
+                chunk_index=0,
+                text="Threshold work raises aerobic power.",
+                embedding=fake.embed(["Threshold work raises aerobic power."])[0],
+                citation="(Owner, 2024, training guide)",
+            )
+            await session.commit()
+
+        result = await tools.search_evidence("quantum chromodynamics gluon fields", k=1)
+
+        assert result["status"] == "insufficient_data"
+        assert "2 chunks" in result["detail"]
+
+    async def test_no_relevant_detail_never_claims_an_empty_store(
+        self, seeded_store: None
+    ) -> None:
+        """DEFECT-1 (live finding, 2026-10-14): a populated store must
+        never be described as empty — the model answered from memory after
+        being told that."""
+        result = await tools.search_evidence("quantum chromodynamics gluon fields", k=4)
+
+        assert result["status"] == "insufficient_data"
+        assert "empty" not in result["detail"].lower()
+
     async def test_no_relevant_results_is_insufficient_data_not_ok(
         self, seeded_store: None
     ) -> None:
@@ -202,6 +247,24 @@ class TestToolListGrowsByExactlyOne:
 
 
 class TestDocstringIsTheModelFacingSchema:
+    def test_docstring_says_the_query_is_the_owner_current_question(self) -> None:
+        """DEFECT-1b RED (live finding, 2026-10-14): the model reused the
+        PREVIOUS turn's topic as the search query. The model-facing schema
+        must say the query is the owner's CURRENT question."""
+        doc = tools.search_evidence.__doc__ or ""
+
+        assert "CURRENT" in doc
+        assert "earlier turn" in doc.lower()
+
+    def test_docstring_says_similarity_is_a_hint_not_a_verdict(self) -> None:
+        """DEFECT-2 RED: the model-facing schema must say a chunk counts
+        as a source only if its CONTENT supports the claim — similarity is
+        a hint, never a verdict of relevance."""
+        doc = tools.search_evidence.__doc__ or ""
+
+        assert "hint" in doc.lower()
+        assert "support" in doc.lower()
+
     def test_docstring_states_the_empty_store_instruction(self) -> None:
         doc = tools.search_evidence.__doc__ or ""
 
@@ -211,18 +274,21 @@ class TestDocstringIsTheModelFacingSchema:
         assert "no source" in doc.lower()
         assert "improvis" in doc.lower()
 
-    def test_docstring_documents_both_citation_forms(self) -> None:
+    def test_docstring_does_not_instruct_printing_citations(self) -> None:
+        """OWNER DECISION (2026-10-14) RED: the tool schema must NOT
+        instruct the model to print citations — the store grounds the
+        answer, and the stored citation strings are internal data."""
         doc = tools.search_evidence.__doc__ or ""
 
-        # Papers: (Author, Year). Guides: a training guide, never a study.
-        assert "Author, Year" in doc
-        assert "training guide" in doc.lower()
+        assert "(author, year)" not in doc.lower()
+        assert "training guide" not in doc.lower()
+        assert "never print" in doc.lower() or "do not print" in doc.lower()
 
-    def test_docstring_says_results_include_the_doi(self) -> None:
-        """EV-9 RED: the model-facing schema must say the result carries
-        the DOI (papers), so the "DOI available on request" promise in
-        the system prompt is grounded in the tool's own output."""
+    def test_docstring_makes_no_doi_promise(self) -> None:
+        """OWNER DECISION (2026-10-14) RED: no DOI-on-request promise
+        anywhere in the model-facing schema (the ``doi`` field stays
+        internal data on the result payload only)."""
         doc = tools.search_evidence.__doc__ or ""
 
-        assert "doi" in doc.lower()
-        assert "on request" in doc.lower()
+        assert "on request" not in doc.lower()
+        assert "doi" not in doc.lower()

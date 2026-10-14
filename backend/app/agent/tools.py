@@ -1054,29 +1054,35 @@ _K_RANGE_HELP = "k must be between 1 and 10."
 
 @tool
 async def search_evidence(query: str, k: int = 4) -> dict[str, Any]:
-    """Search the evidence store for curated sources supporting a claim.
+    """Search the evidence store for curated sources backing a claim.
 
     Returns the most similar chunks of the owner-curated library
     (``evidence/papers/`` for studies, ``evidence/guides/`` for training
-    documents), each with its ``citation`` string and its ``kind``.
-    Cite what you use as ``(Author, Year)`` for papers and as
-    ``(Author, Year, training guide)`` for guides: a guide is a training
-    document, NEVER peer-reviewed literature, so never present it as a
-    study. Each result carries the source's ``doi`` — the paper's DOI,
-    ``None`` for a guide — so the DOI stays available on request
-    straight from the tool result, never from memory.
+    documents), each with its ``text``, the stored ``citation`` string
+    and its ``kind``. These fields are INTERNAL grounding data: NEVER
+    print bibliographic references, citation strings or source
+    identifiers in your reply — read the returned text and use
+    it to answer.
+
+    A returned chunk counts as a source ONLY IF its content actually
+    supports the claim: the ``similarity`` score is a hint, never a
+    verdict of relevance — check the chunk text before relying on it. If
+    no returned chunk supports the claim, you have no source: say so
+    instead of relying on it.
 
     The store may LEGITIMATELY be empty today (the owner curates its
-    files by hand and may not have ingested any yet). When the result is
+    files by hand and may not have ingested any yet), or it may hold
+    sources that simply do not cover this question. When the result is
     ``status="insufficient_data"`` — empty store or nothing similar
-    enough — you have NO SOURCE in the store for this claim: say so
-    explicitly in your reply instead of improvising or citing from
-    memory.
+    enough for THIS question — you have NO SOURCE in the store for this
+    claim: say so explicitly in your reply instead of improvising or
+    answering from memory.
 
     Returns on success (status "ok"): ``results`` — up to ``k`` chunks,
-    each with ``text``, ``citation``, ``doi``, ``kind`` ("paper" or
-    "guide"), ``source_slug``, ``chunk_index`` and ``similarity`` (cosine,
-    most similar first); ``coverage`` (``k_requested`` vs
+    each with ``text``, the stored ``citation`` string (internal data,
+    never printed), ``kind`` ("paper" or "guide"),
+    ``source_slug``, ``chunk_index`` and ``similarity`` (cosine, most
+    similar first); ``coverage`` (``k_requested`` vs
     ``chunks_returned`` and the ``min_similarity`` floor);
     ``engine_version`` and ``computed_at``. An empty store or no chunk
     above the similarity floor returns ``status="insufficient_data"``
@@ -1085,7 +1091,9 @@ async def search_evidence(query: str, k: int = 4) -> dict[str, Any]:
     ``status="error"``.
 
     Args:
-        query: The scientific claim or topic to find evidence for.
+        query: The owner's CURRENT question or the claim to check,
+            paraphrased if needed — the question being answered in this
+            turn, NEVER a topic carried over from an earlier turn.
         k: Maximum number of chunks to return, 1-10 (default 4).
     """
     settings = _settings()

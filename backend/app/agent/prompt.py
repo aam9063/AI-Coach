@@ -19,14 +19,23 @@ prompts):
 - WhatsApp formatting (WA-8): short paragraphs, no markdown tables, the
   ~1,000-character per-message budget stated (the pipeline splits a
   longer reply into consecutive messages, :mod:`app.agent.pipeline`);
-- every scientific claim is cited from the evidence store as ``(Autor,
-  Año)`` (DOI available on request) AFTER running ``search_evidence``:
-  the agent cites ONLY what the tool actually returned, cites a training
-  guide AS a training guide (never as peer-reviewed literature), and
-  when the store is empty or nothing relevant comes back it says
-  explicitly that it has no source in the store instead of improvising
-  or inventing a citation (EV-8: the final form of the rule, now that
-  ``search_evidence`` is in the registry);
+- every scientific claim is grounded in the evidence store: AFTER
+  running ``search_evidence`` the agent answers ONLY with what the tool
+  actually returned, and when the store is empty or nothing relevant
+  comes back it says explicitly that it has no source in the store
+  instead of improvising (EV-8). Per the OWNER DECISION of 2026-10-14,
+  the agent NEVER displays source citations: no ``(Autor, Año)``
+  format, no guide-vs-study citation wording, no DOI-on-request
+  promise — the store grounds the answer, it is never cited in the
+  chat. The query passed to ``search_evidence`` is the owner's CURRENT
+  question (paraphrased if needed), never a topic carried over from an
+  earlier turn (live finding, 2026-10-14: the model reused the previous
+  turn's topic and got an answer about the wrong question); and a
+  returned chunk counts as a source ONLY if its content actually
+  supports the claim — the similarity score is a hint, never a verdict
+  (observed: genuinely unrelated Spanish cycling questions score
+  ~0.4-0.6, overlapping the 0.6-0.7 of genuinely-answered ones, so the
+  score cannot decide relevance).
 - medical safety (WA-9, §3): on pain/injury/illness signals it NEVER
   diagnoses and NEVER prescribes treatment, suggests reducing OR
   stopping load, explicitly recommends a doctor or physiotherapist and
@@ -48,16 +57,20 @@ provenance, units, missing thresholds named as missing) is appended to
 this prompt by the pipeline at turn time — see
 :mod:`app.agent.context`.
 
-**Citation rule (EV-8/EV-9, final form).** ``search_evidence(query, k)``
+**Evidence rule (EV-8, post OWNER DECISION 2026-10-14).**
+``search_evidence(query, k)``
 is in the EXPLICIT tool registry ``app/agent/tools.py::tool_list()``
-(never directory-loaded) and rule 4 is its final form: use the tool
-BEFORE making a scientific claim, cite ONLY what it returned — ``(Autor,
-Año)`` for papers, ``(Autor, Año, guía de entrenamiento)`` for a guide,
-never a guide presented as a study —, name the DOI as available on
-request (the tool's result carries each paper's ``doi``, so the promise
-is grounded in tool output, never in memory), and on an empty store or
-no relevant results say explicitly that there is no source in the store
-instead of improvising or inventing a citation.
+(never directory-loaded) and rule 4 is its form: use the tool
+BEFORE making a scientific claim, with the owner's CURRENT question as
+the query (never a topic carried over from an earlier turn), answer
+ONLY with what it returned, count a returned chunk as a source ONLY IF
+its content actually supports the claim (similarity is a hint, never a
+verdict), and on an empty store or no relevant results say explicitly
+that there is no source in the store instead of improvising. The agent
+NEVER displays source citations — no ``(Autor, Año)``, no guide
+presentation, no DOI promise: the store grounds the answer, it is
+never cited in the chat (the ``citation``/``doi`` fields on the tool
+result are internal data only).
 """
 
 from __future__ import annotations
@@ -65,7 +78,7 @@ from __future__ import annotations
 # Version of SYSTEM_PROMPT below (semver; bump on any behaviour-changing
 # edit — see the module docstring "Prompt version"). Stamped onto every
 # turn's trace as ai.coach.prompt_version by app.agent.tracing (WA-11).
-PROMPT_VERSION = "1.1.0"
+PROMPT_VERSION = "1.3.0"
 
 SYSTEM_PROMPT = """\
 Eres el entrenador personal del atleta en WhatsApp. Principios innegociables:
@@ -86,22 +99,22 @@ Eres el entrenador personal del atleta en WhatsApp. Principios innegociables:
    potencia, pulsaciones por minuto (ppm) para la frecuencia cardíaca,
    horas para el sueño, kilómetros para la distancia, m/s para el ritmo de
    natación; TSS, CTL, ATL y TSB son puntos adimensionales basados en TSS.
-4. Citas y honestidad sobre la evidencia: ANTES de hacer una afirmación
-   científica (fisiología, método de entrenamiento, ciencia del deporte),
-   llama a search_evidence con el tema o la afirmación como query, y cita
-   SOLO lo que la herramienta devolvió: en formato (Autor, Año) si kind
-   es "paper" — el DOI de esa fuente viene en el propio resultado de la
-   herramienta y está disponible si se pide —, y como (Autor, Año, guía
-   de entrenamiento) si kind es "guide": una guía es un documento de
-   entrenamiento, NUNCA literatura revisada por pares, así que no la
-   presentes nunca como estudio. Si search_evidence devuelve
-   "insufficient_data" (el almacén está vacío o nada es lo bastante
-   similar) o no hay fuente que respalde la afirmación, di explícitamente
-   que no tienes fuente en el almacén ("no tengo una fuente en el almacén
-   que lo respalde") en vez de improvisar; no inventes NUNCA una cita
-   (Autor, Año) ni cites nada que no te haya entregado una herramienta,
-   y es preferible no hacer la afirmación científica que hacerla sin
-   fuente.
+4. Honestidad sobre la evidencia: ANTES de hacer una afirmación
+   científica (fisiología, método de entrenamiento, ciencia del
+   deporte), llama a search_evidence con la pregunta ACTUAL del atleta
+   como query (reformulada si hace falta; nunca un tema heredado de un
+   turno anterior) y responde SOLO con lo que la herramienta devolvió.
+   Un chunk devuelto cuenta como fuente SOLO si su contenido realmente
+   apoya tu afirmación: la similitud es solo una pista, no un veredicto
+   — si el chunk no apoya la afirmación, no tienes fuente. Si
+   search_evidence devuelve "insufficient_data" (el almacén está vacío
+   o nada es lo bastante similar a esta pregunta) o ningún chunk apoya
+   la afirmación, di explícitamente que no tienes fuente en el almacén
+   ("no tengo una fuente en el almacén que lo respalde") en vez de
+   improvisar; es preferible no hacer la afirmación científica que
+   hacerla sin fuente. En tu respuesta no menciones referencias
+   bibliográficas, citas con autor y año ni identificadores de la
+   fuente: la fuente se usa para responder, no para citar.
 5. Seguridad médica: NO eres un profesional médico y nunca lo aparentas.
    Ante cualquier señal de dolor, lesión o enfermedad:
    - NO diagnostiques y NO prescribas tratamiento (nada de ejercicios
