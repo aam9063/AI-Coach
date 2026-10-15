@@ -21,9 +21,11 @@ import pytest
 # (it returns a string, which pytest reports as PytestReturnNotNoneWarning).
 from tests.dbsupport import (
     ALLOW_DEV_DATABASE_ENV,
+    REQUIRE_POSTGRES_ENV,
     DevDatabaseRefusedError,
     assert_is_test_database,
     database_name,
+    postgres_required,
 )
 from tests.dbsupport import (
     test_database_url as derive_test_database_url,
@@ -31,6 +33,79 @@ from tests.dbsupport import (
 
 DEV = "postgresql+asyncpg://tri_coach:devpass@localhost:5432/tri_coach"
 ALREADY_TEST = "postgresql+asyncpg://tri_coach:devpass@localhost:5432/tri_coach_test"
+
+
+# --- TESTS_REQUIRE_POSTGRES: CI must fail loudly, developers still skip ---
+
+
+def test_postgres_required_is_off_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without the variable (a developer machine) skips stay available."""
+    monkeypatch.delenv(REQUIRE_POSTGRES_ENV, raising=False)
+
+    assert postgres_required() is False
+
+
+def test_postgres_required_when_the_opt_in_is_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(REQUIRE_POSTGRES_ENV, "1")
+
+    assert postgres_required() is True
+
+
+def test_unreachable_postgres_fails_hard_when_required(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """With the opt-in, an unreachable Postgres must FAIL, never skip.
+
+    CI once reported 1213 passed while 138 database tests were silently
+    skipped; the runner approved changes it had not exercised. The failure
+    message must name the variable so whoever reads the log knows what to do.
+    """
+    monkeypatch.setenv(REQUIRE_POSTGRES_ENV, "1")
+    failures: list[str] = []
+    skips: list[str] = []
+
+    class FailCalledError(Exception):
+        pass
+
+    def fake_fail(message: str = "") -> None:
+        # The real pytest.fail raises; mimic that so the branch cannot fall
+        # through to the skip.
+        failures.append(message)
+        raise FailCalledError(message)
+
+    monkeypatch.setattr(pytest, "fail", fake_fail)
+    monkeypatch.setattr(pytest, "skip", lambda message="": skips.append(message))
+
+    from tests import conftest
+
+    with pytest.raises(FailCalledError):
+        conftest.unreachable_postgres()
+
+    assert skips == []
+    assert len(failures) == 1
+    assert REQUIRE_POSTGRES_ENV in failures[0]
+
+
+def test_unreachable_postgres_still_skips_for_developers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without the variable today's developer experience is unchanged."""
+    monkeypatch.delenv(REQUIRE_POSTGRES_ENV, raising=False)
+    failures: list[str] = []
+    skips: list[str] = []
+    monkeypatch.setattr(pytest, "fail", lambda message="": failures.append(message))
+    monkeypatch.setattr(pytest, "skip", lambda message="": skips.append(message))
+
+    from tests import conftest
+
+    conftest.unreachable_postgres()
+
+    assert failures == []
+    assert skips == [conftest.POSTGRES_HINT]
 
 
 def test_database_name_reads_the_path_component() -> None:

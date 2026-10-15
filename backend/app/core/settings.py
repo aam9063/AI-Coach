@@ -393,6 +393,25 @@ class Settings(BaseSettings):
     # Model id handed to the provider (strands OpenAIConfig.model_id).
     llm_model_id: str = "gpt-4o-mini"
 
+    # --- Evidence store embeddings (Feature 9; §6 adapter principle) --------
+    # Which embedding adapter the evidence ingestion/retrieval gets — ONE
+    # adapter per §6, chosen purely by configuration. "openai" builds the
+    # real OpenAI embeddings adapter from openai_api_key/embedding_model_id
+    # (constructing it wires a local client only); "fake" builds the
+    # deterministic app.evidence.embeddings.FakeEmbedding (tests, dry runs
+    # — zero network, zero credentials). Anything else fails loudly
+    # instead of silently dialling a provider.
+    embedding_provider: str = "openai"
+    # Model id handed to the embeddings provider.
+    embedding_model_id: str = "text-embedding-3-small"
+    # Evidence-injection backstop (live finding 2026-10-14): how many of the
+    # owner's-library chunks the pipeline injects into EACH turn's system
+    # prompt (retrieved with the SAME adapters search_evidence uses, before
+    # the model is invoked). Nothing is injected when the store is empty or
+    # nothing clears the retrieval similarity floor; a retrieval failure is
+    # fail-open (the turn runs exactly as without injection).
+    evidence_injection_k: int = 4
+
     # --- WhatsApp agent guardrails (Feature 6; WA-5; §9.2, §14) --------------
     # The tool-calling loop is the Strands Agents SDK's; these are OUR
     # guardrails around it, all documented OWNER CHOICES (§14 style) with no
@@ -415,7 +434,7 @@ class Settings(BaseSettings):
     # message_log. When the accumulated usage reaches this budget the
     # pipeline stops BEFORE invoking the model and replies with an explicit
     # budget message; usage frees up as turns age out of the 24 h window.
-    agent_conversation_token_budget: int = 60000
+    agent_conversation_token_budget: int = 300000
 
     # --- WhatsApp reply formatting (Feature 6; WA-8; §9.2) -------------------
     # WhatsApp formatting constraint (§9.2): short paragraphs, no markdown

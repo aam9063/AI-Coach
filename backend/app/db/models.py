@@ -38,6 +38,7 @@ decisions are documented on each class.
 from datetime import UTC, date, datetime
 from typing import Any
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     Boolean,
     Date,
@@ -51,6 +52,8 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+from app.evidence.embeddings import EMBEDDING_DIMENSION
 
 
 class Base(DeclarativeBase):
@@ -543,6 +546,62 @@ class SubjectiveLogRow(Base):
     recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class ThresholdProposalRow(Base):
+    """A PENDING threshold proposal awaiting the owner's review (WA-6).
+
+    §7.3: a threshold change is the athlete's (here: the owner's)
+    decision, never the agent's — the agent PROPOSES, the owner applies.
+    One row per proposal raised from the conversation
+    (``propose_threshold_update`` tool, brief §9.3 "pending proposal
+    awaiting athlete confirmation"): the tool validates the sport and
+    the value, persists the proposal here and returns a result stating
+    that NOTHING was changed — the active thresholds (``athlete_profile``,
+    the owner configuration the engine reads) are never touched by the
+    proposal itself.
+
+    APPEND-ONLY: each proposal is a distinct request for review, so rows
+    are inserted and never upserted or mutated (the same audit
+    convention as :class:`AthleteThresholdHistoryRow`, which records the
+    owner's eventual DECISION). The ``status`` column exists for that
+    later confirmation flow: it starts ``"pending"`` (a server-side
+    DEFAULT, so even a non-ORM writer cannot forget it) and only the
+    owner-driven application step (a later feature) would move it.
+
+    Like :class:`SubjectiveLogRow`, this is agent-channel data, not an
+    engine output: it carries no computed metric — the
+    ``engine_version`` column records the engine version the proposing
+    turn ran under (§6 provenance of the conversation), and
+    ``created_at`` stamps the proposal.
+
+    Columns mirror the tool contract: ``sport`` (the normalized sport
+    name the owner used), ``metric`` (the engine zone-model key the
+    proposal targets, e.g. ``bike_power``), ``proposed_value`` (in the
+    metric's ``unit``), ``evidence`` (the justification text the agent
+    attached) and ``status``.
+    """
+
+    __tablename__ = "threshold_proposal"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # Same local single-athlete integer as wellness/daily_load (default 1).
+    athlete_id: Mapped[int] = mapped_column(Integer, default=1)
+    # Normalized sport name ("ride"/"run"/"swim"...) as proposed.
+    sport: Mapped[str] = mapped_column(String(32))
+    # The engine zone-model key the proposal targets (bike_power/run_hr/
+    # swim_pace) — the same vocabulary as the zone tools.
+    metric: Mapped[str] = mapped_column(String(32))
+    proposed_value: Mapped[float] = mapped_column(Float)
+    unit: Mapped[str] = mapped_column(String(16))
+    # The §7.3 justification: what effort/state motivates the proposal.
+    evidence: Mapped[str] = mapped_column(Text)
+    # "pending" until the owner-driven application flow (a later feature)
+    # records the decision in athlete_threshold_history.
+    status: Mapped[str] = mapped_column(String(16), default="pending")
+    # The engine version the proposing turn ran under (§6 provenance).
+    engine_version: Mapped[str] = mapped_column(String(32))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 def _utcnow() -> datetime:
     """Timezone-aware UTC now (message_log.created_at default)."""
     return datetime.now(UTC)
@@ -745,3 +804,69 @@ class MessageLogRow(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow
     )
+
+
+class EvidenceSourceRow(Base):
+    """One curated evidence source: a paper OR a training guide (Feature 9).
+
+    The OWNER DECISION (odd/tasks/evidence-store.md) gives the library two
+    kinds, each declared by the file's own ``kind`` front-matter field:
+
+    - ``paper``: ``evidence/papers/<slug>.md`` — the brief's §8 schema,
+      with ``journal``/``doi`` (DOI available on request, §8);
+    - ``guide``: ``evidence/guides/<slug>.md`` — a curated summary of a
+      TRAINING DOCUMENT; ``journal``/``doi`` are structurally absent
+      (stored NULL), and its citation string carries the
+      "training guide" marker so it can never be presented as a study.
+
+    The citation string is decided ONCE at load time (loader) and stored
+    verbatim; chunks copy it so retrieval needs no join to cite. The
+    unique ``slug`` is the idempotency anchor: re-ingesting an updated
+    file updates this row, never duplicates it.
+    """
+
+    __tablename__ = "evidence_source"
+    __table_args__ = (
+        UniqueConstraint("slug", name="uq_evidence_source_slug"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # "paper" | "guide" (the loader's closed KINDS vocabulary).
+    kind: Mapped[str] = mapped_column(String(16))
+    slug: Mapped[str] = mapped_column(String(200))
+    title: Mapped[str] = mapped_column(Text)
+    authors: Mapped[list[Any]] = mapped_column(JSONB)
+    year: Mapped[int] = mapped_column(Integer)
+    # Papers only; NULL for guides (a training document has no DOI).
+    journal: Mapped[str | None] = mapped_column(Text, default=None)
+    doi: Mapped[str | None] = mapped_column(Text, default=None)
+    citation: Mapped[str] = mapped_column(Text)
+
+
+class EvidenceChunkRow(Base):
+    """One embedded chunk of a curated source (brief §6 data model).
+
+    §6: "``evidence_chunk``: paper id, chunk text, embedding, citation
+    string." The embedding dimension is the store's single
+    :data:`app.evidence.embeddings.EMBEDDING_DIMENSION` constant so the
+    column type, the adapters and the retrieval query cannot drift.
+    Embeddings contain SOURCE CONTENT ONLY (§14): never athlete data, never
+    prompts, never anything derived from Strava/Intervals.icu (§5.3).
+
+    Idempotent per ``(source_id, chunk_index)``: a re-ingest updates each
+    chunk in place; chunk indexes that no longer exist after the source
+    shrank are deleted by the ingest (derived data never outlives its
+    source's current text).
+    """
+
+    __tablename__ = "evidence_chunk"
+    __table_args__ = (
+        UniqueConstraint("source_id", "chunk_index", name="uq_evidence_chunk_source_index"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source_id: Mapped[int] = mapped_column(ForeignKey("evidence_source.id"), index=True)
+    chunk_index: Mapped[int] = mapped_column(Integer)
+    text: Mapped[str] = mapped_column(Text)
+    embedding: Mapped[list[float]] = mapped_column(Vector(EMBEDDING_DIMENSION))
+    citation: Mapped[str] = mapped_column(Text)

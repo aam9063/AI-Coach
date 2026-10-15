@@ -15,7 +15,10 @@ jobs:
       # the engine tools, log_subjective and the conversation memory never ran:
       # ~140 tests were silently skipped on every run.
       postgres:
-        image: postgres:16
+        # pgvector image: the evidence store needs `create extension vector`,
+        # which the vanilla postgres:16 image cannot provide (EV-4). Same
+        # image as infra/docker-compose.yml.
+        image: pgvector/pgvector:pg16
         env:
           POSTGRES_USER: tri_coach
           POSTGRES_PASSWORD: tri_coach
@@ -32,6 +35,10 @@ jobs:
       # (tests/dbsupport.py) and refuse to run against the configured one, so
       # the runner's own database is never dropped or recreated.
       DATABASE_URL: postgresql+asyncpg://tri_coach:tri_coach@localhost:5432/tri_coach
+      # With this service in place an unreachable Postgres means the pipeline
+      # is broken: fail loudly instead of silently skipping every DB test (CI
+      # once reported "1213 passed" while 138 database tests were skipped).
+      TESTS_REQUIRE_POSTGRES: "1"
     steps:
       - uses: actions/checkout@v4
 

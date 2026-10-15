@@ -25,6 +25,7 @@ dependencies = [
     "strands-agents[openai]>=1.58",
     "opentelemetry-sdk>=1.45",
     "opentelemetry-exporter-otlp-proto-http>=1.45",
+    "pyyaml>=6.0.3",
 ]
 
 [dependency-groups]
@@ -80,6 +81,13 @@ ignore_missing_imports = true
 # twilio ships no py.typed marker (as of 9.11.2); untyped for mypy. Used
 # only at the WhatsApp reply boundary (app.agent.pipeline.make_twilio_client).
 module = "twilio.*"
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# PyYAML ships no py.typed marker (as of 6.0); untyped for mypy. Used
+# only at the evidence library's front-matter boundary
+# (app.evidence.loader, Feature 9).
+module = "yaml.*"
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
