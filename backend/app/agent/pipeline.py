@@ -238,7 +238,11 @@ async def process_inbound_message(
                 MessageLogRow(
                     direction="outbound",
                     body=BUDGET_EXHAUSTED_REPLY,
-                    payload={"to": sender, "budget_exhausted": True},
+                    payload={
+                        "to": sender,
+                        "text": BUDGET_EXHAUSTED_REPLY,
+                        "budget_exhausted": True,
+                    },
                     trace_id=trace_id,
                     agent_version=AGENT_VERSION,
                 )
@@ -390,6 +394,15 @@ async def process_inbound_message(
         for part, chunk in enumerate(chunks, start=1):
             payload: dict[str, Any] = {
                 "to": sender,
+                # The sent text, per message: the audit trail must answer
+                # "what did we actually send?" by itself (live debugging
+                # 2026-10-14 had to read the SDK's session store instead,
+                # once racing the turn and showing a stale reply). For a
+                # split reply each chunk carries its own text next to its
+                # part/total, so the whole reply is reconstructible in
+                # order from the payload alone. Audit data only — never
+                # read back into the model or the conversation memory.
+                "text": chunk,
                 "usage": usage,
                 "latency_ms": latency_ms,
                 "part": part,
