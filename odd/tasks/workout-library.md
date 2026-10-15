@@ -31,8 +31,8 @@ The owner keeps three reference sources: two TXT files (cycling sessions in expo
 
 ## Checklist
 
-- [ ] `WLK-1`: RED: parser tests for cycling TXT structure (sessions, blocks, zones, repeats, cadence, RPE variants, notes) against real excerpts.
-- [ ] `WLK-2`: GREEN: implement cycling parser in `backend/app/agent/workout_library.py`.
+- [x] `WLK-1`: RED: parser tests for cycling TXT structure (sessions, blocks, zones, repeats, cadence, RPE variants, notes) against real excerpts.
+- [x] `WLK-2`: GREEN: implement cycling parser in `backend/app/agent/workout_library.py`.
 - [ ] `WLK-3`: RED+GREEN: gym parser tests and implementation (focus sections, sets x reps, RIR, rest, tempo, activation, core holds).
 - [ ] `WLK-4`: Fixture generation script + canonical JSON in `backend/data/exercises/` + round-trip regression test (committed JSON == fresh parse).
 - [ ] `WLK-5`: Loader API returning a typed `WorkoutLibrary` with lookup by id/name, plus module docstring documenting provenance and the later generator seam.
@@ -50,6 +50,8 @@ The owner keeps three reference sources: two TXT files (cycling sessions in expo
 
 ## Progress
 
-Feature doc created; implementation not started.
+**WLK-1/WLK-2 done at `e3f0c93`**: the cycling parser is pure (no I/O), typed and frozen, with absolute 1-based source-line provenance on every node, zone labels stored VERBATIM, `Repetir` markers captured but never expanded, and intent notes as positional `Note` items (their attachment to the preceding or following step is genuinely ambiguous in the source, so it is preserved structurally and deliberately not guessed). **The accounting is the claim that matters**: all 1264 non-blank lines classify, `issues == ()` for the whole corpus, and anything the grammar does not know is BOTH captured verbatim AND surfaced as a `ParseIssue`.
+
+**The grammar was re-measured against THIS file instead of copied**, and it differs from the earlier measurement of the same-named file in another project in five ways: the file is **CRLF**; 33 steps use `mm:ss` durations; there are **six** verbatim intent forms (lowercase `a tope` x12 alongside `A TOPE` x18); **`E1`..`E5` live INSIDE the first `--` region** (only the 24 unlabelled sessions are delimiter-separated, and the file ends with a trailing delimiter); and the session headers have quirks (`E4:SALIDA LIBRE:` with no space, `E5: ` with a trailing space, E2's description on the next line). The structural difference alone would have broken a parser built on the hypothesis. Independently re-measured by the parent: `--`x25, `Repetir`x80, `@ bpm`x329, `@ RPE`x32, `rpm`x49, `Warm up`x27, CR on all 1727 lines, and the seven zone labels with their exact counts (Z1x140, Z2x73, Z3x32, Z4x20, Z5Ax24, Z5Bx24, Z5Cx16) -- every number matching. 17 tests: twelve on real verbatim excerpts, six on synthetic issue cases, and one full-corpus accounting regression.
 
 Owner decisions recorded: parser lives in `backend/app/agent/` (agent reference material, not engine science); PDF excluded from scope (evidence-store material); fixtures are generated artifacts committed to git for reviewability.
