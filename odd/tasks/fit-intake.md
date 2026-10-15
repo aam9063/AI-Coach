@@ -72,3 +72,9 @@ Related, not in scope: the owner's readiness inputs (HRV, resting HR, sleep) wil
 - FI-5 verified against the live API on the owner's real files: (a) the **created** path was exercised with a real 2026-04-17 file — HTTP 201, the activity appeared in Intervals.icu (`i194265861`, then deleted; the account count returned to its previous value) — and (b) the **duplicate** path was exercised with one of the owner's already-uploaded files (`10570929919.fit.gz`), where the CLI reported `duplicate (already present as activity i194268270; nothing archived, no analysis)` with exit 0 and the account total stayed at 869, proving a re-upload is a no-op. The byte-identical-only caveat is printed on every duplicate, which is what makes the risk visible when the same ride arrived from another source.
 
 Commits: Commits: 285cc50 (FI-1/2), 069aa18 (FI-3/4)
+
+## Owner decision (2026-10-15): the field test is discarded for now
+
+The 30-minute hard effort that would make a run threshold derivable is NOT going to happen: the owner has neither the time nor the inclination. The consequence is a legitimate, permanent-for-now state: `app.tools.derive_run_threshold` keeps reporting **`contradictory_data`** on the stored history (easy jogging plus a few implausible records), the engine keeps refusing to fabricate a number, and the agent must keep saying it has no source for the run threshold instead of guessing one.
+
+This is the correct state, not a defect: the derivation refuses rather than inventing, which is exactly the behaviour the project wants. **Do not "fix" it by relaxing the plausibility bands or by seeding a threshold from a formula** -- if the owner ever does the test, re-run the tool and the candidate appears on its own.
