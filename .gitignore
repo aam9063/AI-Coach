@@ -12,4 +12,10 @@ dist/
 .DS_Store
 
 # Local dev data
-backend/data/
+# NOTE the pattern: ignoring the DIRECTORY (`backend/data/`) would make the
+# generated exercise fixtures impossible to re-include, because git cannot
+# re-include a file whose parent directory is excluded. Ignoring its CONTENT
+# keeps local dev data out while the curated fixtures stay committed on
+# purpose (reviewability: see odd/tasks/workout-library.md, WLK-4).
+backend/data/*
+!backend/data/exercises/
