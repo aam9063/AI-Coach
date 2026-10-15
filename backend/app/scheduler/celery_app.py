@@ -71,6 +71,11 @@ BEAT_SCHEDULE: dict[str, dict[str, Any]] = {
 def create_celery_app() -> Celery:
     """Create the tri-coach Celery app wired to Redis, with the beat schedule."""
     settings = get_settings()
+    # Tolerant of extra .env entries, loud about typos (app.core.env_audit):
+    # the worker and beat read the same files the API does.
+    from app.core.env_audit import warn_unknown_env_keys
+
+    warn_unknown_env_keys()
     app = Celery(
         "tri-coach",
         broker=settings.redis_url,
