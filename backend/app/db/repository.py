@@ -21,6 +21,11 @@ WA-6 addition: ``subjective_log`` (idempotent upsert keyed by
 ``(athlete_id, date)`` — the owner's daily subjective report from the
 conversation, the readiness engine's fatigue context signal, §7.4).
 
+WA-6 closing addition: ``threshold_proposal`` (an APPEND-ONLY plain
+insert — one pending threshold proposal per review request; proposals
+are never upserted or mutated, the owner-driven application flow of a
+later feature records the decision elsewhere).
+
 Feature 9 additions: ``evidence_source`` (one curated source per unique
 ``slug`` — papers AND the owner-decision guides, citation string decided
 once at load time) and ``evidence_chunk`` (idempotent upsert keyed by
@@ -47,6 +52,7 @@ from app.db.models import (
     ReadinessSnapshotRow,
     SessionDurabilityRow,
     SubjectiveLogRow,
+    ThresholdProposalRow,
     WeeklyIntensityRow,
     WellnessRow,
 )
@@ -273,6 +279,52 @@ async def append_threshold_history(
             recorded_at=recorded_at,
         )
         .returning(AthleteThresholdHistoryRow)
+    )
+    result = await session.execute(stmt)
+    await session.flush()
+    return result.scalar_one()
+
+
+async def insert_threshold_proposal(
+    session: AsyncSession,
+    *,
+    athlete_id: int = 1,
+    sport: str,
+    metric: str,
+    proposed_value: float,
+    unit: str,
+    evidence: str,
+    engine_version: str,
+    created_at: datetime,
+) -> ThresholdProposalRow:
+    """APPEND one pending threshold proposal to ``threshold_proposal`` (WA-6).
+
+    Plain insert, never an upsert: each proposal is a distinct request
+    for the owner's review (brief §9.3 "pending proposal awaiting
+    athlete confirmation"). Rows are never mutated by this tool — the
+    §7.3 rule is propose, never apply: ``athlete_profile`` and the owner
+    configuration stay untouched, and only the owner-driven application
+    flow (a later feature) would record a decision (in
+    ``athlete_threshold_history``) and move the row's ``status`` off its
+    ``pending`` default. Validated by the caller (the
+    ``propose_threshold_update`` tool rejects an unknown sport, an
+    out-of-range value and a blank evidence before inserting).
+    Flushes without committing.
+    """
+    stmt = (
+        pg_insert(ThresholdProposalRow)
+        .values(
+            athlete_id=athlete_id,
+            sport=sport,
+            metric=metric,
+            proposed_value=proposed_value,
+            unit=unit,
+            evidence=evidence,
+            status="pending",
+            engine_version=engine_version,
+            created_at=created_at,
+        )
+        .returning(ThresholdProposalRow)
     )
     result = await session.execute(stmt)
     await session.flush()

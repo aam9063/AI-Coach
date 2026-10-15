@@ -73,7 +73,7 @@ from app.db.models import (
     SessionDurabilityRow,
     WeeklyIntensityRow,
 )
-from app.db.repository import upsert_subjective_log
+from app.db.repository import insert_threshold_proposal, upsert_subjective_log
 from app.db.session import create_db_engine, make_session_factory
 from app.db.zones_config import parse_swim_boundaries
 from app.engine.load import KNOWN_SPORTS
@@ -360,6 +360,55 @@ _SETTINGS_THRESHOLD_FIELDS: dict[str, tuple[str, str]] = {
     "run_hr": ("athlete_lthr_bpm", "ATHLETE_LTHR_BPM"),
     "swim_pace": ("athlete_css_speed_mps", "ATHLETE_CSS_SPEED_MPS"),
 }
+
+# --- Threshold proposals (propose_threshold_update, WA-6) -------------------
+# The accepted sports are DERIVED, never a new list: a sport is
+# proposal-eligible exactly when the registry already maps it to a zone
+# model (``_SPORT_ZONE_MODELS``, what ``get_zones`` serves) whose
+# threshold has an owner-configuration field the engine reads
+# (``_SETTINGS_THRESHOLD_FIELDS``). Extending those structures makes the
+# new sport proposal-eligible here automatically — the sets cannot drift.
+
+ZONE_MODEL_UNITS: Final[dict[str, str]] = {
+    "bike_power": "watts",
+    "run_hr": "bpm",
+    "swim_pace": "m/s",
+}
+"""The unit each zone model's threshold is measured in (display only)."""
+
+THRESHOLD_VALUE_BOUNDS: Final[dict[str, tuple[float, float]]] = {
+    "bike_power": (50.0, 1000.0),  # watts: a rehab FTP up to a world-class one
+    "run_hr": (100.0, 220.0),  # bpm: the physiological heart-rate range
+    "swim_pace": (0.5, 3.0),  # m/s: recreational up to elite CSS speed
+}
+"""OWNER-REVIEWABLE plausibility bands per zone model (inclusive): a
+proposed threshold OUTSIDE its band is an ARGUMENT error, never stored —
+a 5000 W FTP or a 10 bpm LTHR is a unit mistake, not a fitness jump. A
+value inside the band is accepted as plausible; it is still only a
+PROPOSAL for the owner to judge."""
+
+ZONE_MODEL_PROFILE_COLUMNS: Final[dict[str, str | None]] = {
+    "bike_power": "athlete_profile.ftp_watts",
+    "run_hr": None,  # LTHR is not stored in athlete_profile
+    "swim_pace": "athlete_profile.css_mps",
+}
+"""Where the CURRENT value of record lives per zone model, for the
+"what approval would change and where" text: the ``athlete_profile``
+column (``None`` = the metric is not stored in the profile) plus the
+owner-configuration env var from ``_SETTINGS_THRESHOLD_FIELDS``."""
+
+
+def _accepted_threshold_sports() -> str:
+    """The accepted-sports text, DERIVED from the structures above."""
+    by_model: dict[str, list[str]] = {}
+    for sport_name, model in sorted(_SPORT_ZONE_MODELS.items()):
+        if model in _SETTINGS_THRESHOLD_FIELDS:
+            by_model.setdefault(model, []).append(sport_name)
+    return "; ".join(
+        "/".join(sports)
+        + f" ({_THRESHOLD_LABELS[model]}, {ZONE_MODEL_UNITS[model]})"
+        for model, sports in sorted(by_model.items())
+    )
 
 
 def _insufficient_zones(
@@ -1046,6 +1095,241 @@ async def log_subjective(
 
 
 # ---------------------------------------------------------------------------
+# propose_threshold_update (WA-6 closing, §9.3/§7.3)
+# ---------------------------------------------------------------------------
+
+
+def _threshold_argument_error(
+    settings: Settings, detail: str
+) -> dict[str, Any]:
+    """The shared shape for a rejected proposal: an error naming the
+    accepted values, NEVER a silent write and NEVER ``insufficient_data``
+    (a bad argument is not missing data)."""
+    return {
+        "status": "error",
+        "detail": detail,
+        "engine_version": settings.engine_version,
+        "computed_at": _now(settings).isoformat(),
+    }
+
+
+@tool
+async def propose_threshold_update(
+    sport: str, new_value: float, evidence: str
+) -> dict[str, Any]:
+    """Record the owner's proposal to update one of their thresholds, as a
+    PENDING proposal awaiting the owner's own review — NEVER apply it.
+
+    A threshold change is the OWNER'S decision, never the agent's (§7.3
+    "propose (not apply)"): this tool only validates the request,
+    persists it for review and reports that NOTHING was changed. The
+    APPROVAL/APPLICATION SEAM: applying a threshold is a separate,
+    owner-driven step (a later feature, recorded in
+    ``athlete_threshold_history``) — this tool never touches any active
+    threshold: ``athlete_profile``, the owner configuration (the
+    ``ATHLETE_*`` settings) and all engine outputs stay exactly as they
+    are.
+
+    Accepted sports (derived from what the engine and configuration
+    actually support): ride/bike (FTP, watts), run (LTHR, bpm), swim
+    (CSS, m/s). The proposed value must be POSITIVE and inside the
+    documented plausibility band for its metric (watts 50-1000, bpm
+    100-220, m/s 0.5-3.0, inclusive) — a value outside the band is a
+    unit mistake, not a fitness jump. ``evidence`` is REQUIRED: the
+    effort or observation that motivates the proposal (e.g. "best
+    20-min effort 250 W on 2026-03-01") — a proposal without its
+    justification is not stored.
+
+    Returns on success (status "ok"): ``proposal`` — the persisted
+    pending proposal (id, sport, metric, proposed_value, unit, evidence,
+    status "pending"); ``threshold_change`` with ``applied: false`` and
+    a ``detail`` stating that the proposal is PENDING the owner's review
+    and that NO threshold was changed, plus WHAT the owner's approval
+    would change and WHERE (the athlete_profile column and/or the
+    ``ATHLETE_*`` configuration field the zone engine reads);
+    ``engine_version`` and ``computed_at``.
+
+    An unknown sport, an out-of-range or non-positive value, or a blank
+    evidence returns ``status="error"`` naming the accepted values and
+    the rejected argument — NOTHING is stored (never a silent write,
+    never reported as missing data).
+
+    Args:
+        sport: The sport whose threshold is proposed to change: one of
+            "ride"/"bike" (FTP, watts), "run" (LTHR, bpm), "swim" (CSS,
+            m/s).
+        new_value: The proposed threshold value in the sport's unit
+            (watts for FTP, bpm for LTHR, m/s for CSS); positive and
+            inside the documented plausibility band.
+        evidence: The justification for the proposal: the effort or
+            observation that motivates it, with its date when possible.
+    """
+    settings = _settings()
+    sport_input = sport.strip().lower()
+    model = _SPORT_ZONE_MODELS.get(sport_input)
+    if model is None or model not in _SETTINGS_THRESHOLD_FIELDS:
+        return _threshold_argument_error(
+            settings,
+            f"unknown sport {sport!r}: threshold proposals are accepted for "
+            f"{_accepted_threshold_sports()}. Nothing was stored.",
+        )
+
+    label = _THRESHOLD_LABELS[model]
+    unit = ZONE_MODEL_UNITS[model]
+    low, high = THRESHOLD_VALUE_BOUNDS[model]
+    if not (low <= new_value <= high):
+        return _threshold_argument_error(
+            settings,
+            f"proposed {label} {new_value} {unit} is outside the plausible "
+            f"range for a threshold ({low}-{high} {unit}, inclusive); "
+            "rejected — nothing was stored. Check the unit (watts for FTP, "
+            "bpm for LTHR, m/s for CSS) and propose again.",
+        )
+    if not evidence.strip():
+        return _threshold_argument_error(
+            settings,
+            "blank evidence: a threshold proposal is stored only with its "
+            "justification (the effort or observation that motivates it, "
+            "e.g. 'best 20-min effort 250 W on 2026-03-01'). Nothing was "
+            "stored.",
+        )
+
+    computed_at = _now(settings)
+    async with tool_session() as session:
+        row = await insert_threshold_proposal(
+            session,
+            athlete_id=1,
+            sport=sport_input,
+            metric=model,
+            proposed_value=new_value,
+            unit=unit,
+            evidence=evidence.strip(),
+            engine_version=settings.engine_version,
+            created_at=computed_at,
+        )
+        await session.commit()
+
+    _, settings_env = _SETTINGS_THRESHOLD_FIELDS[model]
+    profile_column = ZONE_MODEL_PROFILE_COLUMNS[model]
+    places: list[str] = []
+    if profile_column is not None:
+        places.append(f"athlete_profile ({profile_column})")
+    places.append(f"the owner configuration ({settings_env})")
+    detail = (
+        f"The proposal is PENDING the owner's review — no threshold was "
+        f"changed. If the owner approves it, the {label} ({unit}) that the "
+        f"{model} zone table is built from would be set to {new_value} in "
+        f"{' and '.join(places)}. Applying it is a separate, owner-driven "
+        "step (a later feature); this tool never changes an active "
+        "threshold."
+    )
+    return {
+        "status": "ok",
+        "proposal": {
+            "id": row.id,
+            "sport": row.sport,
+            "metric": row.metric,
+            "proposed_value": row.proposed_value,
+            "unit": row.unit,
+            "evidence": row.evidence,
+            "status": row.status,
+        },
+        "threshold_change": {"applied": False, "detail": detail},
+        "engine_version": settings.engine_version,
+        "computed_at": computed_at.isoformat(),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Delegated stubs: capabilities that do not exist yet (WA-6, brief §9.3)
+# ---------------------------------------------------------------------------
+# PROJECT_BRIEF §9.3 lets the registry stub-delegate until the features
+# that back these tools land. Registering them with an HONEST error
+# contract keeps the registry the complete set the brief names while
+# making it impossible for the model to get a fabricated prediction or
+# chart: the tool exists, answers, and says exactly what is missing.
+# ``insufficient_data`` would be a LIE here — nothing is missing; the
+# capability simply does not exist yet.
+
+
+@tool
+async def predict_race(
+    race_id: int | None = None,
+    distance: float | None = None,
+    target_date: str | None = None,
+) -> dict[str, Any]:
+    """Race prediction: NOT IMPLEMENTED YET.
+
+    This tool is a deliberate stub: the race-prediction capability
+    arrives with Feature 8 (``race-prediction``, PROJECT_BRIEF §9.3/§12
+    feature list), which will provide per-segment and total predictions
+    with bounds and assumptions, computed by the deterministic engine.
+    Until then this tool ALWAYS returns ``status="error"`` naming the
+    feature that will bring the capability. It NEVER fabricates a
+    prediction (no finish time, no pace, no splits) and NEVER returns
+    ``insufficient_data`` — nothing is missing; the capability does not
+    exist yet. Do not estimate or guess a race result yourself: tell the
+    athlete that race predictions are not available yet.
+
+    Args:
+        race_id: Optional id of a registered target race.
+        distance: Optional race distance in kilometres (used when no
+            race_id is given).
+        target_date: Optional race date (ISO "YYYY-MM-DD").
+    """
+    settings = _settings()
+    return {
+        "status": "error",
+        "detail": (
+            "race prediction is not implemented yet: it arrives with "
+            "Feature 8 (race-prediction, PROJECT_BRIEF §9.3). No prediction "
+            "is fabricated in the meantime — never estimate a race result "
+            "yourself."
+        ),
+        "engine_version": settings.engine_version,
+        "computed_at": _now(settings).isoformat(),
+    }
+
+
+@tool
+async def plot_metric(
+    kind: str, date_range: str = "30d", sport: str | None = None
+) -> dict[str, Any]:
+    """Render a chart of one metric: NOT IMPLEMENTED YET.
+
+    This tool is a deliberate stub: chart rendering arrives with Feature
+    7 (``charts``, PROJECT_BRIEF §9.3/§10), which will render PNGs
+    server-side (1080 px wide, phone-readable) and return a chart id
+    plus a public media URL for WhatsApp. Until then this tool ALWAYS
+    returns ``status="error"`` naming the feature that will bring the
+    capability. It NEVER fabricates a chart (no chart id, no media URL)
+    and NEVER returns ``insufficient_data`` — nothing is missing; the
+    capability does not exist yet. Do not describe or invent a chart:
+    tell the athlete that charts are not available yet, and answer with
+    the numbers from the other tools instead.
+
+    Args:
+        kind: Which chart to render (e.g. "ctl_atl", "intensity").
+        date_range: Trailing window ending today ("7d", "30d") or an
+            explicit inclusive range "YYYY-MM-DD/YYYY-MM-DD".
+        sport: Optional sport filter (an engine sport name such as
+            "ride", "run", "swim"); omit for the all-sports view.
+    """
+    settings = _settings()
+    return {
+        "status": "error",
+        "detail": (
+            "chart rendering is not implemented yet: it arrives with "
+            "Feature 7 (charts, PROJECT_BRIEF §9.3/§10). No chart is "
+            "fabricated in the meantime — describe the metric with its "
+            "numbers from the other tools instead."
+        ),
+        "engine_version": settings.engine_version,
+        "computed_at": _now(settings).isoformat(),
+    }
+
+
+# ---------------------------------------------------------------------------
 # search_evidence (Feature 9, §8/§9.3)
 # ---------------------------------------------------------------------------
 
@@ -1150,10 +1434,13 @@ def tool_list() -> list[Any]:
 
     Only this project's engine-backed tools, in this list, ever. Never
     ``load_tools_from_directory``; never the ``strands-agents-tools``
-    vended tools (shell/file/HTTP). The remaining write tool
-    (``propose_threshold_update``) joins this list with its checklist
-    items — never silently, never from a loader. Feature 9 added
-    ``search_evidence`` (§8/§9.3) and grew the list by exactly one.
+    vended tools (shell/file/HTTP). WA-6 is complete: this is the FULL
+    ten-tool set the brief names (§9.3) — ``propose_threshold_update``
+    persists pending proposals for the owner's review (never applying
+    one), and ``predict_race``/``plot_metric`` are registered stubs that
+    delegate to Features 8 and 7 with an honest not-implemented error
+    contract until those features land. Each tool joined this list with
+    its checklist item — never silently, never from a loader.
     """
     return [
         get_load_status,
@@ -1161,6 +1448,9 @@ def tool_list() -> list[Any]:
         get_readiness,
         get_activity_analysis,
         get_intensity_distribution,
+        predict_race,
+        plot_metric,
         log_subjective,
+        propose_threshold_update,
         search_evidence,
     ]

@@ -546,6 +546,62 @@ class SubjectiveLogRow(Base):
     recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class ThresholdProposalRow(Base):
+    """A PENDING threshold proposal awaiting the owner's review (WA-6).
+
+    §7.3: a threshold change is the athlete's (here: the owner's)
+    decision, never the agent's — the agent PROPOSES, the owner applies.
+    One row per proposal raised from the conversation
+    (``propose_threshold_update`` tool, brief §9.3 "pending proposal
+    awaiting athlete confirmation"): the tool validates the sport and
+    the value, persists the proposal here and returns a result stating
+    that NOTHING was changed — the active thresholds (``athlete_profile``,
+    the owner configuration the engine reads) are never touched by the
+    proposal itself.
+
+    APPEND-ONLY: each proposal is a distinct request for review, so rows
+    are inserted and never upserted or mutated (the same audit
+    convention as :class:`AthleteThresholdHistoryRow`, which records the
+    owner's eventual DECISION). The ``status`` column exists for that
+    later confirmation flow: it starts ``"pending"`` (a server-side
+    DEFAULT, so even a non-ORM writer cannot forget it) and only the
+    owner-driven application step (a later feature) would move it.
+
+    Like :class:`SubjectiveLogRow`, this is agent-channel data, not an
+    engine output: it carries no computed metric — the
+    ``engine_version`` column records the engine version the proposing
+    turn ran under (§6 provenance of the conversation), and
+    ``created_at`` stamps the proposal.
+
+    Columns mirror the tool contract: ``sport`` (the normalized sport
+    name the owner used), ``metric`` (the engine zone-model key the
+    proposal targets, e.g. ``bike_power``), ``proposed_value`` (in the
+    metric's ``unit``), ``evidence`` (the justification text the agent
+    attached) and ``status``.
+    """
+
+    __tablename__ = "threshold_proposal"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # Same local single-athlete integer as wellness/daily_load (default 1).
+    athlete_id: Mapped[int] = mapped_column(Integer, default=1)
+    # Normalized sport name ("ride"/"run"/"swim"...) as proposed.
+    sport: Mapped[str] = mapped_column(String(32))
+    # The engine zone-model key the proposal targets (bike_power/run_hr/
+    # swim_pace) — the same vocabulary as the zone tools.
+    metric: Mapped[str] = mapped_column(String(32))
+    proposed_value: Mapped[float] = mapped_column(Float)
+    unit: Mapped[str] = mapped_column(String(16))
+    # The §7.3 justification: what effort/state motivates the proposal.
+    evidence: Mapped[str] = mapped_column(Text)
+    # "pending" until the owner-driven application flow (a later feature)
+    # records the decision in athlete_threshold_history.
+    status: Mapped[str] = mapped_column(String(16), default="pending")
+    # The engine version the proposing turn ran under (§6 provenance).
+    engine_version: Mapped[str] = mapped_column(String(32))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
 def _utcnow() -> datetime:
     """Timezone-aware UTC now (message_log.created_at default)."""
     return datetime.now(UTC)

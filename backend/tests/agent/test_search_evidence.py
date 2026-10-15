@@ -229,14 +229,16 @@ class TestSearchEvidenceArgumentErrors:
         assert result["status"] == "error"
 
 
-class TestToolListGrowsByExactlyOne:
+class TestToolListGrewByExactlyOne:
     def test_tool_list_contains_search_evidence(self) -> None:
         names = {
             t.__name__ if hasattr(t, "__name__") else t.tool_spec["name"]
             for t in tools.tool_list()
         }
         assert "search_evidence" in names
-        assert len(tools.tool_list()) == 7
+        # WA-6 complete: the registry is the full ten-tool set the brief
+        # names (§9.3); Feature 9's contribution stays exactly one tool.
+        assert len(tools.tool_list()) == 10
 
     def test_tool_list_stays_explicit_no_vended_tools(self) -> None:
         for listed in tools.tool_list():
