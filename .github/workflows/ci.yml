@@ -15,7 +15,10 @@ jobs:
       # the engine tools, log_subjective and the conversation memory never ran:
       # ~140 tests were silently skipped on every run.
       postgres:
-        image: postgres:16
+        # pgvector image: the evidence store needs `create extension vector`,
+        # which the vanilla postgres:16 image cannot provide (EV-4). Same
+        # image as infra/docker-compose.yml.
+        image: pgvector/pgvector:pg16
         env:
           POSTGRES_USER: tri_coach
           POSTGRES_PASSWORD: tri_coach
