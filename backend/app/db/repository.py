@@ -20,12 +20,24 @@ brief §6/§7.3).
 WA-6 addition: ``subjective_log`` (idempotent upsert keyed by
 ``(athlete_id, date)`` — the owner's daily subjective report from the
 conversation, the readiness engine's fatigue context signal, §7.4).
+
+WA-6 closing addition: ``threshold_proposal`` (an APPEND-ONLY plain
+insert — one pending threshold proposal per review request; proposals
+are never upserted or mutated, the owner-driven application flow of a
+later feature records the decision elsewhere).
+
+Feature 9 additions: ``evidence_source`` (one curated source per unique
+``slug`` — papers AND the owner-decision guides, citation string decided
+once at load time) and ``evidence_chunk`` (idempotent upsert keyed by
+``(source_id, chunk_index)``, pgvector embedding + citation string).
 """
 
 from collections.abc import Mapping, Sequence
 from datetime import UTC, date, datetime
-from typing import Any
+from typing import Any, cast
 
+from sqlalchemy import CursorResult
+from sqlalchemy import delete as sa_delete
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -35,9 +47,12 @@ from app.db.models import (
     AthleteProfileRow,
     AthleteThresholdHistoryRow,
     DailyLoadRow,
+    EvidenceChunkRow,
+    EvidenceSourceRow,
     ReadinessSnapshotRow,
     SessionDurabilityRow,
     SubjectiveLogRow,
+    ThresholdProposalRow,
     WeeklyIntensityRow,
     WellnessRow,
 )
@@ -264,6 +279,52 @@ async def append_threshold_history(
             recorded_at=recorded_at,
         )
         .returning(AthleteThresholdHistoryRow)
+    )
+    result = await session.execute(stmt)
+    await session.flush()
+    return result.scalar_one()
+
+
+async def insert_threshold_proposal(
+    session: AsyncSession,
+    *,
+    athlete_id: int = 1,
+    sport: str,
+    metric: str,
+    proposed_value: float,
+    unit: str,
+    evidence: str,
+    engine_version: str,
+    created_at: datetime,
+) -> ThresholdProposalRow:
+    """APPEND one pending threshold proposal to ``threshold_proposal`` (WA-6).
+
+    Plain insert, never an upsert: each proposal is a distinct request
+    for the owner's review (brief §9.3 "pending proposal awaiting
+    athlete confirmation"). Rows are never mutated by this tool — the
+    §7.3 rule is propose, never apply: ``athlete_profile`` and the owner
+    configuration stay untouched, and only the owner-driven application
+    flow (a later feature) would record a decision (in
+    ``athlete_threshold_history``) and move the row's ``status`` off its
+    ``pending`` default. Validated by the caller (the
+    ``propose_threshold_update`` tool rejects an unknown sport, an
+    out-of-range value and a blank evidence before inserting).
+    Flushes without committing.
+    """
+    stmt = (
+        pg_insert(ThresholdProposalRow)
+        .values(
+            athlete_id=athlete_id,
+            sport=sport,
+            metric=metric,
+            proposed_value=proposed_value,
+            unit=unit,
+            evidence=evidence,
+            status="pending",
+            engine_version=engine_version,
+            created_at=created_at,
+        )
+        .returning(ThresholdProposalRow)
     )
     result = await session.execute(stmt)
     await session.flush()
@@ -558,3 +619,120 @@ async def upsert_subjective_log(
     result = await session.execute(stmt)
     await session.flush()
     return result.scalar_one()
+
+
+async def upsert_evidence_source(
+    session: AsyncSession,
+    *,
+    kind: str,
+    slug: str,
+    title: str,
+    authors: Sequence[str],
+    year: int,
+    journal: str | None,
+    doi: str | None,
+    citation: str,
+) -> EvidenceSourceRow:
+    """Insert or update one curated evidence source keyed by its slug.
+
+    Feature 9 (brief §6/§8). Idempotent per ``uq_evidence_source_slug``:
+    re-ingesting an updated file updates the row, never duplicates it.
+    ``kind`` is the loader's closed vocabulary ("paper" | "guide"); the
+    citation string is decided ONCE at load time — papers as
+    ``(Author, Year)`` (§8, DOI on request), guides as
+    ``(Author, Year, training guide)`` so a training document can never
+    be cited as a study (owner decision). ``journal``/``doi`` are
+    structurally absent for guides (stored NULL). Flushes without
+    committing.
+    """
+    values: dict[str, Any] = {
+        "kind": kind,
+        "slug": slug,
+        "title": title,
+        "authors": list(authors),
+        "year": year,
+        "journal": journal,
+        "doi": doi,
+        "citation": citation,
+    }
+    stmt = (
+        pg_insert(EvidenceSourceRow)
+        .values(**values)
+        .on_conflict_do_update(
+            index_elements=[EvidenceSourceRow.slug],
+            set_=values,
+        )
+        .returning(EvidenceSourceRow)
+    )
+    result = await session.execute(stmt)
+    await session.flush()
+    return result.scalar_one()
+
+
+async def upsert_evidence_chunk(
+    session: AsyncSession,
+    *,
+    source_id: int,
+    chunk_index: int,
+    text: str,
+    embedding: Sequence[float],
+    citation: str,
+) -> EvidenceChunkRow:
+    """Insert or update one embedded chunk keyed by (source_id, chunk_index).
+
+    Feature 9 (brief §6 data model: "``evidence_chunk``: paper id, chunk
+    text, embedding, citation string"). Idempotent per
+    ``uq_evidence_chunk_source_index``: a re-ingest updates each chunk in
+    place. The citation string is copied from the source row so retrieval
+    can cite without a join. The embedding is source CONTENT only (§14).
+    Flushes without committing.
+    """
+    values: dict[str, Any] = {
+        "source_id": source_id,
+        "chunk_index": chunk_index,
+        "text": text,
+        "embedding": list(embedding),
+        "citation": citation,
+    }
+    stmt = (
+        pg_insert(EvidenceChunkRow)
+        .values(**values)
+        .on_conflict_do_update(
+            index_elements=[
+                EvidenceChunkRow.source_id,
+                EvidenceChunkRow.chunk_index,
+            ],
+            set_=values,
+        )
+        .returning(EvidenceChunkRow)
+    )
+    result = await session.execute(stmt)
+    await session.flush()
+    return result.scalar_one()
+
+
+async def delete_stale_evidence_chunks(
+    session: AsyncSession,
+    *,
+    source_id: int,
+    from_index: int,
+) -> int:
+    """Delete the chunks of one source from ``from_index`` upwards.
+
+    Feature 9. After a re-ingest that produces FEWER chunks than before,
+    the orphaned high indexes are derived data whose source text no longer
+    exists — they must not survive (a stale chunk would keep being
+    retrieved with a citation to content the file no longer carries).
+    Returns the number of rows deleted; flushes without committing.
+    """
+    result = cast(
+        CursorResult[Any],
+        await session.execute(
+            sa_delete(EvidenceChunkRow).where(
+                EvidenceChunkRow.source_id == source_id,
+                EvidenceChunkRow.chunk_index >= from_index,
+            )
+        ),
+    )
+    await session.flush()
+    return int(result.rowcount or 0)

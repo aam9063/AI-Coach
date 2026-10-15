@@ -56,7 +56,7 @@ import re
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from datetime import UTC, date, datetime, timedelta
-from typing import Any
+from typing import Any, Final
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
@@ -73,13 +73,27 @@ from app.db.models import (
     SessionDurabilityRow,
     WeeklyIntensityRow,
 )
-from app.db.repository import upsert_subjective_log
+from app.db.repository import insert_threshold_proposal, upsert_subjective_log
 from app.db.session import create_db_engine, make_session_factory
 from app.db.zones_config import parse_swim_boundaries
+from app.engine.load import KNOWN_SPORTS
 from app.engine.zones import hr_zones, power_zones, swim_zones
+from app.evidence.embeddings import create_embedding
+from app.evidence.retrieval import retrieve_chunks
 from app.services.readiness import recompute_readiness
 
 SessionFactory = async_sessionmaker[AsyncSession]
+
+# The engine's closed sport vocabulary (app/engine/load.py) is the SINGLE
+# source of truth for what a "sport" is: the tool registry re-exports it
+# (identity, not a copy) so a new engine sport family is accepted here
+# automatically and the two can never drift. It is imported as-is rather
+# than duplicated or re-declared: adding a public alias in the engine
+# module would be an engine-surface change outside this task's scope.
+ENGINE_KNOWN_SPORTS: Final[frozenset[str]] = KNOWN_SPORTS
+"""Sports the engine recognises (matched lower-case): cycling, running,
+swimming, walking and strength activity types. An unknown sport is an
+ARGUMENT error, never missing data (see :func:`_unknown_sport_error`)."""
 
 # --- Injectable seams (production defaults derive from configuration) ------
 
@@ -141,6 +155,28 @@ async def tool_session() -> AsyncIterator[AsyncSession]:
 
 def _now(settings: Settings) -> datetime:
     return datetime.now(UTC)
+
+
+def _unknown_sport_error(settings: Settings, sport: str) -> dict[str, Any]:
+    """The result for a sport the ENGINE does not know (registry-wide
+    contract): ``status="error"`` naming the accepted values.
+
+    An unknown sport is an ARGUMENT error, not missing data (§9.3):
+    reporting it as ``insufficient_data`` sends the owner to connect a
+    device when the real problem is the sport name itself — the observed
+    live failure this helper prevents. The accepted set is the engine's
+    own vocabulary (:data:`ENGINE_KNOWN_SPORTS`), never a local list.
+    """
+    return {
+        "status": "error",
+        "detail": (
+            f"unknown sport {sport!r}: expected one of "
+            f"{sorted(ENGINE_KNOWN_SPORTS)}. Use an engine sport name, or "
+            "omit the sport for the all-sports view."
+        ),
+        "engine_version": settings.engine_version,
+        "computed_at": _now(settings).isoformat(),
+    }
 
 
 def _today_local(settings: Settings) -> date:
@@ -212,12 +248,16 @@ async def get_load_status(date_range: str = "7d", sport: str | None = None) -> d
     If there are no engine rows in the window, returns
     ``status="insufficient_data"`` with a ``detail`` naming what is missing
     (synced activities) and how to get it — never a zero. An unparseable
-    ``date_range`` returns ``status="error"`` with the accepted formats.
+    ``date_range`` returns ``status="error"`` with the accepted formats. An
+    unknown ``sport`` (not in the engine's known sport vocabulary) returns
+    ``status="error"`` naming the accepted values — it is an argument
+    error, NEVER reported as missing data.
 
     Args:
         date_range: Trailing window ending today ("7d", "30d") or an
             explicit inclusive range "YYYY-MM-DD/YYYY-MM-DD".
-        sport: Optional sport filter ("ride", "run", "swim"); omit for the
+        sport: Optional sport filter (an engine sport name such as "ride",
+            "run", "swim", "walk", "weighttraining"); omit for the
             combined all-sports series.
     """
     settings = _settings()
@@ -230,7 +270,10 @@ async def get_load_status(date_range: str = "7d", sport: str | None = None) -> d
             "computed_at": _now(settings).isoformat(),
         }
     window_start, window_end = window
-    sport_key = (sport or "combined").strip().lower()
+    sport_input = (sport or "").strip().lower()
+    if sport_input and sport_input not in ENGINE_KNOWN_SPORTS:
+        return _unknown_sport_error(settings, sport or sport_input)
+    sport_key = sport_input or "combined"
 
     async with tool_session() as session:
         rows = (
@@ -317,6 +360,55 @@ _SETTINGS_THRESHOLD_FIELDS: dict[str, tuple[str, str]] = {
     "run_hr": ("athlete_lthr_bpm", "ATHLETE_LTHR_BPM"),
     "swim_pace": ("athlete_css_speed_mps", "ATHLETE_CSS_SPEED_MPS"),
 }
+
+# --- Threshold proposals (propose_threshold_update, WA-6) -------------------
+# The accepted sports are DERIVED, never a new list: a sport is
+# proposal-eligible exactly when the registry already maps it to a zone
+# model (``_SPORT_ZONE_MODELS``, what ``get_zones`` serves) whose
+# threshold has an owner-configuration field the engine reads
+# (``_SETTINGS_THRESHOLD_FIELDS``). Extending those structures makes the
+# new sport proposal-eligible here automatically — the sets cannot drift.
+
+ZONE_MODEL_UNITS: Final[dict[str, str]] = {
+    "bike_power": "watts",
+    "run_hr": "bpm",
+    "swim_pace": "m/s",
+}
+"""The unit each zone model's threshold is measured in (display only)."""
+
+THRESHOLD_VALUE_BOUNDS: Final[dict[str, tuple[float, float]]] = {
+    "bike_power": (50.0, 1000.0),  # watts: a rehab FTP up to a world-class one
+    "run_hr": (100.0, 220.0),  # bpm: the physiological heart-rate range
+    "swim_pace": (0.5, 3.0),  # m/s: recreational up to elite CSS speed
+}
+"""OWNER-REVIEWABLE plausibility bands per zone model (inclusive): a
+proposed threshold OUTSIDE its band is an ARGUMENT error, never stored —
+a 5000 W FTP or a 10 bpm LTHR is a unit mistake, not a fitness jump. A
+value inside the band is accepted as plausible; it is still only a
+PROPOSAL for the owner to judge."""
+
+ZONE_MODEL_PROFILE_COLUMNS: Final[dict[str, str | None]] = {
+    "bike_power": "athlete_profile.ftp_watts",
+    "run_hr": None,  # LTHR is not stored in athlete_profile
+    "swim_pace": "athlete_profile.css_mps",
+}
+"""Where the CURRENT value of record lives per zone model, for the
+"what approval would change and where" text: the ``athlete_profile``
+column (``None`` = the metric is not stored in the profile) plus the
+owner-configuration env var from ``_SETTINGS_THRESHOLD_FIELDS``."""
+
+
+def _accepted_threshold_sports() -> str:
+    """The accepted-sports text, DERIVED from the structures above."""
+    by_model: dict[str, list[str]] = {}
+    for sport_name, model in sorted(_SPORT_ZONE_MODELS.items()):
+        if model in _SETTINGS_THRESHOLD_FIELDS:
+            by_model.setdefault(model, []).append(sport_name)
+    return "; ".join(
+        "/".join(sports)
+        + f" ({_THRESHOLD_LABELS[model]}, {ZONE_MODEL_UNITS[model]})"
+        for model, sports in sorted(by_model.items())
+    )
 
 
 def _insufficient_zones(
@@ -709,13 +801,16 @@ async def get_intensity_distribution(weeks: int = 4, sport: str | None = None) -
     If no week in the window has intensity data, returns
     ``status="insufficient_data"`` with a ``detail`` naming what is missing
     (per-second streams) and how to get it — never fabricated percentages.
-    A non-positive ``weeks`` returns ``status="error"``.
+    A non-positive ``weeks`` returns ``status="error"``. An unknown
+    ``sport`` (not in the engine's known sport vocabulary) returns
+    ``status="error"`` naming the accepted values — an argument error,
+    never missing data.
 
     Args:
         weeks: How many ISO weeks to report, ending with the current week
             (1-52).
-        sport: Optional sport filter ("ride"/"bike", "run", "swim"); omit
-            for all sports.
+        sport: Optional sport filter (an engine sport name such as "ride",
+            "run", "swim"); omit for all sports.
     """
     settings = _settings()
     if weeks <= 0 or weeks > 52:
@@ -725,6 +820,9 @@ async def get_intensity_distribution(weeks: int = 4, sport: str | None = None) -
             "engine_version": settings.engine_version,
             "computed_at": _now(settings).isoformat(),
         }
+    sport_input = (sport or "").strip().lower()
+    if sport_input and sport_input not in ENGINE_KNOWN_SPORTS:
+        return _unknown_sport_error(settings, sport or sport_input)
 
     today = _today_local(settings)
     iso_year, iso_week, _ = today.isocalendar()
@@ -738,7 +836,7 @@ async def get_intensity_distribution(weeks: int = 4, sport: str | None = None) -
             week = date(year, 12, 28).isocalendar()[1]
     window.reverse()
 
-    sport_key = (sport or "").strip().lower() or None
+    sport_key = sport_input or None
     async with tool_session() as session:
         rows = (
             (
@@ -996,15 +1094,353 @@ async def log_subjective(
     }
 
 
+# ---------------------------------------------------------------------------
+# propose_threshold_update (WA-6 closing, §9.3/§7.3)
+# ---------------------------------------------------------------------------
+
+
+def _threshold_argument_error(
+    settings: Settings, detail: str
+) -> dict[str, Any]:
+    """The shared shape for a rejected proposal: an error naming the
+    accepted values, NEVER a silent write and NEVER ``insufficient_data``
+    (a bad argument is not missing data)."""
+    return {
+        "status": "error",
+        "detail": detail,
+        "engine_version": settings.engine_version,
+        "computed_at": _now(settings).isoformat(),
+    }
+
+
+@tool
+async def propose_threshold_update(
+    sport: str, new_value: float, evidence: str
+) -> dict[str, Any]:
+    """Record the owner's proposal to update one of their thresholds, as a
+    PENDING proposal awaiting the owner's own review — NEVER apply it.
+
+    A threshold change is the OWNER'S decision, never the agent's (§7.3
+    "propose (not apply)"): this tool only validates the request,
+    persists it for review and reports that NOTHING was changed. The
+    APPROVAL/APPLICATION SEAM: applying a threshold is a separate,
+    owner-driven step (a later feature, recorded in
+    ``athlete_threshold_history``) — this tool never touches any active
+    threshold: ``athlete_profile``, the owner configuration (the
+    ``ATHLETE_*`` settings) and all engine outputs stay exactly as they
+    are.
+
+    Accepted sports (derived from what the engine and configuration
+    actually support): ride/bike (FTP, watts), run (LTHR, bpm), swim
+    (CSS, m/s). The proposed value must be POSITIVE and inside the
+    documented plausibility band for its metric (watts 50-1000, bpm
+    100-220, m/s 0.5-3.0, inclusive) — a value outside the band is a
+    unit mistake, not a fitness jump. ``evidence`` is REQUIRED: the
+    effort or observation that motivates the proposal (e.g. "best
+    20-min effort 250 W on 2026-03-01") — a proposal without its
+    justification is not stored.
+
+    Returns on success (status "ok"): ``proposal`` — the persisted
+    pending proposal (id, sport, metric, proposed_value, unit, evidence,
+    status "pending"); ``threshold_change`` with ``applied: false`` and
+    a ``detail`` stating that the proposal is PENDING the owner's review
+    and that NO threshold was changed, plus WHAT the owner's approval
+    would change and WHERE (the athlete_profile column and/or the
+    ``ATHLETE_*`` configuration field the zone engine reads);
+    ``engine_version`` and ``computed_at``.
+
+    An unknown sport, an out-of-range or non-positive value, or a blank
+    evidence returns ``status="error"`` naming the accepted values and
+    the rejected argument — NOTHING is stored (never a silent write,
+    never reported as missing data).
+
+    Args:
+        sport: The sport whose threshold is proposed to change: one of
+            "ride"/"bike" (FTP, watts), "run" (LTHR, bpm), "swim" (CSS,
+            m/s).
+        new_value: The proposed threshold value in the sport's unit
+            (watts for FTP, bpm for LTHR, m/s for CSS); positive and
+            inside the documented plausibility band.
+        evidence: The justification for the proposal: the effort or
+            observation that motivates it, with its date when possible.
+    """
+    settings = _settings()
+    sport_input = sport.strip().lower()
+    model = _SPORT_ZONE_MODELS.get(sport_input)
+    if model is None or model not in _SETTINGS_THRESHOLD_FIELDS:
+        return _threshold_argument_error(
+            settings,
+            f"unknown sport {sport!r}: threshold proposals are accepted for "
+            f"{_accepted_threshold_sports()}. Nothing was stored.",
+        )
+
+    label = _THRESHOLD_LABELS[model]
+    unit = ZONE_MODEL_UNITS[model]
+    low, high = THRESHOLD_VALUE_BOUNDS[model]
+    if not (low <= new_value <= high):
+        return _threshold_argument_error(
+            settings,
+            f"proposed {label} {new_value} {unit} is outside the plausible "
+            f"range for a threshold ({low}-{high} {unit}, inclusive); "
+            "rejected — nothing was stored. Check the unit (watts for FTP, "
+            "bpm for LTHR, m/s for CSS) and propose again.",
+        )
+    if not evidence.strip():
+        return _threshold_argument_error(
+            settings,
+            "blank evidence: a threshold proposal is stored only with its "
+            "justification (the effort or observation that motivates it, "
+            "e.g. 'best 20-min effort 250 W on 2026-03-01'). Nothing was "
+            "stored.",
+        )
+
+    computed_at = _now(settings)
+    async with tool_session() as session:
+        row = await insert_threshold_proposal(
+            session,
+            athlete_id=1,
+            sport=sport_input,
+            metric=model,
+            proposed_value=new_value,
+            unit=unit,
+            evidence=evidence.strip(),
+            engine_version=settings.engine_version,
+            created_at=computed_at,
+        )
+        await session.commit()
+
+    _, settings_env = _SETTINGS_THRESHOLD_FIELDS[model]
+    profile_column = ZONE_MODEL_PROFILE_COLUMNS[model]
+    places: list[str] = []
+    if profile_column is not None:
+        places.append(f"athlete_profile ({profile_column})")
+    places.append(f"the owner configuration ({settings_env})")
+    detail = (
+        f"The proposal is PENDING the owner's review — no threshold was "
+        f"changed. If the owner approves it, the {label} ({unit}) that the "
+        f"{model} zone table is built from would be set to {new_value} in "
+        f"{' and '.join(places)}. Applying it is a separate, owner-driven "
+        "step (a later feature); this tool never changes an active "
+        "threshold."
+    )
+    return {
+        "status": "ok",
+        "proposal": {
+            "id": row.id,
+            "sport": row.sport,
+            "metric": row.metric,
+            "proposed_value": row.proposed_value,
+            "unit": row.unit,
+            "evidence": row.evidence,
+            "status": row.status,
+        },
+        "threshold_change": {"applied": False, "detail": detail},
+        "engine_version": settings.engine_version,
+        "computed_at": computed_at.isoformat(),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Delegated stubs: capabilities that do not exist yet (WA-6, brief §9.3)
+# ---------------------------------------------------------------------------
+# PROJECT_BRIEF §9.3 lets the registry stub-delegate until the features
+# that back these tools land. Registering them with an HONEST error
+# contract keeps the registry the complete set the brief names while
+# making it impossible for the model to get a fabricated prediction or
+# chart: the tool exists, answers, and says exactly what is missing.
+# ``insufficient_data`` would be a LIE here — nothing is missing; the
+# capability simply does not exist yet.
+
+
+@tool
+async def predict_race(
+    race_id: int | None = None,
+    distance: float | None = None,
+    target_date: str | None = None,
+) -> dict[str, Any]:
+    """Race prediction: NOT IMPLEMENTED YET.
+
+    This tool is a deliberate stub: the race-prediction capability
+    arrives with Feature 8 (``race-prediction``, PROJECT_BRIEF §9.3/§12
+    feature list), which will provide per-segment and total predictions
+    with bounds and assumptions, computed by the deterministic engine.
+    Until then this tool ALWAYS returns ``status="error"`` naming the
+    feature that will bring the capability. It NEVER fabricates a
+    prediction (no finish time, no pace, no splits) and NEVER returns
+    ``insufficient_data`` — nothing is missing; the capability does not
+    exist yet. Do not estimate or guess a race result yourself: tell the
+    athlete that race predictions are not available yet.
+
+    Args:
+        race_id: Optional id of a registered target race.
+        distance: Optional race distance in kilometres (used when no
+            race_id is given).
+        target_date: Optional race date (ISO "YYYY-MM-DD").
+    """
+    settings = _settings()
+    return {
+        "status": "error",
+        "detail": (
+            "race prediction is not implemented yet: it arrives with "
+            "Feature 8 (race-prediction, PROJECT_BRIEF §9.3). No prediction "
+            "is fabricated in the meantime — never estimate a race result "
+            "yourself."
+        ),
+        "engine_version": settings.engine_version,
+        "computed_at": _now(settings).isoformat(),
+    }
+
+
+@tool
+async def plot_metric(
+    kind: str, date_range: str = "30d", sport: str | None = None
+) -> dict[str, Any]:
+    """Render a chart of one metric: NOT IMPLEMENTED YET.
+
+    This tool is a deliberate stub: chart rendering arrives with Feature
+    7 (``charts``, PROJECT_BRIEF §9.3/§10), which will render PNGs
+    server-side (1080 px wide, phone-readable) and return a chart id
+    plus a public media URL for WhatsApp. Until then this tool ALWAYS
+    returns ``status="error"`` naming the feature that will bring the
+    capability. It NEVER fabricates a chart (no chart id, no media URL)
+    and NEVER returns ``insufficient_data`` — nothing is missing; the
+    capability does not exist yet. Do not describe or invent a chart:
+    tell the athlete that charts are not available yet, and answer with
+    the numbers from the other tools instead.
+
+    Args:
+        kind: Which chart to render (e.g. "ctl_atl", "intensity").
+        date_range: Trailing window ending today ("7d", "30d") or an
+            explicit inclusive range "YYYY-MM-DD/YYYY-MM-DD".
+        sport: Optional sport filter (an engine sport name such as
+            "ride", "run", "swim"); omit for the all-sports view.
+    """
+    settings = _settings()
+    return {
+        "status": "error",
+        "detail": (
+            "chart rendering is not implemented yet: it arrives with "
+            "Feature 7 (charts, PROJECT_BRIEF §9.3/§10). No chart is "
+            "fabricated in the meantime — describe the metric with its "
+            "numbers from the other tools instead."
+        ),
+        "engine_version": settings.engine_version,
+        "computed_at": _now(settings).isoformat(),
+    }
+
+
+# ---------------------------------------------------------------------------
+# search_evidence (Feature 9, §8/§9.3)
+# ---------------------------------------------------------------------------
+
+_K_RANGE_HELP = "k must be between 1 and 10."
+
+
+@tool
+async def search_evidence(query: str, k: int = 4) -> dict[str, Any]:
+    """Search the evidence store for curated sources backing a claim.
+
+    Returns the most similar chunks of the owner-curated library
+    (``evidence/papers/`` for studies, ``evidence/guides/`` for training
+    documents), each with its ``text``, the stored ``citation`` string
+    and its ``kind``. These fields are INTERNAL grounding data: NEVER
+    print bibliographic references, citation strings or source
+    identifiers in your reply — read the returned text and use
+    it to answer.
+
+    A returned chunk counts as a source ONLY IF its content actually
+    supports the claim: the ``similarity`` score is a hint, never a
+    verdict of relevance — check the chunk text before relying on it. If
+    no returned chunk supports the claim, you have no source: say so
+    instead of relying on it.
+
+    Results are PER-TURN and NEVER cached: the library GROWS as the
+    owner ingests sources, so what this tool returned — or what you
+    answered — earlier in the conversation says nothing about what the
+    store holds NOW. For each new question that needs a source, call
+    this tool again instead of reusing an older answer or an older
+    search result.
+
+    The store may LEGITIMATELY be empty today (the owner curates its
+    files by hand and may not have ingested any yet), or it may hold
+    sources that simply do not cover this question. When the result is
+    ``status="insufficient_data"`` — empty store or nothing similar
+    enough for THIS question — you have NO SOURCE in the store for this
+    claim: say so explicitly in your reply instead of improvising or
+    answering from memory.
+
+    Returns on success (status "ok"): ``results`` — up to ``k`` chunks,
+    each with ``text``, the stored ``citation`` string (internal data,
+    never printed), ``kind`` ("paper" or "guide"),
+    ``source_slug``, ``chunk_index`` and ``similarity`` (cosine, most
+    similar first); ``coverage`` (``k_requested`` vs
+    ``chunks_returned`` and the ``min_similarity`` floor);
+    ``engine_version`` and ``computed_at``. An empty store or no chunk
+    above the similarity floor returns ``status="insufficient_data"``
+    with a ``detail`` saying what it means and what you must tell the
+    athlete. A blank query or an out-of-range ``k`` returns
+    ``status="error"``.
+
+    Args:
+        query: The owner's CURRENT question or the claim to check,
+            paraphrased if needed — the question being answered in this
+            turn, NEVER a topic carried over from an earlier turn.
+        k: Maximum number of chunks to return, 1-10 (default 4).
+    """
+    settings = _settings()
+    if not query.strip():
+        return {
+            "status": "error",
+            "detail": "query must be non-empty text describing the claim "
+            "to find evidence for.",
+            "engine_version": settings.engine_version,
+            "computed_at": _now(settings).isoformat(),
+        }
+    if k < 1 or k > 10:
+        return {
+            "status": "error",
+            "detail": _K_RANGE_HELP,
+            "engine_version": settings.engine_version,
+            "computed_at": _now(settings).isoformat(),
+        }
+
+    # §6 adapter principle: ONE embedding adapter per configuration; in
+    # tests this is the deterministic fake (offline, §14).
+    adapter = create_embedding(settings)
+    query_embedding = adapter.embed([query])[0]
+    async with tool_session() as session:
+        retrieval = await retrieve_chunks(session, query_embedding, k=k)
+
+    if retrieval.status == "ok":
+        return {
+            "status": "ok",
+            "results": [chunk.model_dump() for chunk in retrieval.results],
+            "coverage": retrieval.coverage,
+            "engine_version": settings.engine_version,
+            "computed_at": _now(settings).isoformat(),
+        }
+    return {
+        "status": "insufficient_data",
+        "detail": retrieval.detail,
+        "results": [],
+        "coverage": retrieval.coverage,
+        "engine_version": settings.engine_version,
+        "computed_at": _now(settings).isoformat(),
+    }
+
+
 def tool_list() -> list[Any]:
     """The EXPLICIT tool list handed to the agent.
 
     Only this project's engine-backed tools, in this list, ever. Never
     ``load_tools_from_directory``; never the ``strands-agents-tools``
-    vended tools (shell/file/HTTP). The remaining write tool
-    (``propose_threshold_update``) and the feature-delegating tools
-    (``predict_race``, ``plot_metric``, ``search_evidence``) join this
-    list with their checklist items — never silently, never from a loader.
+    vended tools (shell/file/HTTP). WA-6 is complete: this is the FULL
+    ten-tool set the brief names (§9.3) — ``propose_threshold_update``
+    persists pending proposals for the owner's review (never applying
+    one), and ``predict_race``/``plot_metric`` are registered stubs that
+    delegate to Features 8 and 7 with an honest not-implemented error
+    contract until those features land. Each tool joined this list with
+    its checklist item — never silently, never from a loader.
     """
     return [
         get_load_status,
@@ -1012,5 +1448,9 @@ def tool_list() -> list[Any]:
         get_readiness,
         get_activity_analysis,
         get_intensity_distribution,
+        predict_race,
+        plot_metric,
         log_subjective,
+        propose_threshold_update,
+        search_evidence,
     ]

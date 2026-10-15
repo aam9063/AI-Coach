@@ -32,6 +32,8 @@ import sys
 from collections.abc import Sequence
 from typing import Any
 
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
 from app.core.settings import Settings, get_settings
 from app.db.session import create_db_engine, make_session_factory
 from app.engine.load import ThresholdBundle, TrimpCoefficients
@@ -42,6 +44,7 @@ __all__ = [
     "engine_constants_from_settings",
     "format_report",
     "main",
+    "run_recompute",
     "thresholds_from_settings",
     "trimp_coefficients_from_settings",
 ]
@@ -199,6 +202,57 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+async def run_recompute(
+    settings: Settings,
+    *,
+    days: int,
+    athlete_id: int,
+    window_end: dt.date,
+    session_factory: async_sessionmaker[AsyncSession] | None = None,
+) -> DailyLoadReport:
+    """Run one recompute-and-persist cycle from the sourced settings.
+
+    Shared runner for BOTH entry points — the ``python -m app.db.daily_load``
+    CLI (below) and the scheduled Celery task
+    (``app.scheduler.daily_load_tasks.recompute_daily_load``, beat entry
+    ``daily-load-recompute``) — so their behaviour cannot drift apart: the
+    settings mappings (thresholds, TRIMP coefficients, engine constants),
+    the persistence call and the single final commit all happen here, once.
+
+    With no injected ``session_factory`` the runner owns the full engine
+    lifecycle (built from ``settings.database_url``, disposed afterwards).
+    The seam exists for tests, which run fully offline with it; the
+    scheduler never sets it.
+    """
+    thresholds = thresholds_from_settings(settings)
+    coefficients = trimp_coefficients_from_settings(settings)
+    engine_constants = engine_constants_from_settings(settings)
+
+    async def _once(session_factory: async_sessionmaker[AsyncSession]) -> DailyLoadReport:
+        async with session_factory() as session:
+            report = await recompute_daily_load(
+                session,
+                athlete_id=athlete_id,
+                window_end=window_end,
+                days=days,
+                thresholds=thresholds,
+                coefficients=coefficients,
+                engine_version=settings.engine_version,
+                **engine_constants,
+            )
+            await session.commit()
+            return report
+
+    if session_factory is not None:
+        return await _once(session_factory)
+
+    engine = create_db_engine(settings.database_url)
+    try:
+        return await _once(make_session_factory(engine))
+    finally:
+        await engine.dispose()
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     """CLI entry point; returns 0 on success, 1 on configuration errors."""
     args = build_parser().parse_args(argv)
@@ -215,31 +269,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"--end must be YYYY-MM-DD, got {args.end!r}", file=sys.stderr)
             return 1
 
-    thresholds = thresholds_from_settings(settings)
-    coefficients = trimp_coefficients_from_settings(settings)
-    engine_constants = engine_constants_from_settings(settings)
-
-    async def _run() -> DailyLoadReport:
-        engine = create_db_engine(settings.database_url)
-        try:
-            factory = make_session_factory(engine)
-            async with factory() as session:
-                report = await recompute_daily_load(
-                    session,
-                    athlete_id=args.athlete_id,
-                    window_end=window_end,
-                    days=args.days,
-                    thresholds=thresholds,
-                    coefficients=coefficients,
-                    engine_version=settings.engine_version,
-                    **engine_constants,
-                )
-                await session.commit()
-                return report
-        finally:
-            await engine.dispose()
-
-    report = asyncio.run(_run())
+    report = asyncio.run(
+        run_recompute(
+            settings,
+            days=args.days,
+            athlete_id=args.athlete_id,
+            window_end=window_end,
+        )
+    )
     print(format_report(report))
     return 0
 

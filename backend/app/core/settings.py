@@ -22,6 +22,16 @@ class Settings(BaseSettings):
         # .env.example to .env as the README instructs raises a validation
         # error for the optional numeric fields (developer-visible regression).
         env_ignore_empty=True,
+        # Entries in .env that Settings does not declare are IGNORED, not
+        # errors. The .env files legitimately carry ecosystem variables this
+        # class deliberately does not own — e.g. LANGFUSE_BASE_URL, which the
+        # Langfuse/OpenTelemetry ecosystem reads directly from the process
+        # environment (strands' own Langfuse detection checks it). Before
+        # this setting, one such undeclared key crashed EVERY process at
+        # startup (observed: pydantic "extra inputs are not permitted" at
+        # test collection). Real environment variables were never validated
+        # this way — this only aligns .env-file entries with them.
+        extra="ignore",
     )
 
     # --- Application -------------------------------------------------------
@@ -84,6 +94,10 @@ class Settings(BaseSettings):
     athlete_threshold_run_speed_mps: float | None = None
     # Body weight in kg (athlete profile weight; null for this owner).
     athlete_weight_kg: float | None = None
+    # The athlete's name as the agent addresses them in the per-turn
+    # context block (WA-8, §9.2). Empty = not configured: the context
+    # block simply omits the name line. OWNER CHOICE.
+    athlete_name: str = ""
 
     # --- Engine constants (LOAD-11; §7, §14) --------------------------------
     # Every constant of the deterministic load engine is explicit, sourced
@@ -379,6 +393,25 @@ class Settings(BaseSettings):
     # Model id handed to the provider (strands OpenAIConfig.model_id).
     llm_model_id: str = "gpt-4o-mini"
 
+    # --- Evidence store embeddings (Feature 9; §6 adapter principle) --------
+    # Which embedding adapter the evidence ingestion/retrieval gets — ONE
+    # adapter per §6, chosen purely by configuration. "openai" builds the
+    # real OpenAI embeddings adapter from openai_api_key/embedding_model_id
+    # (constructing it wires a local client only); "fake" builds the
+    # deterministic app.evidence.embeddings.FakeEmbedding (tests, dry runs
+    # — zero network, zero credentials). Anything else fails loudly
+    # instead of silently dialling a provider.
+    embedding_provider: str = "openai"
+    # Model id handed to the embeddings provider.
+    embedding_model_id: str = "text-embedding-3-small"
+    # Evidence-injection backstop (live finding 2026-10-14): how many of the
+    # owner's-library chunks the pipeline injects into EACH turn's system
+    # prompt (retrieved with the SAME adapters search_evidence uses, before
+    # the model is invoked). Nothing is injected when the store is empty or
+    # nothing clears the retrieval similarity floor; a retrieval failure is
+    # fail-open (the turn runs exactly as without injection).
+    evidence_injection_k: int = 4
+
     # --- WhatsApp agent guardrails (Feature 6; WA-5; §9.2, §14) --------------
     # The tool-calling loop is the Strands Agents SDK's; these are OUR
     # guardrails around it, all documented OWNER CHOICES (§14 style) with no
@@ -401,7 +434,19 @@ class Settings(BaseSettings):
     # message_log. When the accumulated usage reaches this budget the
     # pipeline stops BEFORE invoking the model and replies with an explicit
     # budget message; usage frees up as turns age out of the 24 h window.
-    agent_conversation_token_budget: int = 60000
+    agent_conversation_token_budget: int = 300000
+
+    # --- WhatsApp reply formatting (Feature 6; WA-8; §9.2) -------------------
+    # WhatsApp formatting constraint (§9.2): short paragraphs, no markdown
+    # tables, and a maximum of ~1,000 CHARACTERS per message. The pipeline
+    # splits a longer reply into consecutive messages at this budget
+    # (split_reply in app.agent.pipeline). The budget is counted in
+    # CHARACTERS, not UTF-8 bytes: the constraint is stated in characters,
+    # Twilio's own WhatsApp message cap is likewise enforced in characters,
+    # and byte counting would needlessly fragment accented Spanish text
+    # while never protecting anything the character count misses. OWNER
+    # CHOICE (the "~" in §9.2).
+    agent_whatsapp_message_char_limit: int = 1000
 
     # --- WhatsApp agent conversation memory (Feature 6; WA-8; §9.2) ----------
     # Conversation memory persists through the Strands SDK's own session seam
@@ -422,6 +467,24 @@ class Settings(BaseSettings):
     agent_summary_trigger_messages: int = 6
 
     # --- Observability ------------------------------------------------------
+    # Langfuse tracing of every WhatsApp agent turn (WA-11, §13), exported
+    # over OTLP/HTTP from the Strands SDK's own OpenTelemetry surface
+    # (app.agent.tracing). Tracing is enabled ONLY when ALL THREE variables
+    # are non-empty; with anything missing it is a clean no-op (the agent
+    # behaves exactly as untraced) — and a PARTIAL configuration (keys set
+    # but the host empty) additionally logs ONE warning naming LANGFUSE_HOST
+    # so it is visible, never silent.
+    # TRAP (documented OWNER decision): a default endpoint is NEVER guessed
+    # when LANGFUSE_HOST is empty — a guessed endpoint that is not the
+    # owner's would send traces nowhere with zero signal, the exact silent
+    # failure mode this project keeps hitting.
+    # The containerised worker reads the repository-root `.env` (Compose
+    # env_file) while local `uv run` reads `backend/.env` — keep both in
+    # sync. LANGFUSE_BASE_URL, if present in those files, belongs to the
+    # Langfuse/OTel ecosystem (read from the process environment by the
+    # SDK's Langfuse detection); it is deliberately NOT a Settings field and
+    # does not replace LANGFUSE_HOST, which stays the single source of truth
+    # for the host.
     langfuse_public_key: str = ""
     langfuse_secret_key: str = ""
     langfuse_host: str = ""
