@@ -14,7 +14,10 @@ labels; byte-level determinism (snapshot-tested) is anchored here:
 from __future__ import annotations
 
 import io
+from collections.abc import Sequence
 
+from matplotlib.artist import Artist
+from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 
 # §10: 1080 px wide, readable on a phone. Height is proportionate but
@@ -69,3 +72,41 @@ def render_figure_to_png(fig: Figure) -> bytes:
         metadata={"Software": None},
     )
     return buffer.getvalue()
+
+
+def place_figure_legend(
+    fig: Figure,
+    ax: Axes,
+    entries: int,
+    handles: Sequence[Artist] | None = None,
+    labels: Sequence[str] | None = None,
+) -> None:
+    """One frameless legend row in a bottom strip OUTSIDE the data area.
+
+    Legends anchored inside the axes overlap the series (owner feedback
+    on the received CH-11 e2e chart: the Performance Manager legend sat
+    on top of the CTL/ATL lines). A figure-level row in a reserved bottom
+    strip never collides with any series, whatever the data shape — and
+    every chart places it identically, so the convention is predictable.
+
+    ``tight_layout`` ignores outside-anchored legends, so the helper
+    reserves the strip itself via ``tight_layout(rect=...)``. For twin
+    axes (e.g. pace + HR) pass the merged ``handles``/``labels``
+    explicitly; otherwise the helper reads them from ``ax``.
+    """
+    if handles is not None and labels is not None:
+        legend_handles, legend_labels = list(handles), list(labels)
+    else:
+        legend_handles, legend_labels = ax.get_legend_handles_labels()
+    if legend_handles:
+        fig.legend(
+            legend_handles,
+            legend_labels,
+            loc="lower center",
+            ncols=max(1, min(entries, 4)),
+            frameon=False,
+            fontsize=LEGEND_FONTSIZE,
+            handlelength=1.8,
+            columnspacing=1.4,
+        )
+    fig.tight_layout(rect=(0.0, 0.055, 1.0, 1.0))

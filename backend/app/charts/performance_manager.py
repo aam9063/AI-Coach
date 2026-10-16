@@ -22,10 +22,10 @@ from app.charts._style import (
     COLOR_TSB,
     GRID,
     LABEL_FONTSIZE,
-    LEGEND_FONTSIZE,
     TEXT,
     TICK_FONTSIZE,
     TITLE_FONTSIZE,
+    place_figure_legend,
     render_figure_to_png,
 )
 
@@ -87,7 +87,6 @@ def render_performance_manager(samples: Sequence[PerformanceManagerSample]) -> b
     for spine in ax.spines.values():
         spine.set_color(GRID)
     fig.autofmt_xdate()
-    ax.legend(fontsize=LEGEND_FONTSIZE, frameon=False, loc="upper left")
-    fig.tight_layout()
+    place_figure_legend(fig, ax, entries=3)
 
     return render_figure_to_png(fig)

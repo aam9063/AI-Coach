@@ -24,10 +24,10 @@ from app.charts._style import (
     BACKGROUND,
     GRID,
     LABEL_FONTSIZE,
-    LEGEND_FONTSIZE,
     TEXT,
     TICK_FONTSIZE,
     TITLE_FONTSIZE,
+    place_figure_legend,
     render_figure_to_png,
 )
 
@@ -98,7 +98,6 @@ def _apply_shared_style(fig: Figure, ax: Axes, title: str, xlabel: str) -> None:
     for spine in ax.spines.values():
         spine.set_color(GRID)
     fig.autofmt_xdate()
-    fig.tight_layout()
 
 
 def render_run_pace_hr_trend(samples: Sequence[RunSessionSample]) -> bytes:
@@ -135,19 +134,15 @@ def render_run_pace_hr_trend(samples: Sequence[RunSessionSample]) -> bytes:
 
     lines, labels = ax.get_legend_handles_labels()
     hr_lines, hr_labels = hr_ax.get_legend_handles_labels()
-    ax.legend(
-        lines + hr_lines,
-        labels + hr_labels,
-        fontsize=LEGEND_FONTSIZE,
-        frameon=False,
-        loc="upper left",
-    )
 
     _apply_shared_style(
         fig,
         ax,
         f"Run pace & HR trend  {_date_range_title(days)}",
         "Date",
+    )
+    place_figure_legend(
+        fig, ax, entries=2, handles=lines + hr_lines, labels=labels + hr_labels
     )
     return render_figure_to_png(fig)
 
@@ -177,7 +172,6 @@ def render_ef_trend(samples: Sequence[EfSample]) -> bytes:
         label=f"Mean EF ({mean_ef:.2f})",
     )
 
-    ax.legend(fontsize=LEGEND_FONTSIZE, frameon=False, loc="upper left")
     _apply_shared_style(
         fig,
         ax,
@@ -187,4 +181,5 @@ def render_ef_trend(samples: Sequence[EfSample]) -> bytes:
     ax.set_ylabel(
         "EF (normalized pace or power per bpm)", fontsize=LABEL_FONTSIZE, color=TEXT
     )
+    place_figure_legend(fig, ax, entries=2)
     return render_figure_to_png(fig)

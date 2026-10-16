@@ -24,11 +24,11 @@ from app.charts._style import (
     BACKGROUND,
     GRID,
     LABEL_FONTSIZE,
-    LEGEND_FONTSIZE,
     TEXT,
     TICK_FONTSIZE,
     TITLE_FONTSIZE,
     categorical_color,
+    place_figure_legend,
     render_figure_to_png,
 )
 
@@ -133,7 +133,6 @@ def render_weekly_time_in_zone(samples: Sequence[WeeklyZoneSample]) -> bytes:
     ax.tick_params(colors=TEXT, labelsize=TICK_FONTSIZE)
     for spine in ax.spines.values():
         spine.set_color(GRID)
-    ax.legend(fontsize=LEGEND_FONTSIZE, frameon=False, loc="upper left")
-    fig.tight_layout()
+    place_figure_legend(fig, ax, entries=len(ZONE_LABELS))
 
     return render_figure_to_png(fig)
