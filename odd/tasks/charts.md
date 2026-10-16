@@ -39,11 +39,11 @@ The coach must "generate charts of performance metrics and send them as images o
 - [x] `CH-1`: RED: snapshot-test scaffolding for chart renderers (canonical input fixtures, PNG snapshot storage and comparison, clear update procedure) with one failing first case (§10, §12.7).
 - [x] `CH-2`: GREEN: implement the Performance Manager chart (CTL, ATL, TSB over time) as a pure function data-in/PNG-bytes-out with §10 conventions (1080 px, palette, units on axes, date on title); snapshot green.
 - [x] `CH-3`: RED+GREEN: weekly TSS stacked by sport chart (§10).
-- [ ] `CH-4`: RED+GREEN: mean-maximal power curve with CP fit overlay, reusing the curve/fit outputs from Feature 4 (§10, §7.3).
-- [ ] `CH-5`: RED+GREEN: run pace/HR trend and EF trend charts (§10).
-- [ ] `CH-6`: RED+GREEN: time-in-zone (3-zone) per week chart (§10, §7.5).
-- [ ] `CH-7`: RED+GREEN: HRV ln rMSSD chart with baseline band (§10, §7.4).
-- [ ] `CH-8`: RED+GREEN: race prediction breakdown chart with uncertainty bars, consuming `{point, lower, upper, ...}` outputs from Feature 8 (§10, §7.7).
+- [x] `CH-4`: RED+GREEN: mean-maximal power curve with CP fit overlay, reusing the curve/fit outputs from Feature 4 (§10, §7.3).
+- [x] `CH-5`: RED+GREEN: run pace/HR trend and EF trend charts (§10).
+- [x] `CH-6`: RED+GREEN: time-in-zone (3-zone) per week chart (§10, §7.5).
+- [x] `CH-7`: RED+GREEN: HRV ln rMSSD chart with baseline band (§10, §7.4).
+- [x] `CH-8`: RED+GREEN: race prediction breakdown chart with uncertainty bars, consuming `{point, lower, upper, ...}` outputs from Feature 8 (§10, §7.7).
 - [ ] `CH-9`: Implement chart storage + expiring access: object storage with short-lived presigned URL or authenticated expiring FastAPI route (§9.1), aligned with the §15 storage decision.
 - [ ] `CH-10`: RED+GREEN: `plot_metric(kind, date_range, sport?)` tool returning chart id + public media URL as a typed Pydantic model with `computed_at`, `engine_version`, coverage info (§9.3).
 - [ ] `CH-11`: Verify a chart arrives as an image on WhatsApp end-to-end via Twilio `media_url` on the running stack (§12.7).
@@ -71,9 +71,10 @@ Directly implied conditions:
 - ``uv run ruff check app/charts tests/charts`` and ``uv run mypy app/charts tests/charts`` clean.
 
 - CH-3, same branch: RED observed (``ModuleNotFoundError: app.charts.weekly_tss``); missing-baseline path fails loudly; after regeneration the suite is green on plain re-runs (8 tests). Extra pins: negative TSS rejected (``ValueError``), a sport appearing in only some weeks stacks with a consistent color. ruff + mypy clean.
+- CH-4..CH-8 (2026-10-16): delegated to five parallel gentle-ai-worker subagents with disjoint edit surfaces (renderer module + test file + snapshot per chart). Each observed RED first (ModuleNotFoundError), generated its baseline with CHART_SNAPSHOT_UPDATE=1, and verified a deterministic plain re-run. Orchestrator reviewed every renderer and every baseline PNG visually, then committed one work unit per chart plus an exports integration commit. Final integration state: `uv run pytest tests/charts` 41 passed, ruff clean, mypy clean (19 source files). All seven charts follow the §10 conventions (1080 px asserted per chart, units on axes, date range in the title, dark text on light background); race prediction has no date axis by contract and formats times as h:mm.
 
 ## Progress
 
-In progress (branch `feat/charts`, Orca worktree `C:/Users/alber/orca/workspaces/AI-Coach/feature-7-charts`, isolated from the scheduled-messages session which owns the main checkout): CH-1, CH-2, CH-3 done; CH-4 (mean-maximal power curve) next. Race prediction chart (CH-8) is buildable as a pure renderer against canonical fixtures since Feature 8 is pending.
+In progress (branch `feat/charts`, Orca worktree `C:/Users/alber/orca/workspaces/AI-Coach/feature-7-charts`, isolated from the scheduled-messages session which owns the main checkout): CH-1..CH-8 done (all seven renderers). Next: CH-9 (storage + authenticated expiring FastAPI route per the owner's 2026-10-16 decision), then CH-10 (plot_metric), CH-11 (WhatsApp e2e). Race prediction chart (CH-8) is buildable as a pure renderer against canonical fixtures since Feature 8 is pending.
 
-Commits: 7b230a5 feat(charts): snapshot scaffolding and the Performance Manager chart (CH-1, CH-2) · 284c16e docs(odd): record CH-1/CH-2 commit evidence · 9dca0d2 feat(charts): weekly TSS stacked by sport renderer (CH-3)
+Commits: 7b230a5 (CH-1/CH-2) · 284c16e (docs) · 9dca0d2 (CH-3) · 8767193 (CH-4) · 69678fa (CH-5) · 0d738df (CH-6) · de5f5f6 (CH-7) · 68605ff (CH-8) · d62e087 (exports)
