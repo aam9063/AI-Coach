@@ -46,6 +46,7 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Integer,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
@@ -870,3 +871,48 @@ class EvidenceChunkRow(Base):
     text: Mapped[str] = mapped_column(Text)
     embedding: Mapped[list[float]] = mapped_column(Vector(EMBEDDING_DIMENSION))
     citation: Mapped[str] = mapped_column(Text)
+
+
+class ChartRow(Base):
+    """One rendered chart PNG, ready to serve via the expiring media route
+    (CH-9, brief §9.1/§10/§12.7).
+
+    Row shape decision: **one row per rendered chart** — the minimum the
+    ``plot_metric`` tool (CH-10, §9.3) needs to hand out a media URL and
+    have the route serve the previously rendered bytes back verbatim.
+
+    OWNER DECISION (2026-10-16, odd/tasks/charts.md Log L2): chart PNGs are
+    served through the authenticated, expiring FastAPI route
+    (:mod:`app.api.charts`) — object storage was explicitly rejected — so
+    the bytes live here, inside the owner's infrastructure (§14).
+
+    Columns are the storage contract, nothing more (no athlete column: the
+    single-athlete deployment keeps the render inputs self-describing):
+
+    - ``kind``: the renderer key (e.g. ``"performance_manager"``), the
+      same vocabulary the ``plot_metric`` tool uses;
+    - ``params``: the chart INPUTS echo (JSONB, nullable) so a served URL
+      is auditable back to what was asked — provenance, not a re-render
+      input;
+    - ``png``: the rendered bytes (``LargeBinary`` — the codebase's first
+      binary column; the renderers are pure functions, so these bytes are
+      exactly what the snapshot tests pinned);
+    - ``engine_version`` (§6: every persisted engine output carries the
+      engine version — a rendered chart is an engine output);
+    - ``created_at``: render time (the expiry anchor lives in the signed
+      token, not on the row — access TTL is configuration, not data).
+    """
+
+    __tablename__ = "chart"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # Renderer key ("performance_manager", "weekly_tss", ...).
+    kind: Mapped[str] = mapped_column(String(64))
+    # The chart inputs echo; NULL when the caller passed none.
+    params: Mapped[dict[str, Any] | None] = mapped_column(JSONB, default=None)
+    # The rendered PNG bytes, stored and served byte-identically.
+    png: Mapped[bytes] = mapped_column(LargeBinary)
+    engine_version: Mapped[str] = mapped_column(String(32))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )

@@ -63,6 +63,17 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from strands.tools import tool
 
+from app.agent.chart_tool import (
+    CHART_KIND_ALIASES,
+    CHART_RENDERERS,
+    SUPPORTED_CHART_KINDS,
+    UNAVAILABLE_CHART_KINDS,
+    ChartCoverage,
+    PlotMetricResult,
+    assemble_chart_samples,
+)
+from app.api.charts import build_chart_media_url
+from app.charts.storage import save_chart
 from app.core.settings import Settings, get_settings
 from app.db.engine_readiness_config import readiness_constants_from_settings
 from app.db.models import (
@@ -1244,12 +1255,11 @@ async def propose_threshold_update(
 # Delegated stubs: capabilities that do not exist yet (WA-6, brief §9.3)
 # ---------------------------------------------------------------------------
 # PROJECT_BRIEF §9.3 lets the registry stub-delegate until the features
-# that back these tools land. Registering them with an HONEST error
-# contract keeps the registry the complete set the brief names while
-# making it impossible for the model to get a fabricated prediction or
-# chart: the tool exists, answers, and says exactly what is missing.
-# ``insufficient_data`` would be a LIE here — nothing is missing; the
-# capability simply does not exist yet.
+# that back these tools land. ``predict_race`` is the last remaining
+# stub: registered with an HONEST error contract, it makes it impossible
+# for the model to get a fabricated prediction. ``insufficient_data``
+# would be a LIE here — nothing is missing; the capability simply does
+# not exist yet.
 
 
 @tool
@@ -1291,42 +1301,168 @@ async def predict_race(
     }
 
 
+# ---------------------------------------------------------------------------
+# plot_metric (Feature 7, §9.3/§10) — CH-10
+# ---------------------------------------------------------------------------
+
+
 @tool
 async def plot_metric(
     kind: str, date_range: str = "30d", sport: str | None = None
 ) -> dict[str, Any]:
-    """Render a chart of one metric: NOT IMPLEMENTED YET.
+    """Render a chart of one metric as a PNG image you can send on WhatsApp
+    (PROJECT_BRIEF §10/§9.3).
 
-    This tool is a deliberate stub: chart rendering arrives with Feature
-    7 (``charts``, PROJECT_BRIEF §9.3/§10), which will render PNGs
-    server-side (1080 px wide, phone-readable) and return a chart id
-    plus a public media URL for WhatsApp. Until then this tool ALWAYS
-    returns ``status="error"`` naming the feature that will bring the
-    capability. It NEVER fabricates a chart (no chart id, no media URL)
-    and NEVER returns ``insufficient_data`` — nothing is missing; the
-    capability does not exist yet. Do not describe or invent a chart:
-    tell the athlete that charts are not available yet, and answer with
-    the numbers from the other tools instead.
+    Supported kinds (each maps to ONE chart):
+    - "performance_manager" (alias "ctl_atl"): CTL/ATL/TSB per day — the
+      COMBINED all-sports view; a sport filter is IGNORED (the performance
+      manager aggregates by definition).
+    - "weekly_tss": weekly TSS stacked by sport; a sport filter narrows
+      the chart to that sport.
+    - "time_in_zone" (alias "intensity"): weekly minutes in zone 1/2/3;
+      a sport filter narrows the chart to that sport.
+    - "hrv": daily ln(rMSSD) with the readiness engine's baseline band;
+      a sport filter is IGNORED (HRV is sport-agnostic).
+
+    Kinds whose renderer exists but whose engine data source does not yet
+    ("mean_maximal_curve", "run_trends"/"ef_trend"/"run_pace_hr",
+    "race_prediction") return status="error" naming what is missing —
+    race prediction arrives with Feature 8. NEVER describe or invent a
+    chart yourself, and never estimate a race result: if the tool answers
+    with an error or insufficient_data, tell the athlete what is missing
+    and answer with the numbers from the other tools instead.
+
+    Returns on success (status "ok"): ``chart_id`` (int, the stored
+    chart), ``media_url`` — the PUBLIC, expiring URL Twilio fetches to
+    attach the image as {chart_public_base_url}/charts/{chart_id}?token=...
+    (the token is short-lived, ``chart_media_ttl_seconds``; pass it through
+    verbatim, NEVER print it or reuse an older one), ``kind``, ``coverage``
+    (the window requested vs the samples that ACTUALLY back the chart —
+    fewer samples than the window is reported truthfully, never padded),
+    ``engine_version`` and ``computed_at`` of the engine rows that back it.
+
+    Without engine data in the window, returns
+    ``status="insufficient_data"`` naming what is missing and how to get
+    it — never a chart with fabricated data. An unknown ``kind`` or
+    ``sport``, or an unparseable ``date_range``, returns
+    ``status="error"``. If the chart media route is not configured
+    (``chart_media_secret``/``chart_public_base_url``), the tool FAILS
+    CLOSED with ``status="error"``: no chart is rendered or stored and no
+    unsigned URL is ever handed out.
 
     Args:
-        kind: Which chart to render (e.g. "ctl_atl", "intensity").
-        date_range: Trailing window ending today ("7d", "30d") or an
-            explicit inclusive range "YYYY-MM-DD/YYYY-MM-DD".
+        kind: Which chart to render: "performance_manager" (alias
+            "ctl_atl"), "weekly_tss", "time_in_zone" (alias "intensity")
+            or "hrv".
+        date_range: Trailing window ending today ("7d", "30d", "90d") or
+            an explicit inclusive range "YYYY-MM-DD/YYYY-MM-DD".
         sport: Optional sport filter (an engine sport name such as
-            "ride", "run", "swim"); omit for the all-sports view.
+            "ride", "run", "swim"); meaningful for "weekly_tss" and
+            "time_in_zone", ignored for "performance_manager" and "hrv".
     """
     settings = _settings()
-    return {
-        "status": "error",
-        "detail": (
-            "chart rendering is not implemented yet: it arrives with "
-            "Feature 7 (charts, PROJECT_BRIEF §9.3/§10). No chart is "
-            "fabricated in the meantime — describe the metric with its "
-            "numbers from the other tools instead."
+    now = _now(settings)
+    requested_kind = kind.strip().lower()
+
+    def error_result(detail: str) -> dict[str, Any]:
+        return PlotMetricResult(
+            status="error",
+            kind=requested_kind,
+            detail=detail,
+            engine_version=settings.engine_version,
+            computed_at=now.isoformat(),
+        ).model_dump()
+
+    if requested_kind in UNAVAILABLE_CHART_KINDS:
+        return error_result(UNAVAILABLE_CHART_KINDS[requested_kind])
+    canonical_kind = CHART_KIND_ALIASES.get(requested_kind, requested_kind)
+    if canonical_kind not in SUPPORTED_CHART_KINDS:
+        return error_result(
+            f"unknown chart kind {kind!r}: expected one of "
+            f"{list(SUPPORTED_CHART_KINDS)}; accepted aliases: "
+            f"{sorted(CHART_KIND_ALIASES)}."
+        )
+    window = _parse_date_range(date_range, today=_today_local(settings))
+    if window is None:
+        return error_result(_RANGE_FORMAT_HELP)
+    window_start, window_end = window
+    sport_input = (sport or "").strip().lower()
+    if sport_input and sport_input not in ENGINE_KNOWN_SPORTS:
+        return error_result(_unknown_sport_error(settings, sport_input)["detail"])
+    # FAIL CLOSED before any data is read or rendered: without the media
+    # configuration no URL could be handed out, so no chart is stored.
+    if not settings.chart_media_secret or not settings.chart_public_base_url:
+        return error_result(
+            "the chart media route is not configured: no media URL can be "
+            "signed, so no chart is rendered or stored. Set CHART_MEDIA_SECRET "
+            "and CHART_PUBLIC_BASE_URL (the public base URL Twilio uses to "
+            "fetch charts)."
+        )
+
+    async with tool_session() as session:
+        assembly = await assemble_chart_samples(
+            session, canonical_kind, window_start, window_end, sport_input or None
+        )
+        if not assembly.samples:
+            return PlotMetricResult(
+                status="insufficient_data",
+                kind=canonical_kind,
+                detail=assembly.missing_data_detail,
+                coverage=ChartCoverage(
+                    window_days=(window_end - window_start).days + 1,
+                    window_start=window_start.isoformat(),
+                    window_end=window_end.isoformat(),
+                    samples_in_chart=0,
+                    sport=sport_input or None,
+                ),
+                engine_version=settings.engine_version,
+                computed_at=now.isoformat(),
+            ).model_dump()
+        engine_version, computed_at = _provenance(assembly.provenance_row, settings)
+        renderer = CHART_RENDERERS[canonical_kind]
+        try:
+            png = renderer(assembly.samples)
+        except ValueError as exc:
+            return error_result(
+                f"the chart could not be rendered from the engine data: {exc}"
+            )
+        # Provenance echo of what the renderer was asked to draw (§14: the
+        # params are stored for provenance only, never re-rendered from).
+        chart_id = await save_chart(
+            session,
+            canonical_kind,
+            png,
+            engine_version,
+            params={
+                "kind": canonical_kind,
+                "date_range": date_range,
+                "start": window_start.isoformat(),
+                "end": window_end.isoformat(),
+                "sport": sport_input or None,
+            },
+        )
+
+    media_url = build_chart_media_url(chart_id, settings, now)
+    if media_url is None:  # defensive: the fail-closed check above makes this unreachable
+        return error_result(
+            "the chart media route is not configured: no media URL can be "
+            "signed, so no URL is handed out."
+        )
+    return PlotMetricResult(
+        status="ok",
+        kind=canonical_kind,
+        chart_id=chart_id,
+        media_url=media_url,
+        coverage=ChartCoverage(
+            window_days=(window_end - window_start).days + 1,
+            window_start=window_start.isoformat(),
+            window_end=window_end.isoformat(),
+            samples_in_chart=len(assembly.samples),
+            **assembly.coverage,
         ),
-        "engine_version": settings.engine_version,
-        "computed_at": _now(settings).isoformat(),
-    }
+        engine_version=engine_version,
+        computed_at=computed_at,
+    ).model_dump()
 
 
 # ---------------------------------------------------------------------------
@@ -1434,13 +1570,13 @@ def tool_list() -> list[Any]:
 
     Only this project's engine-backed tools, in this list, ever. Never
     ``load_tools_from_directory``; never the ``strands-agents-tools``
-    vended tools (shell/file/HTTP). WA-6 is complete: this is the FULL
-    ten-tool set the brief names (§9.3) — ``propose_threshold_update``
-    persists pending proposals for the owner's review (never applying
-    one), and ``predict_race``/``plot_metric`` are registered stubs that
-    delegate to Features 8 and 7 with an honest not-implemented error
-    contract until those features land. Each tool joined this list with
-    its checklist item — never silently, never from a loader.
+    vended tools (shell/file/HTTP). ``plot_metric`` is the Feature 7
+    implementation (CH-10): it renders the chart server-side and returns
+    a chart id plus a signed, expiring public media URL.
+    ``predict_race`` remains a registered stub that delegates to Feature 8
+    with an honest not-implemented error contract until that feature
+    lands. Each tool joined this list with its checklist item — never
+    silently, never from a loader.
     """
     return [
         get_load_status,

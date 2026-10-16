@@ -49,19 +49,20 @@ class TestPredictRaceStub:
         assert "predict_race" in names
 
 
-class TestPlotMetricStub:
-    async def test_returns_error_naming_feature_7(self) -> None:
-        result = await tools.plot_metric(kind="load", date_range="30d")
+class TestPlotMetricUnavailableKinds:
+    async def test_unsupported_kind_errors_naming_the_missing_source(self) -> None:
+        result = await tools.plot_metric(kind="race_prediction", date_range="30d")
         assert result["status"] == "error"
-        assert "not implemented" in result["detail"].lower()
-        assert "Feature 7" in result["detail"]
+        assert "Feature 8" in result["detail"]
         assert result["status"] != "insufficient_data"
 
-    async def test_never_fabricates_a_chart(self) -> None:
-        result = await tools.plot_metric(kind="ctl_atl", date_range="90d", sport="ride")
+    async def test_never_fabricates_a_chart_in_error_responses(self) -> None:
+        result = await tools.plot_metric(kind="race_prediction", date_range="90d", sport="ride")
         assert result["status"] == "error"
-        for forbidden in ("chart_id", "media_url", "image"):
-            assert forbidden not in result
+        # The typed error model may carry null chart fields; the invariant is
+        # that no real chart identity is ever fabricated on an error path.
+        assert result.get("chart_id") is None
+        assert result.get("media_url") is None
         assert result["detail"]
 
     async def test_registered_in_the_explicit_tool_list(self) -> None:

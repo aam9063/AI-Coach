@@ -379,6 +379,28 @@ class Settings(BaseSettings):
     # host is used verbatim and would reject every real message.
     twilio_public_webhook_url: str = ""
 
+    # --- Chart media serving (Feature 7; CH-9, §9.1) ------------------------
+    # OWNER DECISION (2026-10-16, odd/tasks/charts.md Log L2): rendered chart
+    # PNGs are served through the authenticated, expiring FastAPI route
+    # (app.api.charts) — object storage was explicitly rejected — so the
+    # HMAC secret that signs the short-lived media tokens is THIS secret.
+    # Empty by default and the route FAILS CLOSED without it (no token is
+    # ever valid), the same convention as the Twilio auth token.
+    chart_media_secret: str = ""
+    # How long a signed media URL stays valid, seconds. OWNER CHOICE: 10
+    # minutes — WhatsApp must still be able to fetch the image minutes
+    # after the reply, while the window stays short-lived (§9.1).
+    chart_media_ttl_seconds: int = 600
+    # Public HTTPS base URL of THIS API exactly as the outside world (Twilio)
+    # reaches it (§9.1), following the twilio_public_webhook_url pattern:
+    # e.g. the development tunnel https://<name>.trycloudflare.com. The
+    # plot_metric tool builds chart media URLs as
+    # {chart_public_base_url}/charts/{id}?token={signed token}; with no base
+    # configured (empty default) the tool FAILS CLOSED: it renders nothing
+    # and hands out no URL — the same convention as an unconfigured
+    # chart_media_secret (an unsigned or non-public URL is never given out).
+    chart_public_base_url: str = ""
+
     # --- LLM providers (switchable per §6; both optional placeholders) -----
     anthropic_api_key: str = ""
     openai_api_key: str = ""
