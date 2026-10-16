@@ -37,15 +37,15 @@ The owner wants forecasts for sprint, olympic, 70.3 and full distance races with
 
 ## Checklist
 
-- [ ] `RP-1`: RED: unit tests for Riegel T2 = T1 × (D2/D1)^1.06 and the VDOT-equivalent against published/hand-calculated reference values, asserting the spread between both methods is returned (§7.7, §12.8).
-- [ ] `RP-2`: GREEN: implement run prediction functions returning both Riegel and VDOT results with their spread (§7.7); tests green.
-- [ ] `RP-3`: RED: write a hand-solved flat-course bike example (fixed power, CdA, Crr, mass, ρ, η) with the analytic expected v and test that the numeric solver matches it (§12.8).
-- [ ] `RP-4`: GREEN: implement the Martin et al. 1998 bike physics solver for v per course segment with gradient profile, target power as a fraction of CP/FTP per distance, and air density from temperature and altitude (§7.7); tests green.
-- [ ] `RP-5`: RED+GREEN: swim prediction from CSS with distance-dependent fraction and configurable open-water adjustment documented as an assumption (§7.7).
-- [ ] `RP-6`: RED+GREEN: run-off-the-bike slowdown: personal factor from bricks/past races when available; configurable prior + widened uncertainty band otherwise; test that the insufficient-data path widens the band and never hardcodes an unsourced constant (§7.7).
-- [ ] `RP-7`: RED+GREEN: T1/T2 transitions from past races or configurable defaults (§7.7).
-- [ ] `RP-8`: RED+GREEN: composite triathlon total with Monte Carlo uncertainty propagation over documented input distributions; per-segment and total bounds stable under a fixed seed (§7.7).
-- [ ] `RP-9`: RED+GREEN: prediction envelope contract test — every prediction (segment and total) returns exactly `{point, lower, upper, method, assumptions, model_version}` and lower ≤ point ≤ upper (§7.7, §12.8).
+- [x] `RP-1`: RED: unit tests for Riegel T2 = T1 × (D2/D1)^1.06 and the VDOT-equivalent against published/hand-calculated reference values, asserting the spread between both methods is returned (§7.7, §12.8).
+- [x] `RP-2`: GREEN: implement run prediction functions returning both Riegel and VDOT results with their spread (§7.7); tests green.
+- [x] `RP-3`: RED: write a hand-solved flat-course bike example (fixed power, CdA, Crr, mass, ρ, η) with the analytic expected v and test that the numeric solver matches it (§12.8).
+- [x] `RP-4`: GREEN: implement the Martin et al. 1998 bike physics solver for v per course segment with gradient profile, target power as a fraction of CP/FTP per distance, and air density from temperature and altitude (§7.7); tests green.
+- [x] `RP-5`: RED+GREEN: swim prediction from CSS with distance-dependent fraction and configurable open-water adjustment documented as an assumption (§7.7).
+- [x] `RP-6`: RED+GREEN: run-off-the-bike slowdown: personal factor from bricks/past races when available; configurable prior + widened uncertainty band otherwise; test that the insufficient-data path widens the band and never hardcodes an unsourced constant (§7.7).
+- [x] `RP-7`: RED+GREEN: T1/T2 transitions from past races or configurable defaults (§7.7).
+- [x] `RP-8`: RED+GREEN: composite triathlon total with Monte Carlo uncertainty propagation over documented input distributions; per-segment and total bounds stable under a fixed seed (§7.7).
+- [x] `RP-9`: RED+GREEN: prediction envelope contract test — every prediction (segment and total) returns exactly `{point, lower, upper, method, assumptions, model_version}` and lower ≤ point ≤ upper (§7.7, §12.8).
 - [ ] `RP-10`: Add `race` and `prediction` DB models with course data, goal, bounds and model version (§6); implement the `predict_race(race_id | distance, target_date?)` tool returning typed Pydantic output with `computed_at`, `engine_version`, coverage info (§9.3).
 
 ## Log
@@ -65,10 +65,10 @@ Directly implied conditions:
 
 ## Verification evidence
 
-To be filled when the feature is implemented (commits, test runs, cross-checks).
+- RP-1..RP-9 (2026-10-16, delegated to one gentle-ai-worker, integrated by the orchestrator): test-first per task with individually observed RED steps; 62 new tests in tests/engine/test_predict.py (737 total in tests/engine green); hand-computed anchors (Riegel 5k 20:00 -> 10k = 2501.92 s; rho(25 C, 1500 m) = 0.9881 kg/m3; flat-course Cardano v = 9.0973 m/s at the analytic anchor); envelope contract walk over every producer; Monte Carlo determinism pinned by exact envelope equality under the fixed default seed. ruff + mypy clean (232 files). Physics note: the flat-course POWER equation is a depressed CUBIC in v (0.5*rho*CdA*v^3 + Crr*m*g*v = eta*P), solved exactly via Cardano in flat_course_speed_analytic — the quadratic form only arises for a prescribed drive force; documented in the module docstring per ODD precedence (the spec requires a hand-solved analytic flat example, which this satisfies).
 
 ## Progress
 
-Not started.
+RP-1..RP-9 done. RP-10 (DB models + predict_race tool) in progress. Branch feat/race-prediction, Orca worktree feature-7-charts (isolated from the scheduled-messages session).
 
-Commits: (none yet)
+Commits: 89492a1 (docs: close charts, open race-prediction log) · (RP-1..RP-9 work unit pending this commit)
