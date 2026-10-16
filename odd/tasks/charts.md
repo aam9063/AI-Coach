@@ -36,8 +36,8 @@ The coach must "generate charts of performance metrics and send them as images o
 
 ## Checklist
 
-- [ ] `CH-1`: RED: snapshot-test scaffolding for chart renderers (canonical input fixtures, PNG snapshot storage and comparison, clear update procedure) with one failing first case (§10, §12.7).
-- [ ] `CH-2`: GREEN: implement the Performance Manager chart (CTL, ATL, TSB over time) as a pure function data-in/PNG-bytes-out with §10 conventions (1080 px, palette, units on axes, date on title); snapshot green.
+- [x] `CH-1`: RED: snapshot-test scaffolding for chart renderers (canonical input fixtures, PNG snapshot storage and comparison, clear update procedure) with one failing first case (§10, §12.7).
+- [x] `CH-2`: GREEN: implement the Performance Manager chart (CTL, ATL, TSB over time) as a pure function data-in/PNG-bytes-out with §10 conventions (1080 px, palette, units on axes, date on title); snapshot green.
 - [ ] `CH-3`: RED+GREEN: weekly TSS stacked by sport chart (§10).
 - [ ] `CH-4`: RED+GREEN: mean-maximal power curve with CP fit overlay, reusing the curve/fit outputs from Feature 4 (§10, §7.3).
 - [ ] `CH-5`: RED+GREEN: run pace/HR trend and EF trend charts (§10).
@@ -61,10 +61,12 @@ Directly implied conditions:
 
 ## Verification evidence
 
-To be filled when the feature is implemented (commits, test runs, cross-checks).
+- CH-1/CH-2, branch `feat/charts`: RED observed first (``ModuleNotFoundError: app.charts.performance_manager``); the missing-baseline path fails loudly with update instructions before any baseline is committed; after ``CHART_SNAPSHOT_UPDATE=1`` regeneration the suite is green on a plain re-run (byte-identical render, deterministic).
+- Conventions checked: PNG width 1080 asserted explicitly (``test_is_1080_px_wide_per_rendering_conventions``), title carries the data's date range, units on the y-axis, empty input rejected with ``ValueError`` (never an empty chart).
+- ``uv run ruff check app/charts tests/charts`` and ``uv run mypy app/charts tests/charts`` clean.
 
 ## Progress
 
-Not started.
+In progress (branch `feat/charts`, from dev after PR #16 merged): CH-1, CH-2 done; CH-3 (weekly TSS stacked) next. Race prediction chart (CH-8) is buildable as a pure renderer against canonical fixtures since Feature 8 is pending. Note: the checkout is shared with an in-flight `feat/scheduled-messages` session — commits here add only charts files.
 
-Commits: (none yet)
+Commits: (pending this work unit)
