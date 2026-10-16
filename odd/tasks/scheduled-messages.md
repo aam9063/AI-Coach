@@ -43,8 +43,8 @@ A coach that only reacts to messages is incomplete: the owner expects a proactiv
 - [x] `SCH-6`: RED+GREEN: template-window rule — when the send time is outside the 24 h free-form window, the morning brief uses an approved WhatsApp template; inside the window it sends free-form (§9.1, §11, §12.10).
 - [x] `SCH-7`: RED+GREEN: `post_activity_review` triggered by new-activity ingestion — short analysis (Feature 3/5 outputs) plus a request for RPE/sensations, feeding `log_subjective` (§9.3, §11).
 - [x] `SCH-8`: RED+GREEN: `weekly_report` on Sundays — load summary, intensity distribution, threshold proposals, next week focus (§11).
-- [ ] `SCH-9`: Add `.env.example` entries for configurable schedule times and template SIDs; document template approval steps for Twilio (§14, §11).
-- [ ] `SCH-10`: End-to-end verification on the running stack: jobs fire on schedule in Europe/Madrid time and messages outside the 24 h window use templates (§12.10).
+- [x] `SCH-9`: Add `.env.example` entries for configurable schedule times and template SIDs; document template approval steps for Twilio (§14, §11).
+- [x] `SCH-10`: End-to-end verification on the running stack: jobs fire on schedule in Europe/Madrid time and messages outside the 24 h window use templates (§12.10).
 
 ## Acceptance criteria
 
@@ -76,5 +76,18 @@ The idempotency proof runs the REAL task body twice against the same fixture on 
 **SCH-7/SCH-8 done at `15db6e1`**: all four jobs of section 11 now exist and the beat carries **five** entries (`*/30` sync, `:25/:55` recompute, 07:30 brief, `:05/:35` review, Sunday 18:00 report). The review's trigger is defined honestly rather than literally: the sync cannot report newness, so it is an idempotent pass over a **48 h lookback** whose once-only marker **IS the outbound audit row** the discipline already requires -- no schema change, no migration -- and a deliberate skip marks the activity too, so the skip is the recorded outcome and the pass never re-attempts. "Reviewed once" is pinned by running the trigger twice and asserting one review. The weekly report fires over the **COMPLETED** ISO week, never the still-running one, reading persisted data only, and on threshold proposals it makes the call worth recording: it **surfaces** the pending proposals and **never derives** new ones, because a weekly aggregate proves nothing about a threshold and deriving one would fabricate exactly the unbacked number the brief forbids -- pinned by a test showing the proposal still pending and the profile unchanged after the send. It also refuses to copy the engine's caveat texts because they carry author-year citations, which the owner's 2026-10-14 decision keeps out of replies.
 
 Parent-verified: 81 passed across the scheduler and settings tests, ruff clean, mypy strict clean (242 files), a single head, and the five beat entries read back with their crontabs. The six scheduled-message settings are documented in both `.env.example` files. **Recorded**: the dev merge brought Feature 7, so `plot_metric` is no longer a stub -- the full charts implementation is registered in its place -- leaving `predict_race` as the only delegated tool. **Open risk**: a review can land before that activity's daily-load row exists (the recompute runs at :25/:55); the message states the gap honestly instead of waiting, since the RPE request does not depend on the numbers.
+
+**SCH-9/SCH-10 done at `bd05dfd`**: the template-approval steps are recorded at the end of this document, and the on-demand CLI is what makes the acceptance criterion verifiable at all -- waiting for a crontab would have left it unproven. `python -m app.scheduler.cli {sync,morning_brief,post_activity_review,weekly_report}` runs the EXACT function each Celery task body calls, and its `--help` states the section 9.1 rule. **Live evidence, all four jobs run against the real stack**: `sync` pulled 6 streams and 2 wellness records from Intervals.icu; the morning brief SKIPPED with "no readiness snapshot for 2026-10-16 ... never composed from invented data"; the weekly report SKIPPED with "outside the 24 h free-form window (9.1) and no WhatsApp template SID configured (WEEKLY_REPORT_TEMPLATE_SID); the sandbox has no approved templates, so no send is attempted"; both wrote the audit rows the discipline requires (`kind`, `mode`, `skip_reason`). The template branch itself cannot be exercised without an approved template, which is stated rather than glossed over.
+
+**Gap found by the live run -- the next unit**: nothing schedules the readiness computation, so `readiness_snapshot` has no row for today and the morning brief can never send. The feature's headline job is blocked by a missing schedule entry, not by its own logic.
+
+### Getting an approved WhatsApp template
+
+1. In the Twilio Console open **Messaging -> Content Template Builder** and create a template on the **WhatsApp** channel; its body declares any variable placeholders it uses.
+2. Submit it for WhatsApp approval. Approval is granted by Meta, not Twilio, and is not instant.
+3. When approved, copy its **ContentSid** (it starts with `HX`) into `MORNING_BRIEF_TEMPLATE_SID`, `POST_ACTIVITY_REVIEW_TEMPLATE_SID` or `WEEKLY_REPORT_TEMPLATE_SID` and restart the worker/beat so the setting is read.
+4. Templates must not embed health data beyond what their placeholders require (section 14), and the code passes the whole brief as a single variable.
+
+**The WhatsApp sandbox has no approved templates at all**, so inside it the free-form path (within the 24 h window) is the only one exercisable: outside the window the jobs skip loudly, which is the correct behaviour rather than a bug.
 
 Commits: 08c2a68 (SCH-5 + SCH-6)
