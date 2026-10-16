@@ -81,6 +81,8 @@ Parent-verified: 81 passed across the scheduler and settings tests, ruff clean, 
 
 **Gap found by the live run -- the next unit**: nothing schedules the readiness computation, so `readiness_snapshot` has no row for today and the morning brief can never send. The feature's headline job is blocked by a missing schedule entry, not by its own logic.
 
+**SCH-11 (the gap that SCH-10 found) closed at `d3b86b1`**: readiness now has its own beat entry at `:28/:58`, right after the load recompute at `:25/:55` because readiness reads the load. It reuses the same service seam the tool path uses, adds no schema change, and is idempotent. **Live before/after**: the brief used to skip with "no readiness snapshot for today"; after running the readiness job once (`days: 30`, `rows_upserted: 30`, window 2026-09-17..2026-10-16) the brief gets past composition and its only remaining skip is the honest section 9.1 window one. The per-signal statuses for today, read back from the snapshot, are the honesty rule at its deepest: `hrv_ln_rmssd` reports `insufficient_data` with "requires 7 of 7 days with a measurement, found 6; a missing day is reported, never substituted", and with `agreement_count: 1` the reduction suggestion stays **false** -- one adverse signal never fires it, exactly as the engine's rule requires. The CLI gained a fifth job (`readiness_recompute`) so the fix is verifiable on demand like the others.
+
 ### Getting an approved WhatsApp template
 
 1. In the Twilio Console open **Messaging -> Content Template Builder** and create a template on the **WhatsApp** channel; its body declares any variable placeholders it uses.

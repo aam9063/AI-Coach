@@ -30,7 +30,14 @@ from typing import Any
 
 import pytest
 
-from app.scheduler import cli, morning_brief, post_activity_review, tasks, weekly_report
+from app.scheduler import (
+    cli,
+    morning_brief,
+    post_activity_review,
+    readiness_tasks,
+    tasks,
+    weekly_report,
+)
 
 # Sentinel summaries the fake runners return, so a test can assert the
 # CLI hands the runner's summary back untouched.
@@ -38,6 +45,11 @@ SYNC_SUMMARY: dict[str, Any] = {"days": 30, "ok": True, "activities_synced": 0}
 BRIEF_SUMMARY: dict[str, Any] = {"mode": "freeform", "sent": True, "brief": "x"}
 REVIEW_SUMMARY: dict[str, Any] = {"reviewed": 1, "sent": 1, "skipped": 0}
 REPORT_SUMMARY: dict[str, Any] = {"mode": "template", "sent": False, "report": "y"}
+READINESS_SUMMARY: dict[str, Any] = {
+    "days": 30,
+    "rows_upserted": 28,
+    "skipped": [],
+}
 
 
 class Recorder:
@@ -77,6 +89,13 @@ def fake_review(monkeypatch: pytest.MonkeyPatch) -> Recorder:
 def fake_report(monkeypatch: pytest.MonkeyPatch) -> Recorder:
     recorder = Recorder(REPORT_SUMMARY)
     monkeypatch.setattr(cli, "run_weekly_report_sync", recorder)
+    return recorder
+
+
+@pytest.fixture
+def fake_readiness(monkeypatch: pytest.MonkeyPatch) -> Recorder:
+    recorder = Recorder(READINESS_SUMMARY)
+    monkeypatch.setattr(cli, "run_readiness_recompute_sync", recorder)
     return recorder
 
 
@@ -142,6 +161,21 @@ def test_cli_dispatches_weekly_report(
     assert call["twilio_client"] is fake_twilio
 
 
+def test_cli_dispatches_readiness_recompute(
+    fake_readiness: Recorder,
+) -> None:
+    fake_factory: Any = "fake-factory"
+    summary = cli.run_job(
+        "readiness_recompute", athlete_id=2, session_factory=fake_factory, days=7
+    )
+
+    assert summary == READINESS_SUMMARY
+    call = fake_readiness.calls[0]["kwargs"]
+    assert call["athlete_id"] == 2
+    assert call["session_factory"] is fake_factory
+    assert call["days"] == 7
+
+
 def test_dispatch_targets_are_the_celery_task_bodies() -> None:
     """The CLI must not duplicate job logic: its runners ARE the functions
     the Celery task bodies call (same-function-as-task, LOAD-10/WA-3)."""
@@ -152,6 +186,9 @@ def test_dispatch_targets_are_the_celery_task_bodies() -> None:
         is post_activity_review.run_post_activity_review_sync
     )
     assert cli.run_weekly_report_sync is weekly_report.run_weekly_report_sync
+    assert (
+        cli.run_readiness_recompute_sync is readiness_tasks.run_readiness_recompute_sync
+    )
 
 
 # --- unknown name ----------------------------------------------------------
@@ -163,7 +200,13 @@ def test_run_job_rejects_unknown_name_naming_the_valid_jobs() -> None:
 
     message = str(excinfo.value)
     assert "daily_briefing" in message
-    for valid in ("sync", "morning_brief", "post_activity_review", "weekly_report"):
+    for valid in (
+        "sync",
+        "morning_brief",
+        "post_activity_review",
+        "weekly_report",
+        "readiness_recompute",
+    ):
         assert valid in message
 
 
@@ -192,7 +235,13 @@ def test_help_documents_every_job_and_flag(
 
     assert excinfo.value.code == 0
     out = capsys.readouterr().out
-    for job in ("sync", "morning_brief", "post_activity_review", "weekly_report"):
+    for job in (
+        "sync",
+        "morning_brief",
+        "post_activity_review",
+        "weekly_report",
+        "readiness_recompute",
+    ):
         assert job in out
     assert "--athlete-id" in out
     assert "--days" in out

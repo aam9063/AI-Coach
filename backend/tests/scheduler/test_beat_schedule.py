@@ -39,6 +39,7 @@ import pytest
 import app.scheduler.daily_load_tasks
 import app.scheduler.morning_brief_tasks
 import app.scheduler.post_activity_review_tasks
+import app.scheduler.readiness_tasks
 import app.scheduler.tasks
 import app.scheduler.weekly_report_tasks
 from app.core.settings import get_settings
@@ -49,22 +50,28 @@ RECOMPUTE_ENTRY = "daily-load-recompute"
 BRIEF_ENTRY = "morning-brief"
 REVIEW_ENTRY = "post-activity-review"
 WEEKLY_ENTRY = "weekly-report"
+READINESS_ENTRY = "readiness-recompute"
 SYNC_TASK = "app.scheduler.tasks.sync_intervals"
 RECOMPUTE_TASK = "app.scheduler.daily_load_tasks.recompute_daily_load"
 BRIEF_TASK = "app.scheduler.morning_brief_tasks.morning_brief"
 REVIEW_TASK = "app.scheduler.post_activity_review_tasks.post_activity_review"
 WEEKLY_TASK = "app.scheduler.weekly_report_tasks.weekly_report"
+READINESS_TASK = "app.scheduler.readiness_tasks.recompute_readiness"
 
 
 def _entry(name: str) -> dict[str, Any]:
     return dict(BEAT_SCHEDULE[name])
 
 
-def test_schedule_has_exactly_the_five_entries() -> None:
-    """Sync + recompute + brief + review pass + Sunday report (SCH-7/8)."""
+def test_schedule_has_exactly_the_six_entries() -> None:
+    """Sync + recompute + readiness recompute + brief + review pass +
+    Sunday report. The readiness entry is the fix for the gap the live
+    run recorded: nothing scheduled the readiness computation, so the
+    brief could never find a snapshot for today."""
     assert set(BEAT_SCHEDULE) == {
         SYNC_ENTRY,
         RECOMPUTE_ENTRY,
+        READINESS_ENTRY,
         BRIEF_ENTRY,
         REVIEW_ENTRY,
         WEEKLY_ENTRY,
@@ -94,12 +101,17 @@ def test_both_entries_pin_registered_task_names() -> None:
     assert _entry(WEEKLY_ENTRY)["task"] == WEEKLY_TASK
     assert WEEKLY_TASK in celery_app.tasks
     assert app.scheduler.weekly_report_tasks.weekly_report.name == WEEKLY_TASK
+    # And the readiness recompute (the recorded gap's fix).
+    assert _entry(READINESS_ENTRY)["task"] == READINESS_TASK
+    assert READINESS_TASK in celery_app.tasks
+    assert app.scheduler.readiness_tasks.recompute_readiness.name == READINESS_TASK
     # The worker discovers every task module through the explicit include.
     assert "app.scheduler.tasks" in TASK_MODULES
     assert "app.scheduler.daily_load_tasks" in TASK_MODULES
     assert "app.scheduler.morning_brief_tasks" in TASK_MODULES
     assert "app.scheduler.post_activity_review_tasks" in TASK_MODULES
     assert "app.scheduler.weekly_report_tasks" in TASK_MODULES
+    assert "app.scheduler.readiness_tasks" in TASK_MODULES
 
 
 def test_sync_fires_every_30_minutes_and_recompute_offset_after() -> None:
@@ -134,6 +146,17 @@ def test_sync_entry_uses_the_default_30_day_window() -> None:
 def test_recompute_entry_pins_window_and_athlete() -> None:
     """The recompute entry pins its window length and athlete id."""
     assert _entry(RECOMPUTE_ENTRY)["kwargs"] == {"days": 30, "athlete_id": 1}
+
+
+def test_readiness_entry_fires_after_the_load_recompute() -> None:
+    """The readiness recompute fires at :28/:58 — after the :25/:55 load
+    recompute it reads TSB from, before the 07:30 brief that consumes the
+    snapshot. Its window is pinned to the bounded 30 days."""
+    readiness_cron = _entry(READINESS_ENTRY)["schedule"]
+    assert set(readiness_cron.minute) == {28, 58}
+    assert set(readiness_cron.hour) == set(range(24))
+    assert set(readiness_cron.day_of_week) == set(range(7))
+    assert _entry(READINESS_ENTRY)["kwargs"] == {"days": 30, "athlete_id": 1}
 
 
 def test_morning_brief_fires_daily_at_the_configured_time() -> None:

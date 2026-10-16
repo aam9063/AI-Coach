@@ -96,6 +96,9 @@ from app.core.settings import get_settings
 # ``whatsapp_tasks`` is the WhatsApp inbound-message hand-off target (§9.1,
 # ODD task WA-2): the webhook only validates and dispatches.
 # ``daily_load_tasks`` is the beat-scheduled daily-load recompute (above).
+# ``readiness_tasks`` is the beat-scheduled readiness recompute — the fix
+# for the recorded gap: nothing scheduled the readiness computation, so
+# the morning brief could never find a snapshot for today.
 # ``morning_brief_tasks`` is the beat-scheduled morning brief (SCH-5/SCH-6).
 # ``post_activity_review_tasks`` is the beat-armed post-activity review
 # pass (SCH-7). ``weekly_report_tasks`` is the beat-scheduled Sunday
@@ -104,6 +107,7 @@ TASK_MODULES = [
     "app.scheduler.tasks",
     "app.scheduler.whatsapp_tasks",
     "app.scheduler.daily_load_tasks",
+    "app.scheduler.readiness_tasks",
     "app.scheduler.morning_brief_tasks",
     "app.scheduler.post_activity_review_tasks",
     "app.scheduler.weekly_report_tasks",
@@ -132,6 +136,13 @@ def _parse_daily_time(value: str) -> tuple[int, int]:
 # this module (task registration), never the other way around.
 SYNC_WINDOW_DAYS = 30
 
+# Window (in days) of the readiness recompute — the SAME documented bound
+# as the sync and the load recompute (30 trailing days; the service reads
+# the signals' lookback series on top of it, so the total read stays
+# bounded to weeks, never years). Defined here so both the beat entry and
+# the task/CLI defaults import one constant (the SYNC_WINDOW_DAYS rule).
+READINESS_WINDOW_DAYS = 30
+
 # The beat schedule; see the module docstring for the owner-choice
 # rationale. Task names must match the registered tasks exactly (pinned by
 # tests/scheduler/test_beat_schedule.py). The brief's time comes from
@@ -157,6 +168,21 @@ BEAT_SCHEDULE: dict[str, dict[str, Any]] = {
         "task": "app.scheduler.morning_brief_tasks.morning_brief",
         "schedule": crontab(minute=_brief_minute, hour=_brief_hour),
         "kwargs": {"athlete_id": 1},
+    },
+    # GAP FIX (live run, recorded in the ODD task): nothing scheduled the
+    # readiness computation, so ``readiness_snapshot`` had no row for
+    # today and the morning brief could never send. This entry computes it
+    # through the SAME service seam the tool path uses, at :28/:58 — after
+    # the :25/:55 load recompute whose TSB rows readiness reads, before
+    # the 07:30 brief that consumes the snapshot. Its OWN entry (not an
+    # extension of the load task): a readiness failure surfaces as its own
+    # Celery FAILURE instead of being coupled into — or silently swallowed
+    # by — the load task. Bounded to READINESS_WINDOW_DAYS; idempotent
+    # upserts per (athlete, date); no schema change.
+    "readiness-recompute": {
+        "task": "app.scheduler.readiness_tasks.recompute_readiness",
+        "schedule": crontab(minute="28,58"),  # :28 and :58, every hour, daily
+        "kwargs": {"days": READINESS_WINDOW_DAYS, "athlete_id": 1},
     },
     # SCH-7: the idempotent review pass after each sync entry. The
     # trigger's honesty (why a pass and not an ingestion event) is

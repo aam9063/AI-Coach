@@ -1,4 +1,4 @@
-"""On-demand CLI for the four scheduled jobs (SCH-10; §11, §12.10).
+"""On-demand CLI for the scheduled jobs (SCH-10; §11, §12.10).
 
 The scheduled jobs fire from Celery beat on their Europe/Madrid crontabs,
 which makes them slow to verify: nobody waits half a day for a brief. This
@@ -8,15 +8,22 @@ CLI is the seam that makes them runnable ON DEMAND, in-process::
     python -m app.scheduler.cli morning_brief
     python -m app.scheduler.cli post_activity_review
     python -m app.scheduler.cli weekly_report
+    python -m app.scheduler.cli readiness_recompute
 
     python -m app.scheduler.cli --help
+
+``readiness_recompute`` is the fix for the gap the live run recorded: it
+runs the readiness computation the beat now schedules (entry
+``readiness-recompute``, :28/:58), so the morning brief finds a snapshot
+for today instead of skipping forever.
 
 Contract:
 
 - **No duplicated job logic**: every name dispatches to the EXACT
   synchronous entry point the corresponding Celery task body calls
   (``run_sync`` / ``run_morning_brief_sync`` / ``run_post_activity_review_sync``
-  / ``run_weekly_report_sync`` — the same-function-as-task convention), so
+  / ``run_weekly_report_sync`` / ``run_readiness_recompute_sync`` — the
+  same-function-as-task convention), so
   what the CLI runs is what the beat schedule runs. The identity is pinned
   by :mod:`tests.scheduler.test_cli`.
 - **Same seams**: the message jobs accept ``settings``/``session_factory``/
@@ -50,6 +57,7 @@ from app.core.settings import Settings
 from app.scheduler.celery_app import SYNC_WINDOW_DAYS
 from app.scheduler.morning_brief import run_morning_brief_sync
 from app.scheduler.post_activity_review import run_post_activity_review_sync
+from app.scheduler.readiness_tasks import run_readiness_recompute_sync
 from app.scheduler.tasks import run_sync
 from app.scheduler.weekly_report import run_weekly_report_sync
 
@@ -63,16 +71,22 @@ __all__ = [
     # Re-exported so tests (and callers) can pin the dispatch identity.
     "run_morning_brief_sync",
     "run_post_activity_review_sync",
+    "run_readiness_recompute_sync",
     "run_sync",
     "run_weekly_report_sync",
 ]
 
-#: The four scheduled jobs of §11, in the order the brief lists them.
+#: The four scheduled jobs of §11, in the order the brief lists them, plus
+#: the readiness recompute — the fix for the gap the live run recorded:
+#: without it nothing computed ``readiness_snapshot`` and the morning
+#: brief could never send. Same-seam rule: it dispatches to the exact
+#: function the Celery task body calls.
 JOB_NAMES: tuple[str, ...] = (
     "sync",
     "morning_brief",
     "post_activity_review",
     "weekly_report",
+    "readiness_recompute",
 )
 
 
@@ -126,6 +140,13 @@ def run_job(
             twilio_client=twilio_client,
             athlete_id=athlete_id,
         )
+    if name == "readiness_recompute":
+        return run_readiness_recompute_sync(
+            settings=settings,
+            session_factory=session_factory,
+            athlete_id=athlete_id,
+            days=days,
+        )
     raise UnknownJobError(
         f"unknown job {name!r}; valid jobs: {', '.join(JOB_NAMES)}"
     )
@@ -162,8 +183,8 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=SYNC_WINDOW_DAYS,
         help=(
-            "sync job only: how many days of Intervals.icu data to backfill "
-            f"(default: {SYNC_WINDOW_DAYS}, the scheduled sync window)"
+            "sync and readiness_recompute jobs only: how many trailing days "
+            f"to process (default: {SYNC_WINDOW_DAYS}, the scheduled windows)"
         ),
     )
     return parser
