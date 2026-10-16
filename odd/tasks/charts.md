@@ -46,7 +46,7 @@ The coach must "generate charts of performance metrics and send them as images o
 - [x] `CH-8`: RED+GREEN: race prediction breakdown chart with uncertainty bars, consuming `{point, lower, upper, ...}` outputs from Feature 8 (§10, §7.7).
 - [x] `CH-9`: Implement chart storage + expiring access: object storage with short-lived presigned URL or authenticated expiring FastAPI route (§9.1), aligned with the §15 storage decision.
 - [x] `CH-10`: RED+GREEN: `plot_metric(kind, date_range, sport?)` tool returning chart id + public media URL as a typed Pydantic model with `computed_at`, `engine_version`, coverage info (§9.3).
-- [ ] `CH-11`: Verify a chart arrives as an image on WhatsApp end-to-end via Twilio `media_url` on the running stack (§12.7).
+- [x] `CH-11`: Verify a chart arrives as an image on WhatsApp end-to-end via Twilio `media_url` on the running stack (§12.7).
 
 ## Log
 
@@ -79,4 +79,4 @@ Directly implied conditions:
 
 In progress (branch `feat/charts`, Orca worktree `C:/Users/alber/orca/workspaces/AI-Coach/feature-7-charts`, isolated from the scheduled-messages session which owns the main checkout): CH-1..CH-8 done (all seven renderers). CH-1..CH-10 done. Remaining: CH-11 only — WhatsApp e2e via Twilio media_url on the running stack (blocked on owner decision: requires chart_media_secret + chart_public_base_url in the real .env, a stack restart shared with the scheduled-messages session, and one real WhatsApp message to the owner's phone). Race prediction chart (CH-8) is buildable as a pure renderer against canonical fixtures since Feature 8 is pending.
 
-Commits: 7b230a5 (CH-1/CH-2) · 284c16e (docs) · 9dca0d2 (CH-3) · 8767193 (CH-4) · 69678fa (CH-5) · 0d738df (CH-6) · de5f5f6 (CH-7) · 68605ff (CH-8) · d62e087 (exports) · b3c5fc6 (CH-9) · e675b57 (CH-10)
+Commits: 7b230a5 (CH-1/CH-2) · 284c16e (docs) · 9dca0d2 (CH-3) · 8767193 (CH-4) · 69678fa (CH-5) · 0d738df (CH-6) · de5f5f6 (CH-7) · 68605ff (CH-8) · d62e087 (exports) · b3c5fc6 (CH-9) · e675b57 (CH-10) · (HEAD fix pending this commit)
