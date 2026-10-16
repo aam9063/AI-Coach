@@ -2,8 +2,15 @@
 
 Chart renderers are pure functions: data in, PNG bytes out, with no DB,
 no network, and no wall-clock time inside (the title carries the date
-range of the data, not the render time). That purity makes byte-for-byte
-snapshot testing meaningful: same canonical input, same bytes.
+range of the data, not the render time). That purity makes snapshot
+testing meaningful: same canonical input, same rendered image.
+
+The comparison contract is PIXELS, not raw bytes: the same pixels
+compress differently across platforms (the zlib builds shipped in the
+Windows and manylinux matplotlib wheels produce different PNG
+containers), so byte equality fails on CI while every pixel matches.
+Baselines are committed PNGs; a mismatch means a genuinely different
+image.
 
 Baselines live in ``tests/charts/snapshots/<name>.png`` and are committed
 so a change that alters a chart's appearance must update a file in the
@@ -23,11 +30,14 @@ silent first-run pass.
 
 from __future__ import annotations
 
+import io
 import os
 import struct
 from pathlib import Path
 
+import numpy as np
 import pytest
+from matplotlib.image import imread
 
 SNAPSHOT_DIR = Path(__file__).parent / "snapshots"
 UPDATE_ENV = "CHART_SNAPSHOT_UPDATE"
@@ -51,8 +61,26 @@ def snapshot_path(name: str) -> Path:
     return SNAPSHOT_DIR / f"{name}.png"
 
 
+def pixels_equal(baseline_png: bytes, rendered_png: bytes) -> bool:
+    """Decode two PNGs and compare their pixels EXACTLY.
+
+    Raw bytes are not the contract: identical pixels recompress into
+    different PNG containers across platforms (observed live: CI on
+    ubuntu-latest failed byte-for-byte while every pixel matched). Decoding
+    is deterministic, so exact array equality is the honest check.
+    """
+    for blob in (baseline_png, rendered_png):
+        if blob[:8] != b"\x89PNG\r\n\x1a\n":
+            raise ValueError("not a PNG file")
+    baseline = imread(io.BytesIO(baseline_png))
+    rendered = imread(io.BytesIO(rendered_png))
+    if baseline.shape != rendered.shape:
+        return False
+    return bool(np.array_equal(baseline, rendered))
+
+
 def assert_png_snapshot(png: bytes, name: str) -> None:
-    """Compare rendered PNG bytes against the committed baseline.
+    """Compare a rendered PNG against the committed baseline by pixels.
 
     ``CHART_SNAPSHOT_UPDATE=1`` rewrites the baseline and passes; the
     rewritten file still has to be reviewed and committed by a human.
@@ -64,7 +92,7 @@ def assert_png_snapshot(png: bytes, name: str) -> None:
         return
     if not path.exists():
         pytest.fail(MISSING_BASELINE_MESSAGE.format(name=name, path=path))
-    if path.read_bytes() != png:
+    if not pixels_equal(path.read_bytes(), png):
         pytest.fail(MISMATCH_MESSAGE.format(name=name))
 
 
