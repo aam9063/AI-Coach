@@ -2,6 +2,7 @@
 
 from fastapi import FastAPI
 
+from app.api.charts import router as charts_router
 from app.api.health import router as health_router
 from app.api.webhooks_whatsapp import router as webhooks_whatsapp_router
 
@@ -15,6 +16,7 @@ def create_app() -> FastAPI:
     app = FastAPI(title="tri-coach")
     app.include_router(health_router)
     app.include_router(webhooks_whatsapp_router)
+    app.include_router(charts_router)
     return app
 
 
