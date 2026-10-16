@@ -21,7 +21,7 @@ The coach must "generate charts of performance metrics and send them as images o
   - HRV ln rMSSD with baseline band.
   - Race prediction breakdown with uncertainty bars.
 - Rendering conventions (§10): 1080 px wide PNG, readable on a phone, consistent palette, dark text on light background, units on axes, date on title.
-- Chart storage and serving (§9.1, §12.7): PNG uploaded to object storage with a short-lived presigned URL, or served from an authenticated, expiring FastAPI route — the choice aligned with the §15 open decision on object storage.
+- Chart storage and serving (§9.1, §12.7): served from an authenticated, expiring FastAPI route (§15 decision made by the owner, 2026-10-16: FastAPI route over object storage — keeps personal health data inside the owner's infrastructure, no new storage dependency).
 - `plot_metric(kind, date_range, sport?)` tool (§9.3) returning chart id + public media URL, as a thin wrapper usable by the agent loop from Feature 6.
 
 ## Constraints
@@ -47,6 +47,11 @@ The coach must "generate charts of performance metrics and send them as images o
 - [ ] `CH-9`: Implement chart storage + expiring access: object storage with short-lived presigned URL or authenticated expiring FastAPI route (§9.1), aligned with the §15 storage decision.
 - [ ] `CH-10`: RED+GREEN: `plot_metric(kind, date_range, sport?)` tool returning chart id + public media URL as a typed Pydantic model with `computed_at`, `engine_version`, coverage info (§9.3).
 - [ ] `CH-11`: Verify a chart arrives as an image on WhatsApp end-to-end via Twilio `media_url` on the running stack (§12.7).
+
+## Log
+
+L1: owner asked (2026-10-16): "Creo que la feature 7 de las gráficas no esta implementada, puedes mirarlo y si es así comenzamos a hacerlo?" — feature was not implemented; work started on feat/charts in its own worktree.
+L2: owner decided (2026-10-16), answering the §15 open decision: serve chart PNGs through an authenticated, expiring FastAPI route (not object storage presigned URLs).
 
 ## Acceptance criteria
 
