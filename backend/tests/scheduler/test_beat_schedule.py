@@ -3,10 +3,10 @@
 These tests are the executable specification of the schedule armed on the
 tri-coach Celery app in :mod:`app.scheduler.celery_app`:
 
-- **Exactly two daily entries** — ``daily-intervals-sync`` (Intervals.icu
-  sync) and ``daily-load-recompute`` (TSS/CTL/ATL/TSB). The richer beat
-  jobs (morning brief, post-activity review, weekly report) remain a later
-  feature and must NOT appear here yet.
+- **Exactly three daily entries** — ``daily-intervals-sync`` (Intervals.icu
+  sync), ``daily-load-recompute`` (TSS/CTL/ATL/TSB) and ``morning-brief``
+  (SCH-5). The remaining beat jobs (post-activity review, weekly report)
+  remain a later feature and must NOT appear here yet.
 - **Task names are pinned and resolvable**: each entry's task name must be
   registered on the app (``celery_app.tasks``), so the worker can actually
   run what beat sends — no typos.
@@ -27,24 +27,29 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 import app.scheduler.daily_load_tasks
+import app.scheduler.morning_brief_tasks
 import app.scheduler.tasks
 from app.core.settings import get_settings
 from app.scheduler.celery_app import BEAT_SCHEDULE, TASK_MODULES, celery_app
 
 SYNC_ENTRY = "daily-intervals-sync"
 RECOMPUTE_ENTRY = "daily-load-recompute"
+BRIEF_ENTRY = "morning-brief"
 SYNC_TASK = "app.scheduler.tasks.sync_intervals"
 RECOMPUTE_TASK = "app.scheduler.daily_load_tasks.recompute_daily_load"
+BRIEF_TASK = "app.scheduler.morning_brief_tasks.morning_brief"
 
 
 def _entry(name: str) -> dict[str, Any]:
     return dict(BEAT_SCHEDULE[name])
 
 
-def test_schedule_has_exactly_the_two_daily_entries() -> None:
-    """The minimal schedule: sync + recompute, nothing else (yet)."""
-    assert set(BEAT_SCHEDULE) == {SYNC_ENTRY, RECOMPUTE_ENTRY}
+def test_schedule_has_exactly_the_three_daily_entries() -> None:
+    """Sync + recompute + morning brief; nothing else (yet)."""
+    assert set(BEAT_SCHEDULE) == {SYNC_ENTRY, RECOMPUTE_ENTRY, BRIEF_ENTRY}
 
 
 def test_both_entries_pin_registered_task_names() -> None:
@@ -56,9 +61,14 @@ def test_both_entries_pin_registered_task_names() -> None:
     # The registered task objects carry exactly the pinned names.
     assert app.scheduler.tasks.sync_intervals.name == SYNC_TASK
     assert app.scheduler.daily_load_tasks.recompute_daily_load.name == RECOMPUTE_TASK
-    # The worker discovers both task modules through the explicit include.
+    # The brief entry targets its registered task too.
+    assert _entry(BRIEF_ENTRY)["task"] == BRIEF_TASK
+    assert BRIEF_TASK in celery_app.tasks
+    assert app.scheduler.morning_brief_tasks.morning_brief.name == BRIEF_TASK
+    # The worker discovers every task module through the explicit include.
     assert "app.scheduler.tasks" in TASK_MODULES
     assert "app.scheduler.daily_load_tasks" in TASK_MODULES
+    assert "app.scheduler.morning_brief_tasks" in TASK_MODULES
 
 
 def test_sync_fires_daily_at_0630_and_recompute_at_0655() -> None:
@@ -88,3 +98,31 @@ def test_sync_entry_uses_the_default_30_day_window() -> None:
 def test_recompute_entry_pins_window_and_athlete() -> None:
     """The recompute entry pins its window length and athlete id."""
     assert _entry(RECOMPUTE_ENTRY)["kwargs"] == {"days": 30, "athlete_id": 1}
+
+
+def test_morning_brief_fires_daily_at_the_configured_time() -> None:
+    """SCH-5: daily, at the OWNER-CONFIGURED Europe/Madrid time (§11).
+
+    The default (``Settings.morning_brief_time``, 07:30) lands strictly
+    after the 06:55 daily-load recompute so the brief reads freshly
+    recomputed numbers.
+    """
+    brief_cron = _entry(BRIEF_ENTRY)["schedule"]
+    expected_hour, expected_minute = map(
+        int, get_settings().morning_brief_time.split(":")
+    )
+    assert set(brief_cron.minute) == {expected_minute}
+    assert set(brief_cron.hour) == {expected_hour}
+    # Every day of the week / month: no day-of-week or day-of-month filter.
+    assert set(brief_cron.day_of_week) == set(range(7))
+
+
+def test_morning_brief_time_is_parsed_strictly() -> None:
+    """A malformed configured time fails loudly, never silently at UTC."""
+    from app.scheduler.celery_app import _parse_daily_time
+
+    assert _parse_daily_time("07:30") == (7, 30)
+    with pytest.raises(ValueError):
+        _parse_daily_time("7am")
+    with pytest.raises(ValueError):
+        _parse_daily_time("24:00")

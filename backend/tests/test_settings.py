@@ -36,3 +36,15 @@ def test_non_empty_env_values_are_still_parsed(
     settings = Settings(_env_file=None)  # type: ignore[call-arg]
 
     assert settings.athlete_lthr_bpm == 169.0
+
+
+def test_morning_brief_owner_choices_have_documented_defaults() -> None:
+    """SCH-5/SCH-6 OWNER CHOICES (§11, §14): the brief's send time defaults
+    to 07:30 Europe/Madrid (strictly after the 06:55 daily-load recompute)
+    and the out-of-window template SID defaults to EMPTY — the WhatsApp
+    sandbox has no approved templates, so the honest default is the skip
+    branch, never a send that cannot work."""
+    settings = Settings(_env_file=None)  # type: ignore[call-arg]
+
+    assert settings.morning_brief_time == "07:30"
+    assert settings.morning_brief_template_sid == ""

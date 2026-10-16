@@ -466,6 +466,22 @@ class Settings(BaseSettings):
     # provenance (trace id, agent version).
     agent_summary_trigger_messages: int = 6
 
+    # --- Scheduled messages (Feature 10; SCH-5/SCH-6; §11) -----------------
+    # Morning brief send time as "HH:MM" in the owner timezone
+    # (Europe/Madrid, §11/§14). OWNER CHOICE: 07:30 — strictly after the
+    # 06:55 daily-load recompute, so the brief reads freshly recomputed
+    # numbers. Read once at Celery-app import time (a change needs a beat
+    # restart, like any Celery schedule change).
+    morning_brief_time: str = "07:30"
+    # Twilio ContentSid of the APPROVED WhatsApp template the morning brief
+    # uses when the send time is OUTSIDE the 24 h free-form window (§9.1:
+    # free-form only within 24 h of the last user message). OWNER CHOICE,
+    # documented: EMPTY means NOT configured — the brief is then SKIPPED
+    # with the reason stated in the log and the audit trail, never a send
+    # that cannot work. The WhatsApp sandbox has no approved templates at
+    # all, so the skip branch is the sandbox's real behaviour today.
+    morning_brief_template_sid: str = ""
+
     # --- Observability ------------------------------------------------------
     # Langfuse tracing of every WhatsApp agent turn (WA-11, §13), exported
     # over OTLP/HTTP from the Strands SDK's own OpenTelemetry surface
