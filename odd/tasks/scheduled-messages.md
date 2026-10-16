@@ -39,8 +39,8 @@ A coach that only reacts to messages is incomplete: the owner expects a proactiv
 - [ ] `SCH-2`: GREEN: implement the Celery beat configuration in `backend/app/scheduler/` with Europe/Madrid timezone (§11, §14).
 - [ ] `SCH-3`: RED+GREEN: `sync_intervals` job wrapping Feature 2's sync; idempotency asserted by running twice against the same fixture with no duplicates (§11, §12.10).
 - [ ] `SCH-4`: RED+GREEN: on-demand `/sync` command path triggers the same idempotent job (§11).
-- [ ] `SCH-5`: RED+GREEN: `morning_brief` job — assembles readiness (Feature 5), today's suggested session adjustment via the multi-signal warning rule, and one chart if relevant (Feature 7) into a ≤ ~1,000-character message (§9.2, §11).
-- [ ] `SCH-6`: RED+GREEN: template-window rule — when the send time is outside the 24 h free-form window, the morning brief uses an approved WhatsApp template; inside the window it sends free-form (§9.1, §11, §12.10).
+- [x] `SCH-5`: RED+GREEN: `morning_brief` job — assembles readiness (Feature 5), today's suggested session adjustment via the multi-signal warning rule, and one chart if relevant (Feature 7) into a ≤ ~1,000-character message (§9.2, §11).
+- [x] `SCH-6`: RED+GREEN: template-window rule — when the send time is outside the 24 h free-form window, the morning brief uses an approved WhatsApp template; inside the window it sends free-form (§9.1, §11, §12.10).
 - [ ] `SCH-7`: RED+GREEN: `post_activity_review` triggered by new-activity ingestion — short analysis (Feature 3/5 outputs) plus a request for RPE/sensations, feeding `log_subjective` (§9.3, §11).
 - [ ] `SCH-8`: RED+GREEN: `weekly_report` on Sundays — load summary, intensity distribution, threshold proposals, next week focus (§11).
 - [ ] `SCH-9`: Add `.env.example` entries for configurable schedule times and template SIDs; document template approval steps for Twilio (§14, §11).
@@ -63,6 +63,8 @@ To be filled when the feature is implemented (commits, test runs, cross-checks).
 
 ## Progress
 
-Not started.
+**SCH-5/SCH-6 done at `08c2a68`** -- the brief and the window rule, which together carry the section 12.10 acceptance criterion. The composer is pure and reads PERSISTED engine data; the reduce-load suggestion appears ONLY when the persisted readiness snapshot says the engine's multi-signal rule fired, and **ACWR cannot enter the brief at all because `BriefData` has no such field** -- the constraint is structural, not a promise. The brief is under 1,000 characters, carries no citations and no chart (the owner's 2026-10-14 decision, and Feature 7's absence), and reuses the 24 h free-form window `budget.py` already defines (`FREEFORM_WINDOW = CONVERSATION_WINDOW`, identity-pinned: one definition, not two). Inside the window it sends free-form; outside it uses the configured Twilio template; **with no template SID configured it SKIPS loudly** (log + task summary + an outbound audit row with `skip_reason`), which is the sandbox's real behaviour and the honest thing to report. Every send and every skip is audited BEFORE the Twilio call, and the boundary is pinned (exactly 24 h counts as outside).
 
-Commits: (none yet)
+Parent-verified: 58 passed across the scheduler and settings tests, ruff clean, mypy strict clean (205 files), a single migration head, and the beat now declaring three entries -- the daily sync, the load recompute and `morning-brief` at 07:30 Europe/Madrid. **Recorded risks**: the template's placeholder variables are unverified against a real approved template (SCH-9/SCH-10 territory), and the brief time is read once when the beat app is created, so changing it needs a beat restart.
+
+Commits: 08c2a68 (SCH-5 + SCH-6)
