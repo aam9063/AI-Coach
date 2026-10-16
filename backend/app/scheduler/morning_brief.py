@@ -277,6 +277,7 @@ def decide_send_mode(
     now: dt.datetime,
     last_inbound_at: dt.datetime | None,
     template_sid: str,
+    template_setting_label: str = "MORNING_BRIEF_TEMPLATE_SID",
 ) -> SendDecision:
     """Free-form inside the 24 h window; template outside it if configured;
     skip outside it when no template SID is configured (the sandbox's real
@@ -300,7 +301,7 @@ def decide_send_mode(
         reason=(
             "send time is outside the 24 h free-form window (§9.1) and no "
             "WhatsApp template SID is configured "
-            "(MORNING_BRIEF_TEMPLATE_SID); the WhatsApp sandbox has no "
+            f"({template_setting_label}); the WhatsApp sandbox has no "
             "approved templates, so no send is attempted"
         ),
     )

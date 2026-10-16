@@ -3,13 +3,11 @@
 The ``worker`` and ``beat`` services in ``infra/docker-compose.yml`` boot
 from this module: it wires broker/backend via ``Settings.redis_url`` and
 arms the beat schedule (SCH-1/SCH-2, brief §11): the Intervals.icu sync
-EVERY 30 MINUTES, the daily-load recompute offset after each sync, and the
-morning brief. The remaining §11 jobs (post-activity review, weekly
-report) remain for the later ``scheduled-messages`` tasks (SCH-7/SCH-8)
-and are deliberately NOT scheduled here yet — in particular the weekly
-report has NO beat entry because its task does not exist yet; the entry
-arrives with SCH-8 (documented deviation from SCH-1's wording, which
-mentions the Sunday report among the schedule tests).
+EVERY 30 MINUTES, the daily-load recompute offset after each sync, the
+morning brief, the post-activity review (SCH-7) and the Sunday weekly
+report (SCH-8). The earlier note that these last two entries were
+"deliberately NOT scheduled yet" (documented SCH-1 deviation: no beat
+entry for a task that does not exist) is now lifted — both tasks exist.
 
 **Schedule (documented choices):**
 
@@ -45,6 +43,31 @@ mentions the Sunday report among the schedule tests).
   composes from freshly persisted numbers (SCH-5). Read once at import
   time — a configured-time change needs a beat restart, like any Celery
   schedule change.
+- ``post-activity-review`` — ``app.scheduler.post_activity_review_tasks
+  .post_activity_review``, **every 30 minutes at :05 and :35** in the
+  same timezone (SCH-7). **The trigger, defined honestly:** §11 says the
+  review fires "when a new activity is ingested", but the sync CANNOT
+  report newness — the upsert path counts a re-synced (unchanged)
+  activity as ``activities_synced``, the same limitation already
+  recorded for the recompute cadence above. A trigger keyed on the
+  sync's return would be meaningless, and a naïve intra-task dispatch
+  would couple two entries the schedule deliberately keeps independent.
+  So the review is an IDEMPOTENT PASS: each run reviews the activities
+  that started within ``Settings.post_activity_review_lookback_hours``
+  (default 48 h, OWNER CHOICE — a first 30-day backfill must not become
+  30 proactive messages) and have no review marker yet in the
+  ``message_log`` audit trail. The marker (payload ``kind`` +
+  ``activity_id``, written with the audit row BEFORE the send) makes an
+  activity reviewed EXACTLY ONCE whatever the pass's cadence — a re-run
+  reviews nothing, so this trigger cannot spam. The :05/:35 offsets put
+  each pass after a sync entry; a brand-new activity whose daily-load
+  row is not yet computed is reviewed with that gap stated honestly
+  (the RPE request does not depend on the numbers).
+- ``weekly-report`` — ``app.scheduler.weekly_report_tasks.weekly_report``,
+  **Sundays at ``Settings.weekly_report_time``** (default 18:00, OWNER
+  CHOICE) in the same timezone (SCH-8, §11 "Sundays"). It composes from
+  persisted engine data for the COMPLETED ISO week and surfaces the
+  pending threshold proposals for the owner's review — never applied.
 
 **Failure behaviour:** the entries are independent beat entries. A
 failing sync (window-level ``ok=False`` summary or a Celery ``FAILURE``)
@@ -74,11 +97,16 @@ from app.core.settings import get_settings
 # ODD task WA-2): the webhook only validates and dispatches.
 # ``daily_load_tasks`` is the beat-scheduled daily-load recompute (above).
 # ``morning_brief_tasks`` is the beat-scheduled morning brief (SCH-5/SCH-6).
+# ``post_activity_review_tasks`` is the beat-armed post-activity review
+# pass (SCH-7). ``weekly_report_tasks`` is the beat-scheduled Sunday
+# weekly report (SCH-8).
 TASK_MODULES = [
     "app.scheduler.tasks",
     "app.scheduler.whatsapp_tasks",
     "app.scheduler.daily_load_tasks",
     "app.scheduler.morning_brief_tasks",
+    "app.scheduler.post_activity_review_tasks",
+    "app.scheduler.weekly_report_tasks",
 ]
 
 
@@ -109,6 +137,7 @@ SYNC_WINDOW_DAYS = 30
 # tests/scheduler/test_beat_schedule.py). The brief's time comes from
 # Settings (OWNER CHOICE, default 07:30) and is read ONCE at import.
 _brief_hour, _brief_minute = _parse_daily_time(get_settings().morning_brief_time)
+_weekly_hour, _weekly_minute = _parse_daily_time(get_settings().weekly_report_time)
 BEAT_SCHEDULE: dict[str, dict[str, Any]] = {
     # §11: every 30 minutes (:00 and :30). Idempotent task + paced client;
     # see the module docstring for the cadence rationale.
@@ -127,6 +156,20 @@ BEAT_SCHEDULE: dict[str, dict[str, Any]] = {
     "morning-brief": {
         "task": "app.scheduler.morning_brief_tasks.morning_brief",
         "schedule": crontab(minute=_brief_minute, hour=_brief_hour),
+        "kwargs": {"athlete_id": 1},
+    },
+    # SCH-7: the idempotent review pass after each sync entry. The
+    # trigger's honesty (why a pass and not an ingestion event) is
+    # documented in the module docstring above.
+    "post-activity-review": {
+        "task": "app.scheduler.post_activity_review_tasks.post_activity_review",
+        "schedule": crontab(minute="5,35"),
+        "kwargs": {"athlete_id": 1},
+    },
+    # SCH-8: Sundays (celery's day_of_week 0 = Sunday), OWNER-CHOICE time.
+    "weekly-report": {
+        "task": "app.scheduler.weekly_report_tasks.weekly_report",
+        "schedule": crontab(minute=_weekly_minute, hour=_weekly_hour, day_of_week="sunday"),
         "kwargs": {"athlete_id": 1},
     },
 }

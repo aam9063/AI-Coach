@@ -48,3 +48,18 @@ def test_morning_brief_owner_choices_have_documented_defaults() -> None:
 
     assert settings.morning_brief_time == "07:30"
     assert settings.morning_brief_template_sid == ""
+
+
+def test_review_and_weekly_owner_choices_have_documented_defaults() -> None:
+    """SCH-7/SCH-8 OWNER CHOICES (§11, §14): the review pass's look-back
+    window bounds a first backfill away from message spam (48 h is
+    generous — a new activity always arrives via a sync well inside it);
+    the Sunday report defaults to 18:00 Europe/Madrid; both new messages'
+    out-of-window template SIDs default to EMPTY — the skip branch, never
+    a send that cannot work."""
+    settings = Settings(_env_file=None)  # type: ignore[call-arg]
+
+    assert settings.post_activity_review_lookback_hours == 48
+    assert settings.post_activity_review_template_sid == ""
+    assert settings.weekly_report_time == "18:00"
+    assert settings.weekly_report_template_sid == ""

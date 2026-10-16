@@ -503,6 +503,25 @@ class Settings(BaseSettings):
     # that cannot work. The WhatsApp sandbox has no approved templates at
     # all, so the skip branch is the sandbox's real behaviour today.
     morning_brief_template_sid: str = ""
+    # Post-activity review (SCH-7, §11). The review pass only considers
+    # activities that STARTED within this many hours: a first 30-day
+    # backfill must not become 30 proactive messages, while a genuinely
+    # new activity always arrives via a sync well inside the window.
+    # OWNER CHOICE.
+    post_activity_review_lookback_hours: int = 48
+    # Twilio ContentSid of the APPROVED WhatsApp template the post-activity
+    # review uses outside the 24 h free-form window (same rule as the
+    # morning brief). EMPTY means NOT configured: the review is SKIPPED
+    # with the reason stated (the sandbox has no approved templates).
+    post_activity_review_template_sid: str = ""
+    # Weekly report send time as "HH:MM" on SUNDAYS in the owner timezone
+    # (SCH-8, §11; Europe/Madrid). OWNER CHOICE: 18:00 — evening, after the
+    # day's syncs/recomputes, before the training week planning.
+    weekly_report_time: str = "18:00"
+    # Twilio ContentSid of the APPROVED WhatsApp template the weekly report
+    # uses outside the 24 h free-form window. EMPTY means NOT configured:
+    # the report is SKIPPED with the reason stated.
+    weekly_report_template_sid: str = ""
 
     # --- Observability ------------------------------------------------------
     # Langfuse tracing of every WhatsApp agent turn (WA-11, §13), exported
