@@ -9,7 +9,18 @@ Celery worker:
    collides with the anchor, is logged and skipped — the agent never
    re-runs and the athlete never receives a second reply. The anchor is
    the database, so it survives worker restarts and concurrent retries.
-2. **Agent invocation.** A Strands ``Agent`` is built with the ONE model
+2. **On-demand /sync command (SCH-4, §11).** A body that IS the command
+   (``/sync`` after whitespace-strip + case-fold; see
+   :func:`matches_sync_command`) never reaches the model: it runs the SAME
+   idempotent sync job the beat entry runs (the injectable ``sync_runner``
+   seam, default :func:`app.scheduler.tasks.run_sync_async`) and answers
+   with a SHORT confirmation through the normal send path (outbound audit
+   row BEFORE the Twilio send). The check sits before the budget
+   guardrail, so the LLM budget neither blocks nor pays for a command that
+   invokes no model; the ``MessageSid`` anchor above bounds a Twilio retry
+   of the command at one sync run. A message that merely CONTAINS the word
+   goes down the normal agent path.
+3. **Agent invocation.** A Strands ``Agent`` is built with the ONE model
    object from the provider-agnostic factory (:mod:`app.agent.model_factory`),
    the system-prompt stub (:mod:`app.agent.prompt`) and the EXPLICIT tool
    list (:mod:`app.agent.tools` — never directory-loaded, never vended
@@ -69,6 +80,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from typing import Any
 from uuid import uuid4
 
@@ -119,6 +131,140 @@ AGENT_VERSION = "0.1.0"
 # fragment accented Spanish text (multi-byte) while never protecting
 # anything the character count misses. See ``split_reply``.
 WHATSAPP_MESSAGE_CHAR_LIMIT = 1000
+
+# --- On-demand /sync command (SCH-4, brief §11) -------------------------
+#
+# An inbound message whose body IS the command triggers the SAME idempotent
+# job the beat entry runs (``app.scheduler.tasks.run_sync_async``, the
+# function ``sync_intervals`` wraps) and answers with a SHORT confirmation
+# through the normal send path (outbound audit row BEFORE the Twilio
+# send). The command invokes NO model — the check sits before the budget
+# guardrail and the agent build, so the LLM budget neither blocks nor pays
+# for it, and the ``MessageSid`` anchor above it bounds a Twilio retry of
+# the same command message at one sync run.
+
+# The command, exact after normalization (see ``matches_sync_command``).
+SYNC_COMMAND = "/sync"
+
+
+def matches_sync_command(body: str) -> bool:
+    """Whether an inbound body IS the ``/sync`` command (not merely contains it).
+
+    Matching rule (documented SCH-4 decision): the body, with SURROUNDING
+    WHITESPACE stripped (WhatsApp delivers what the keyboard sent, often
+    with a trailing space or newline) and CASE-FOLDED (mobile autocapitalize
+    turns ``/sync`` into ``/Sync``), must EQUAL ``/sync`` exactly. A message
+    that merely CONTAINS the word — ``/sync ahora``, ``haz /sync``,
+    ``sync`` — is NOT the command and goes down the normal agent path:
+    only an unambiguous bare command triggers a data job silently.
+    """
+    return body.strip().lower() == SYNC_COMMAND
+
+
+def sync_confirmation(summary: dict[str, Any]) -> str:
+    """SHORT bilingual confirmation from the sync job's summary.
+
+    Same Spanish-first convention as the other system-generated replies
+    (``app.agent.budget``). Honest about partial failure: failed windows
+    are named, never hidden.
+    """
+    if summary.get("ok"):
+        return (
+            f"✅ Sync de Intervals.icu completado: "
+            f"{summary.get('activities_synced', 0)} actividades, "
+            f"{summary.get('streams_synced', 0)} streams, "
+            f"{summary.get('wellness_synced', 0)} registros de bienestar.\n"
+            f"✅ Intervals.icu sync finished: {summary.get('activities_synced', 0)} "
+            f"activities, {summary.get('streams_synced', 0)} streams, "
+            f"{summary.get('wellness_synced', 0)} wellness records."
+        )
+    failed = len(summary.get("failed_windows", []) or [])
+    return (
+        f"⚠️ El sync terminó con errores en {failed} ventana(s); se reintentará "
+        "automáticamente.\n"
+        f"⚠️ The sync finished with errors in {failed} window(s); it will retry "
+        "automatically."
+    )
+
+
+SYNC_FAILURE_REPLY = (
+    "⚠️ El sync falló; inténtalo de nuevo con /sync.\n"
+    "⚠️ The sync failed; please try /sync again."
+)
+
+# The sync job the command runs: an awaitable returning the job's JSON
+# summary (the same dict the ``sync_intervals`` task returns).
+SyncRunner = Callable[[], Awaitable[dict[str, Any]]]
+
+
+def _default_sync_runner() -> SyncRunner:
+    """Production default: the SAME job the beat entry runs, in-process.
+
+    Lazy import (the scheduler imports nothing from the agent on this path,
+    and the WhatsApp task module already imports this one): awaiting
+    ``run_sync_async`` runs the job on the caller's event loop — the
+    message-processing worker — instead of a nested ``asyncio.run``.
+    """
+    from app.scheduler.tasks import SYNC_WINDOW_DAYS, run_sync_async
+
+    async def _run() -> dict[str, Any]:
+        return await run_sync_async(days=SYNC_WINDOW_DAYS)
+
+    return _run
+
+
+async def _handle_sync_command(
+    message: dict[str, str],
+    *,
+    trace_id: str,
+    session_factory: SessionFactory,
+    twilio_client: Any,
+    runner: SyncRunner,
+) -> None:
+    """Run the /sync job and answer with a short confirmation (SCH-4).
+
+    The outbound audit row is persisted BEFORE the Twilio send (the same
+    order as the agent path), shares the command message's ``trace_id`` and
+    records the command, the job summary and — on an unexpected failure —
+    an explicit ``sync_failed`` flag. An unexpected exception in the job
+    never leaves the athlete with silence: an explicit failure message is
+    sent instead.
+    """
+    sender = str(message.get("From", "") or "")
+    sync_failed = False
+    summary: dict[str, Any] | None = None
+    try:
+        summary = await runner()
+        reply = sync_confirmation(summary)
+    except Exception:
+        logger.exception("/sync job failed (trace %s)", trace_id)
+        sync_failed = True
+        reply = SYNC_FAILURE_REPLY
+    payload: dict[str, Any] = {
+        "to": sender,
+        "text": reply,
+        "command": SYNC_COMMAND,
+        "sync_summary": summary,
+    }
+    if sync_failed:
+        payload["sync_failed"] = True
+    async with session_factory() as session:
+        session.add(
+            MessageLogRow(
+                direction="outbound",
+                body=reply,
+                payload=payload,
+                trace_id=trace_id,
+                agent_version=AGENT_VERSION,
+            )
+        )
+        await session.commit()
+    twilio_client.messages.create(to=message["From"], from_=message["To"], body=reply)
+    logger.info(
+        "/sync job answered for message %s (trace %s)",
+        message.get("MessageSid", ""),
+        trace_id,
+    )
 
 
 def split_reply(text: str, limit: int = WHATSAPP_MESSAGE_CHAR_LIMIT) -> list[str]:
@@ -175,6 +321,7 @@ async def process_inbound_message(
     model: Any,
     twilio_client: Any,
     session_repository: SessionRepository,
+    sync_runner: SyncRunner | None = None,
 ) -> None:
     """Process one validated inbound message (async body of the task).
 
@@ -192,6 +339,11 @@ async def process_inbound_message(
             database. The production default is built once, in
             :func:`handle_inbound_message`, from settings; tests inject a
             repository on the dedicated test database.
+        sync_runner: The awaitable sync job the ``/sync`` command runs
+            (SCH-4). Defaults to the SAME job the beat entry runs
+            (:func:`app.scheduler.tasks.run_sync_async` with the shared
+            ``SYNC_WINDOW_DAYS`` window); tests inject a fake — never the
+            real client, never the network.
     """
     message_sid = str(message.get("MessageSid", "") or "")
     body = str(message.get("Body", "") or "")
@@ -221,6 +373,22 @@ async def process_inbound_message(
                 "WhatsApp message %s already processed (Twilio retry); skipping", message_sid
             )
             return
+
+    # 1b. On-demand /sync command (SCH-4, §11): the body IS the command ->
+    # run the SAME idempotent job the beat entry runs and answer with a
+    # short confirmation. BEFORE the budget guardrail: the command invokes
+    # NO model, so the per-conversation LLM token budget neither blocks it
+    # nor pays for it. The MessageSid anchor above already bounds a Twilio
+    # retry of the same command message at one sync run.
+    if matches_sync_command(body):
+        await _handle_sync_command(
+            message,
+            trace_id=trace_id,
+            session_factory=session_factory,
+            twilio_client=twilio_client,
+            runner=sync_runner or _default_sync_runner(),
+        )
+        return
 
     # 2. Per-conversation budget guardrail (WA-5): seed the accumulator
     # from the usage persisted by this conversation's earlier turns (the
@@ -528,6 +696,7 @@ def handle_inbound_message(
     model: Any | None = None,
     twilio_client: Any | None = None,
     session_repository: SessionRepository | None = None,
+    sync_runner: SyncRunner | None = None,
 ) -> None:
     """Synchronous seam the Celery task calls; runs the async pipeline.
 
@@ -563,16 +732,24 @@ def handle_inbound_message(
                 if session_repository is not None
                 else DbSessionRepository(resolved_settings.database_url)
             ),
+            # SCH-4: the /sync default job is derived here (the outermost
+            # seam), like every other dependency default.
+            sync_runner=(
+                sync_runner if sync_runner is not None else _default_sync_runner()
+            ),
         )
     )
 
 
 __all__ = [
     "AGENT_VERSION",
+    "SYNC_COMMAND",
     "WHATSAPP_MESSAGE_CHAR_LIMIT",
     "handle_inbound_message",
     "make_twilio_client",
+    "matches_sync_command",
     "process_inbound_message",
     "split_reply",
+    "sync_confirmation",
     "tool_list",
 ]

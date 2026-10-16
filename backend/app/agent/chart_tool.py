@@ -27,11 +27,16 @@ Kind -> renderer + data source (the registry the tool exposes):
   sport-agnostic). A day needs BOTH the daily value and a baseline band
   to be drawn — a day with only one of the two is truthfully excluded
   and counted in ``coverage``.
+- ``race_prediction``: Feature 8's distance path (RP-10,
+  :mod:`app.agent.race_tool`) rendered as the prediction breakdown
+  (CH-8). The RACE DISTANCE KEY travels in ``sport`` (required:
+  sprint/olympic/half/full) and ``date_range`` is IGNORED — a prediction
+  is about a race distance, not a trailing window.
 
 Kinds whose renderer exists but whose engine data source does not yet
-(mean-maximal curve, run pace/HR + EF trends, race prediction) are
-rejected by the tool with the explicit :data:`UNAVAILABLE_CHART_KINDS`
-detail — nothing is ever fabricated.
+(mean-maximal curve, run pace/HR + EF trends) are rejected by the tool
+with the explicit :data:`UNAVAILABLE_CHART_KINDS` detail — nothing is
+ever fabricated.
 """
 
 from __future__ import annotations
@@ -39,23 +44,27 @@ from __future__ import annotations
 import math
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import UTC, date, datetime
 from typing import Any, Final, Literal
 
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agent import race_tool
 from app.charts import (
     HrvSample,
     PerformanceManagerSample,
+    RacePredictionSample,
     WeeklyTssSample,
     WeeklyZoneSample,
     render_hrv_trend,
     render_performance_manager,
+    render_race_prediction_breakdown,
     render_weekly_time_in_zone,
     render_weekly_tss_by_sport,
 )
+from app.core.settings import Settings
 from app.db.models import (
     DailyLoadRow,
     ReadinessSnapshotRow,
@@ -69,8 +78,9 @@ SUPPORTED_CHART_KINDS: Final[tuple[str, ...]] = (
     "weekly_tss",
     "time_in_zone",
     "hrv",
+    "race_prediction",
 )
-"""The exactly-four kinds ``plot_metric`` renders (ODD CH-10): each maps
+"""The five kinds ``plot_metric`` renders (ODD CH-10 + RP-10): each maps
 to ONE canonical kind string, one renderer and one data assembly."""
 
 CHART_KIND_ALIASES: Final[dict[str, str]] = {
@@ -101,11 +111,6 @@ UNAVAILABLE_CHART_KINDS: Final[dict[str, str]] = {
         "the per-session trend assembly over session_durability is not built, "
         "so there is nothing truthful to draw — never fabricate a trend."
     ),
-    "race_prediction": (
-        "race prediction charts arrive with Feature 8 (race-prediction, "
-        "PROJECT_BRIEF §9.3). No prediction is fabricated in the meantime — "
-        "never estimate a race result yourself."
-    ),
 }
 """Kinds the renderers can draw but the engine cannot source yet: the
 tool answers with THIS detail verbatim instead of a chart."""
@@ -115,6 +120,7 @@ CHART_RENDERERS: Final[dict[str, Callable[[Sequence[Any]], bytes]]] = {
     "weekly_tss": render_weekly_tss_by_sport,
     "time_in_zone": render_weekly_time_in_zone,
     "hrv": render_hrv_trend,
+    "race_prediction": render_race_prediction_breakdown,
 }
 
 
@@ -161,7 +167,9 @@ class ChartAssembly:
     missing_data_detail: str = ""
 
 
-Assembler = Callable[[AsyncSession, date, date, str | None], Awaitable[ChartAssembly]]
+Assembler = Callable[
+    [AsyncSession, date, date, str | None, Settings], Awaitable[ChartAssembly]
+]
 
 # --- per-kind assemblers (DB reads OUTSIDE the pure renderers, §6) --------
 
@@ -173,7 +181,11 @@ def _week_start(day: date) -> date:
 
 
 async def _assemble_performance_manager(
-    session: AsyncSession, start: date, end: date, sport: str | None
+    session: AsyncSession,
+    start: date,
+    end: date,
+    sport: str | None,
+    settings: Settings,
 ) -> ChartAssembly:
     """The ``daily_load`` COMBINED rows: CTL/ATL/TSB per day, all sports.
 
@@ -216,7 +228,11 @@ async def _assemble_performance_manager(
 
 
 async def _assemble_weekly_tss(
-    session: AsyncSession, start: date, end: date, sport: str | None
+    session: AsyncSession,
+    start: date,
+    end: date,
+    sport: str | None,
+    settings: Settings,
 ) -> ChartAssembly:
     """Per-sport ``daily_load`` rows, TSS summed per ISO week (the
     ``combined`` rows are excluded — they would double the stack)."""
@@ -253,7 +269,11 @@ async def _assemble_weekly_tss(
 
 
 async def _assemble_time_in_zone(
-    session: AsyncSession, start: date, end: date, sport: str | None
+    session: AsyncSession,
+    start: date,
+    end: date,
+    sport: str | None,
+    settings: Settings,
 ) -> ChartAssembly:
     """``weekly_intensity`` rows WITH zone data (``status == "data"``),
     seconds -> minutes; ``no_data`` weeks are excluded — a missing week is
@@ -297,7 +317,11 @@ async def _assemble_time_in_zone(
 
 
 async def _assemble_hrv(
-    session: AsyncSession, start: date, end: date, sport: str | None
+    session: AsyncSession,
+    start: date,
+    end: date,
+    sport: str | None,
+    settings: Settings,
 ) -> ChartAssembly:
     """Daily ln(rMSSD) from ``wellness`` plus the readiness snapshot's
     per-day HRV baseline band (its own stored ``band_half_width_sd``).
@@ -395,18 +419,71 @@ def _ln_hrv_value(row: WellnessRow) -> float | None:
     return None
 
 
+async def _assemble_race_prediction(
+    session: AsyncSession,
+    start: date,
+    end: date,
+    sport: str | None,
+    settings: Settings,
+) -> ChartAssembly:
+    """Feature 8's distance path (RP-10) rendered as the prediction
+    breakdown chart (CH-8): one bar per segment with its uncertainty
+    interval.
+
+    ``sport`` carries the RACE DISTANCE KEY (``sprint``, ``olympic``,
+    ``half``, ``full``) — NOT an engine sport — already validated by the
+    tool wrapper. ``date_range`` is IGNORED: a prediction is about a
+    race distance, not a trailing window. The distance path never
+    touches the database (documented in :mod:`app.agent.race_tool`), so
+    ``session``/``start``/``end`` are correspondingly unused."""
+    result = await race_tool.predict_race(
+        session,
+        race_id=None,
+        distance=sport or "",
+        target_date=None,
+        settings=settings,
+        computed_at=datetime.now(UTC),
+    )
+    if result.status != "ok" or result.segments is None:
+        return ChartAssembly(
+            kind="race_prediction",
+            samples=(),
+            missing_data_detail=result.detail or "the race prediction is unavailable",
+        )
+    samples = tuple(
+        RacePredictionSample(
+            label=segment.segment,
+            point_seconds=segment.point,
+            lower_seconds=segment.lower,
+            upper_seconds=segment.upper,
+        )
+        for segment in result.segments
+    )
+    return ChartAssembly(kind="race_prediction", samples=samples)
+
+
 _ASSEMBLERS: Final[dict[str, Assembler]] = {
     "performance_manager": _assemble_performance_manager,
     "weekly_tss": _assemble_weekly_tss,
     "time_in_zone": _assemble_time_in_zone,
     "hrv": _assemble_hrv,
+    "race_prediction": _assemble_race_prediction,
 }
 
 
 async def assemble_chart_samples(
-    session: AsyncSession, kind: str, start: date, end: date, sport: str | None
+    session: AsyncSession,
+    kind: str,
+    start: date,
+    end: date,
+    sport: str | None,
+    settings: Settings,
 ) -> ChartAssembly:
     """Assemble the renderer inputs for ``kind`` over the inclusive
-    ``[start, end]`` window (dispatch through :data:`_ASSEMBLERS`)."""
+    ``[start, end]`` window (dispatch through :data:`_ASSEMBLERS`).
+
+    ``settings`` is the tool's resolved settings — the
+    ``race_prediction`` assembler reads the athlete inputs from it; the
+    DB-backed assemblers ignore it."""
     assembler = _ASSEMBLERS[kind]
-    return await assembler(session, start, end, sport)
+    return await assembler(session, start, end, sport, settings)

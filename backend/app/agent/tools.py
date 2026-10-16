@@ -63,6 +63,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from strands.tools import tool
 
+from app.agent import race_tool
 from app.agent.chart_tool import (
     CHART_KIND_ALIASES,
     CHART_RENDERERS,
@@ -72,6 +73,7 @@ from app.agent.chart_tool import (
     PlotMetricResult,
     assemble_chart_samples,
 )
+from app.agent.race_tool import RACE_DISTANCE_KEYS, RacePredictionResult
 from app.api.charts import build_chart_media_url
 from app.charts.storage import save_chart
 from app.core.settings import Settings, get_settings
@@ -1252,53 +1254,97 @@ async def propose_threshold_update(
 
 
 # ---------------------------------------------------------------------------
-# Delegated stubs: capabilities that do not exist yet (WA-6, brief §9.3)
+# predict_race (Feature 8, §9.3/§7.7) — RP-10
 # ---------------------------------------------------------------------------
-# PROJECT_BRIEF §9.3 lets the registry stub-delegate until the features
-# that back these tools land. ``predict_race`` is the last remaining
-# stub: registered with an HONEST error contract, it makes it impossible
-# for the model to get a fabricated prediction. ``insufficient_data``
-# would be a LIE here — nothing is missing; the capability simply does
-# not exist yet.
 
 
 @tool
 async def predict_race(
     race_id: int | None = None,
-    distance: float | None = None,
+    distance: str | None = None,
     target_date: str | None = None,
 ) -> dict[str, Any]:
-    """Race prediction: NOT IMPLEMENTED YET.
+    """Predict one triathlon race: per-segment and total times with FULL
+    uncertainty bounds and the model's assumptions — never a bare number
+    (PROJECT_BRIEF §7.7/§9.3).
 
-    This tool is a deliberate stub: the race-prediction capability
-    arrives with Feature 8 (``race-prediction``, PROJECT_BRIEF §9.3/§12
-    feature list), which will provide per-segment and total predictions
-    with bounds and assumptions, computed by the deterministic engine.
-    Until then this tool ALWAYS returns ``status="error"`` naming the
-    feature that will bring the capability. It NEVER fabricates a
-    prediction (no finish time, no pace, no splits) and NEVER returns
-    ``insufficient_data`` — nothing is missing; the capability does not
-    exist yet. Do not estimate or guess a race result yourself: tell the
-    athlete that race predictions are not available yet.
+    Give EXACTLY ONE of:
+    - ``race_id``: a race registered in the race table. The prediction
+      runs on that race's course profile (gradient segments, expected
+      temperature, altitude) and past transition times, and is PERSISTED
+      as a prediction row referencing the race.
+    - ``distance``: a standard race distance key — "sprint", "olympic",
+      "half" or "full". A flat standard course at the ISA standard
+      atmosphere defaults is assumed (documented, and stated in the
+      result's coverage) and the prediction is NOT persisted (no race row
+      exists to reference).
+
+    Returns on success (status "ok"): ``race_key``, ``target_date``,
+    ``segments`` — swim, bike (one entry per course segment), run off the
+    bike, t1 and t2 — plus ``total``; every one of them is a FULL
+    prediction envelope ``{point, lower, upper, method, assumptions,
+    model_version}`` with the times in SECONDS and the engine's
+    assumptions carried through VERBATIM; ``coverage`` (what backed the
+    prediction: the path, course segments consumed, temperature/altitude,
+    each athlete input's provenance, where the transitions came from, and
+    whether a prediction row was persisted); ``engine_version`` and
+    ``computed_at``.
+
+    The athlete inputs come from the owner configuration (the same
+    ATHLETE_* variables the zone tools read): FTP, CSS and the threshold
+    run speed. A missing one returns ``status="insufficient_data"``
+    naming EXACTLY which variable is missing — inputs are never guessed,
+    and no finish time, split or pace is ever fabricated. An unknown
+    ``race_id``, an unknown ``distance`` key, giving neither or both of
+    ``race_id``/``distance``, or an unparseable ``target_date`` returns
+    ``status="error"``. NEVER estimate a race result yourself: if the
+    tool answers with an error or insufficient_data, tell the athlete
+    what is missing instead.
 
     Args:
-        race_id: Optional id of a registered target race.
-        distance: Optional race distance in kilometres (used when no
-            race_id is given).
+        race_id: Id of a race registered in the race table.
+        distance: A standard distance key: "sprint", "olympic", "half"
+            or "full".
         target_date: Optional race date (ISO "YYYY-MM-DD").
     """
     settings = _settings()
-    return {
-        "status": "error",
-        "detail": (
-            "race prediction is not implemented yet: it arrives with "
-            "Feature 8 (race-prediction, PROJECT_BRIEF §9.3). No prediction "
-            "is fabricated in the meantime — never estimate a race result "
-            "yourself."
-        ),
-        "engine_version": settings.engine_version,
-        "computed_at": _now(settings).isoformat(),
-    }
+    now = _now(settings)
+
+    def error_result(race_key: str | None, detail: str) -> dict[str, Any]:
+        return RacePredictionResult(
+            status="error",
+            race_key=race_key,
+            detail=detail,
+            engine_version=settings.engine_version,
+            computed_at=now.isoformat(),
+        ).model_dump(exclude_none=True)
+
+    if (race_id is None) == (distance is None):
+        return error_result(
+            None,
+            "give exactly ONE of race_id (a registered race) or distance "
+            f"(one of {list(race_tool.RACE_DISTANCE_KEYS)}).",
+        )
+    parsed_target: date | None = None
+    if target_date is not None:
+        try:
+            parsed_target = dt.date.fromisoformat(target_date)
+        except ValueError:
+            return error_result(
+                None, "target_date must be ISO 'YYYY-MM-DD'."
+            )
+    async with tool_session() as session:
+        result = await race_tool.predict_race(
+            session,
+            race_id=race_id,
+            distance=distance,
+            target_date=parsed_target,
+            settings=settings,
+            computed_at=now,
+        )
+    # exclude_none: error/insufficient_data responses carry no prediction
+    # keys at all — nothing is ever fabricated (§7.7/§9.3).
+    return result.model_dump(exclude_none=True)
 
 
 # ---------------------------------------------------------------------------
@@ -1352,13 +1398,18 @@ async def plot_metric(
 
     Args:
         kind: Which chart to render: "performance_manager" (alias
-            "ctl_atl"), "weekly_tss", "time_in_zone" (alias "intensity")
-            or "hrv".
+            "ctl_atl"), "weekly_tss", "time_in_zone" (alias "intensity"),
+            "hrv" or "race_prediction".
         date_range: Trailing window ending today ("7d", "30d", "90d") or
-            an explicit inclusive range "YYYY-MM-DD/YYYY-MM-DD".
+            an explicit inclusive range "YYYY-MM-DD/YYYY-MM-DD". IGNORED
+            for "race_prediction" (a prediction is about a race
+            distance, not a trailing window).
         sport: Optional sport filter (an engine sport name such as
             "ride", "run", "swim"); meaningful for "weekly_tss" and
             "time_in_zone", ignored for "performance_manager" and "hrv".
+            For "race_prediction" this is REQUIRED and is the RACE
+            DISTANCE KEY (sprint, olympic, half, full) — not an engine
+            sport.
     """
     settings = _settings()
     now = _now(settings)
@@ -1387,7 +1438,22 @@ async def plot_metric(
         return error_result(_RANGE_FORMAT_HELP)
     window_start, window_end = window
     sport_input = (sport or "").strip().lower()
-    if sport_input and sport_input not in ENGINE_KNOWN_SPORTS:
+    if canonical_kind == "race_prediction":
+        # The race distance key travels in `sport` for this kind and is
+        # REQUIRED — a distance is never guessed. The engine-sport
+        # validation below does not apply to it.
+        if not sport_input:
+            return error_result(
+                "kind 'race_prediction' needs the race distance in `sport` "
+                f"(one of {list(RACE_DISTANCE_KEYS)}); the distance is "
+                "never guessed. `date_range` is ignored for this kind."
+            )
+        if sport_input not in RACE_DISTANCE_KEYS:
+            return error_result(
+                f"unknown race distance {sport!r}: expected one of "
+                f"{list(RACE_DISTANCE_KEYS)}."
+            )
+    elif sport_input and sport_input not in ENGINE_KNOWN_SPORTS:
         return error_result(_unknown_sport_error(settings, sport_input)["detail"])
     # FAIL CLOSED before any data is read or rendered: without the media
     # configuration no URL could be handed out, so no chart is stored.
@@ -1401,7 +1467,7 @@ async def plot_metric(
 
     async with tool_session() as session:
         assembly = await assemble_chart_samples(
-            session, canonical_kind, window_start, window_end, sport_input or None
+            session, canonical_kind, window_start, window_end, sport_input or None, settings
         )
         if not assembly.samples:
             return PlotMetricResult(
@@ -1573,10 +1639,11 @@ def tool_list() -> list[Any]:
     vended tools (shell/file/HTTP). ``plot_metric`` is the Feature 7
     implementation (CH-10): it renders the chart server-side and returns
     a chart id plus a signed, expiring public media URL.
-    ``predict_race`` remains a registered stub that delegates to Feature 8
-    with an honest not-implemented error contract until that feature
-    lands. Each tool joined this list with its checklist item — never
-    silently, never from a loader.
+    ``predict_race`` is the Feature 8 implementation (RP-10): it returns
+    the full per-segment and total prediction envelopes with bounds and
+    assumptions, computed by the deterministic engine. Each tool joined
+    this list with its checklist item — never silently, never from a
+    loader.
     """
     return [
         get_load_status,
