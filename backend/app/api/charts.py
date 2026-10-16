@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
@@ -76,6 +76,29 @@ def _signature(payload: str, secret: str) -> str:
     return hmac.new(
         secret.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256
     ).hexdigest()
+
+
+def build_chart_media_url(chart_id: int, settings: Settings, now: datetime) -> str | None:
+    """The PUBLIC, expiring media URL for ``chart_id`` (CH-10, §9.1).
+
+    Built as ``{chart_public_base_url}/charts/{chart_id}?token={signed
+    token}`` where the token expires at ``now +
+    Settings.chart_media_ttl_seconds``. The secret itself NEVER appears in
+    the URL — only the HMAC token — and the token is never logged (the
+    tool hands it to the reply, nothing else records it).
+
+    Fails CLOSED: returns ``None`` (the caller must answer with an error,
+    never an unsigned or non-public URL) when ``chart_media_secret`` or
+    ``chart_public_base_url`` is unconfigured — no token can be signed /
+    no URL Twilio could fetch exists.
+    """
+    secret = settings.chart_media_secret
+    base = settings.chart_public_base_url.rstrip("/")
+    if not secret or not base:
+        return None
+    expires_at = now + timedelta(seconds=settings.chart_media_ttl_seconds)
+    token = sign_chart_token(chart_id, expires_at, secret)
+    return f"{base}/charts/{chart_id}?token={token}"
 
 
 def get_chart_settings() -> Settings:
