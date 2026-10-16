@@ -190,9 +190,12 @@ def make_snapshot(
 # ---------------------------------------------------------------------------
 
 class TestKindRegistry:
-    def test_supported_kinds_are_exactly_the_four_brief_kinds(self) -> None:
+    def test_supported_kinds_are_exactly_the_five_registered_kinds(self) -> None:
+        # CH-10 shipped the four window-based kinds; RP-10 added the
+        # race_prediction kind wired to Feature 8's distance path.
         assert SUPPORTED_CHART_KINDS == (
             "performance_manager", "weekly_tss", "time_in_zone", "hrv",
+            "race_prediction",
         )
 
     def test_aliases_resolve_to_one_canonical_kind_each(self) -> None:
@@ -257,12 +260,12 @@ class TestUnsupportedKinds:
         assert result["status"] != "insufficient_data"
         assert result["chart_id"] is None and result["media_url"] is None
 
-    async def test_race_prediction_names_feature_8_never_fabricates(
+    async def test_race_prediction_needs_the_distance_never_guesses_it(
         self, media_settings: Settings
     ) -> None:
         result = await tools.plot_metric(kind="race_prediction", date_range="30d")
         assert result["status"] == "error"
-        assert "Feature 8" in result["detail"]
+        assert "race distance" in result["detail"].lower()
         assert result["status"] != "insufficient_data"
         assert result["chart_id"] is None and result["media_url"] is None
 
@@ -294,8 +297,15 @@ class TestFailClosedWithoutMediaConfig:
         self, no_media_settings: Settings
     ) -> None:
         # No DB fixture on purpose: the fail-closed check must fire BEFORE
-        # any data is read or rendered.
-        result = await tools.plot_metric(kind="performance_manager", date_range="7d")
+        # any data is read or rendered. The no-media settings are set as
+        # the EXPLICIT override — the ambient .env legitimately carries
+        # CHART_* once the media route is configured, and this test must
+        # stay hermetic to that.
+        tools.set_settings_override(no_media_settings)
+        try:
+            result = await tools.plot_metric(kind="performance_manager", date_range="7d")
+        finally:
+            tools.reset_settings_override()
         assert result["status"] == "error"
         assert "media" in result["detail"].lower()
         assert result["chart_id"] is None
@@ -609,3 +619,51 @@ class TestHrvChart:
         result = await tools.plot_metric(kind="hrv", date_range="30d")
         assert result["status"] == "insufficient_data"
         assert "ln rmssd" in result["detail"].lower() or "hrv" in result["detail"].lower()
+
+
+# ---------------------------------------------------------------------------
+# race_prediction kind: wired to Feature 8's distance path (RP-10 consumer)
+# ---------------------------------------------------------------------------
+
+class TestRacePredictionChart:
+    async def test_renders_the_prediction_breakdown_from_the_athlete_profile(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The distance path needs NO database: the chart renders from the
+        owner-configured athlete inputs over the documented standard flat
+        course. The PERSISTENCE seam is stubbed (a fake chart id) — the
+        wiring under test is assembler -> renderer -> save -> URL."""
+        settings = make_settings(
+            athlete_ftp_w=250.0,
+            athlete_css_speed_mps=1.8,
+            athlete_threshold_run_speed_mps=3.1,
+        )
+        tools.set_settings_override(settings)
+
+        async def fake_save_chart(*args: Any, **kwargs: Any) -> int:
+            return 42
+
+        monkeypatch.setattr(tools, "save_chart", fake_save_chart)
+        try:
+            result = await tools.plot_metric(
+                kind="race_prediction", date_range="30d", sport="olympic"
+            )
+        finally:
+            tools.reset_settings_override()
+
+        assert result["status"] == "ok", result
+        assert result["chart_id"] is not None
+        assert result["media_url"] is not None
+        assert result["coverage"] is not None
+        # One sample per predicted segment (swim, bike, run, t1, t2).
+        assert result["coverage"]["samples_in_chart"] > 0
+
+    async def test_unknown_race_distance_is_an_error_naming_the_valid_keys(
+        self, media_settings: Settings
+    ) -> None:
+        result = await tools.plot_metric(
+            kind="race_prediction", date_range="30d", sport="double_ironman"
+        )
+        assert result["status"] == "error"
+        assert "unknown race distance" in result["detail"].lower()
+        assert result["chart_id"] is None and result["media_url"] is None

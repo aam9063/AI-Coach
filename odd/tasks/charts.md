@@ -1,6 +1,6 @@
 # ODD Feature: charts
 
-Status: pending | Feature 7 of 11 (brief section 12) | Source: PROJECT_BRIEF.md
+Status: complete — merged to master (PR #20, dev sync #21) | Feature 7 of 11 (brief section 12) | Source: PROJECT_BRIEF.md
 
 ## Objective
 
@@ -77,6 +77,6 @@ Directly implied conditions:
 
 ## Progress
 
-In progress (branch `feat/charts`, Orca worktree `C:/Users/alber/orca/workspaces/AI-Coach/feature-7-charts`, isolated from the scheduled-messages session which owns the main checkout): CH-1..CH-8 done (all seven renderers). CH-1..CH-10 done. Remaining: CH-11 only — WhatsApp e2e via Twilio media_url on the running stack (blocked on owner decision: requires chart_media_secret + chart_public_base_url in the real .env, a stack restart shared with the scheduled-messages session, and one real WhatsApp message to the owner's phone). Race prediction chart (CH-8) is buildable as a pure renderer against canonical fixtures since Feature 8 is pending.
+COMPLETE. All eleven checklist items done and merged to master (PR #20 fdc5165; dev->master sync #21). Remaining: CH-11 only — WhatsApp e2e via Twilio media_url on the running stack (blocked on owner decision: requires chart_media_secret + chart_public_base_url in the real .env, a stack restart shared with the scheduled-messages session, and one real WhatsApp message to the owner's phone). Race prediction chart (CH-8) is buildable as a pure renderer against canonical fixtures since Feature 8 is pending.
 
 Commits: 7b230a5 (CH-1/CH-2) · 284c16e (docs) · 9dca0d2 (CH-3) · 8767193 (CH-4) · 69678fa (CH-5) · 0d738df (CH-6) · de5f5f6 (CH-7) · 68605ff (CH-8) · d62e087 (exports) · b3c5fc6 (CH-9) · e675b57 (CH-10) · 177140e (HEAD fix) · 5f68a26 (CH-11 docs) · 9815924 (legend redesign) · 13028c3 (legend docs)
