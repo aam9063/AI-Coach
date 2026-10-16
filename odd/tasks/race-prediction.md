@@ -48,6 +48,10 @@ The owner wants forecasts for sprint, olympic, 70.3 and full distance races with
 - [ ] `RP-9`: RED+GREEN: prediction envelope contract test — every prediction (segment and total) returns exactly `{point, lower, upper, method, assumptions, model_version}` and lower ≤ point ≤ upper (§7.7, §12.8).
 - [ ] `RP-10`: Add `race` and `prediction` DB models with course data, goal, bounds and model version (§6); implement the `predict_race(race_id | distance, target_date?)` tool returning typed Pydantic output with `computed_at`, `engine_version`, coverage info (§9.3).
 
+## Log
+
+L1: owner chose (2026-10-16) Feature 8 race-prediction as the next feature, worked in the isolated `feature-7-charts` Orca worktree on branch feat/race-prediction (from master) so it cannot clash with the scheduled-messages session that owns the main checkout (scheduler/*, settings.py, main.py). Bonus linkage: this feature un-hides the `race_prediction` (and, once mean-maximal efforts persist, `mean_maximal_curve`) chart kinds wired by Feature 7's plot_metric.
+
 ## Acceptance criteria
 
 From PROJECT_BRIEF.md §12.8:
