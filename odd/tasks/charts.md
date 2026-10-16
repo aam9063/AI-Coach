@@ -69,4 +69,4 @@ Directly implied conditions:
 
 In progress (branch `feat/charts`, from dev after PR #16 merged): CH-1, CH-2 done; CH-3 (weekly TSS stacked) next. Race prediction chart (CH-8) is buildable as a pure renderer against canonical fixtures since Feature 8 is pending. Note: the checkout is shared with an in-flight `feat/scheduled-messages` session — commits here add only charts files.
 
-Commits: (pending this work unit)
+Commits: 7b230a5 feat(charts): snapshot scaffolding and the Performance Manager chart (CH-1, CH-2)
