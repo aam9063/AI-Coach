@@ -71,4 +71,4 @@ Directly implied conditions:
 
 In progress (branch `feat/charts`, Orca worktree `C:/Users/alber/orca/workspaces/AI-Coach/feature-7-charts`, isolated from the scheduled-messages session which owns the main checkout): CH-1, CH-2, CH-3 done; CH-4 (mean-maximal power curve) next. Race prediction chart (CH-8) is buildable as a pure renderer against canonical fixtures since Feature 8 is pending.
 
-Commits: 7b230a5 feat(charts): snapshot scaffolding and the Performance Manager chart (CH-1, CH-2) · 284c16e docs(odd): record CH-1/CH-2 commit evidence · (CH-3 work unit pending this commit)
+Commits: 7b230a5 feat(charts): snapshot scaffolding and the Performance Manager chart (CH-1, CH-2) · 284c16e docs(odd): record CH-1/CH-2 commit evidence · 9dca0d2 feat(charts): weekly TSS stacked by sport renderer (CH-3)
