@@ -37,6 +37,26 @@ LABEL_FONTSIZE = 12
 TICK_FONTSIZE = 10
 LEGEND_FONTSIZE = 11
 
+# Categorical cycle for per-sport or per-series bands (weekly TSS, time in
+# zone, ...). Stable assignment: a given label always maps to the same
+# color, so stacks stay readable across charts and snapshots.
+CATEGORICAL = (
+    "#1f5fbf",
+    "#e07b28",
+    "#3a9e5f",
+    "#8a5fbf",
+    "#c23b5f",
+    "#2aa0a8",
+    "#b08800",
+    "#5d6d7e",
+)
+
+
+def categorical_color(label: str) -> str:
+    """Stable color for a categorical label (sport, zone, ...)."""
+    index = sum(ord(ch) for ch in label) % len(CATEGORICAL)
+    return CATEGORICAL[index]
+
 
 def render_figure_to_png(fig: Figure) -> bytes:
     """Serialize a figure to PNG bytes under the §10 conventions."""

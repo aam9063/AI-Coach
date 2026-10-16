@@ -38,7 +38,7 @@ The coach must "generate charts of performance metrics and send them as images o
 
 - [x] `CH-1`: RED: snapshot-test scaffolding for chart renderers (canonical input fixtures, PNG snapshot storage and comparison, clear update procedure) with one failing first case (§10, §12.7).
 - [x] `CH-2`: GREEN: implement the Performance Manager chart (CTL, ATL, TSB over time) as a pure function data-in/PNG-bytes-out with §10 conventions (1080 px, palette, units on axes, date on title); snapshot green.
-- [ ] `CH-3`: RED+GREEN: weekly TSS stacked by sport chart (§10).
+- [x] `CH-3`: RED+GREEN: weekly TSS stacked by sport chart (§10).
 - [ ] `CH-4`: RED+GREEN: mean-maximal power curve with CP fit overlay, reusing the curve/fit outputs from Feature 4 (§10, §7.3).
 - [ ] `CH-5`: RED+GREEN: run pace/HR trend and EF trend charts (§10).
 - [ ] `CH-6`: RED+GREEN: time-in-zone (3-zone) per week chart (§10, §7.5).
@@ -65,8 +65,10 @@ Directly implied conditions:
 - Conventions checked: PNG width 1080 asserted explicitly (``test_is_1080_px_wide_per_rendering_conventions``), title carries the data's date range, units on the y-axis, empty input rejected with ``ValueError`` (never an empty chart).
 - ``uv run ruff check app/charts tests/charts`` and ``uv run mypy app/charts tests/charts`` clean.
 
+- CH-3, same branch: RED observed (``ModuleNotFoundError: app.charts.weekly_tss``); missing-baseline path fails loudly; after regeneration the suite is green on plain re-runs (8 tests). Extra pins: negative TSS rejected (``ValueError``), a sport appearing in only some weeks stacks with a consistent color. ruff + mypy clean.
+
 ## Progress
 
-In progress (branch `feat/charts`, from dev after PR #16 merged): CH-1, CH-2 done; CH-3 (weekly TSS stacked) next. Race prediction chart (CH-8) is buildable as a pure renderer against canonical fixtures since Feature 8 is pending. Note: the checkout is shared with an in-flight `feat/scheduled-messages` session — commits here add only charts files.
+In progress (branch `feat/charts`, Orca worktree `C:/Users/alber/orca/workspaces/AI-Coach/feature-7-charts`, isolated from the scheduled-messages session which owns the main checkout): CH-1, CH-2, CH-3 done; CH-4 (mean-maximal power curve) next. Race prediction chart (CH-8) is buildable as a pure renderer against canonical fixtures since Feature 8 is pending.
 
-Commits: 7b230a5 feat(charts): snapshot scaffolding and the Performance Manager chart (CH-1, CH-2)
+Commits: 7b230a5 feat(charts): snapshot scaffolding and the Performance Manager chart (CH-1, CH-2) · 284c16e docs(odd): record CH-1/CH-2 commit evidence · (CH-3 work unit pending this commit)

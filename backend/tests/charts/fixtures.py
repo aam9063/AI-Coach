@@ -11,9 +11,12 @@ from __future__ import annotations
 from datetime import date, timedelta
 
 from app.charts.performance_manager import PerformanceManagerSample
+from app.charts.weekly_tss import WeeklyTssSample
 
 FIRST_DAY = date(2026, 9, 1)
 DAYS = 28
+FIRST_WEEK = date(2026, 8, 31)  # Monday
+WEEKS = 6
 
 
 def _performance_manager_samples() -> tuple[PerformanceManagerSample, ...]:
@@ -33,4 +36,27 @@ def _performance_manager_samples() -> tuple[PerformanceManagerSample, ...]:
     return tuple(samples)
 
 
+def _weekly_tss_samples() -> tuple[WeeklyTssSample, ...]:
+    """6 weeks of per-sport TSS totals (ride/run/swim) with a build rhythm.
+
+    Total weekly load grows ~15% per week, and the sport mix shifts so the
+    stacked bands are visibly distinct: ride dominant, run steady, swim flat.
+    """
+    sports = ("ride", "run", "swim")
+    samples: list[WeeklyTssSample] = []
+    for w in range(WEEKS):
+        total = 300.0 * (1.15**w)
+        ride = total * 0.55
+        run = total * (0.25 + 0.01 * w)
+        swim = total - ride - run
+        samples.append(
+            WeeklyTssSample(
+                week_start=FIRST_WEEK + timedelta(weeks=w),
+                sport_tss=tuple(zip(sports, (ride, run, swim), strict=True)),
+            )
+        )
+    return tuple(samples)
+
+
 PERFORMANCE_MANAGER_SAMPLES = _performance_manager_samples()
+WEEKLY_TSS_SAMPLES = _weekly_tss_samples()

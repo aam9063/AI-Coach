@@ -11,8 +11,11 @@ from app.charts.performance_manager import (
     PerformanceManagerSample,
     render_performance_manager,
 )
+from app.charts.weekly_tss import WeeklyTssSample, render_weekly_tss_by_sport
 
 __all__ = [
     "PerformanceManagerSample",
+    "WeeklyTssSample",
     "render_performance_manager",
+    "render_weekly_tss_by_sport",
 ]
