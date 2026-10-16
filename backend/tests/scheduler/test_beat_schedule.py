@@ -1,21 +1,28 @@
-"""Minimal beat schedule (owner-approved, 2026-10-08): daily sync + recompute.
+"""Beat schedule (ODD task SCH-1/SCH-2, brief §11): 30-minute sync + recompute.
 
 These tests are the executable specification of the schedule armed on the
 tri-coach Celery app in :mod:`app.scheduler.celery_app`:
 
-- **Exactly three daily entries** — ``daily-intervals-sync`` (Intervals.icu
-  sync), ``daily-load-recompute`` (TSS/CTL/ATL/TSB) and ``morning-brief``
-  (SCH-5). The remaining beat jobs (post-activity review, weekly report)
-  remain a later feature and must NOT appear here yet.
+- **Exactly three entries** — ``daily-intervals-sync`` (Intervals.icu sync,
+  EVERY 30 MINUTES per §11), ``daily-load-recompute`` (TSS/CTL/ATL/TSB,
+  also every 30 minutes, offset after the sync) and ``morning-brief``
+  (SCH-5, daily at the configured time). The remaining §11 jobs
+  (post-activity review, weekly report) remain later tasks (SCH-7/SCH-8)
+  and must NOT appear here yet — in particular the weekly report entry is
+  NOT armed because its task does not exist (documented SCH-1 deviation:
+  no beat entry for a task that is not implemented).
 - **Task names are pinned and resolvable**: each entry's task name must be
   registered on the app (``celery_app.tasks``), so the worker can actually
   run what beat sends — no typos.
-- **Cadence**: both entries fire every day in the early morning (sync
-  06:30, recompute 06:55) so the data is fresh before the coach talks to
-  the owner in the morning.
+- **Cadence**: the sync fires every 30 minutes (§11: ``sync_intervals``
+  every 30 min; the task is idempotent and the client is paced, so a
+  re-run creates no duplicates and costs only API calls) and the recompute
+  fires every 30 minutes 25 minutes after each sync, so the load numbers
+  are at most half an hour behind the data and are fresh before the 07:30
+  morning brief.
 - **Timezone**: the app timezone is the owner setting (``Settings.timezone``,
   ``Europe/Madrid``) — the schedule must not silently fall back to UTC.
-- **Independence / failure behaviour**: the two entries are independent
+- **Independence / failure behaviour**: the three entries are independent
   beat entries. A failing sync never suppresses the recompute entry: beat
   fires each entry on its own cadence, the recompute is idempotent, and it
   simply recomputes from whatever data the last successful sync left.
@@ -47,8 +54,9 @@ def _entry(name: str) -> dict[str, Any]:
     return dict(BEAT_SCHEDULE[name])
 
 
-def test_schedule_has_exactly_the_three_daily_entries() -> None:
-    """Sync + recompute + morning brief; nothing else (yet)."""
+def test_schedule_has_exactly_the_three_entries() -> None:
+    """Sync + recompute + morning brief; the §11 jobs without a task yet
+    (post-activity review, weekly report) must NOT appear (SCH-7/SCH-8)."""
     assert set(BEAT_SCHEDULE) == {SYNC_ENTRY, RECOMPUTE_ENTRY, BRIEF_ENTRY}
 
 
@@ -71,14 +79,19 @@ def test_both_entries_pin_registered_task_names() -> None:
     assert "app.scheduler.morning_brief_tasks" in TASK_MODULES
 
 
-def test_sync_fires_daily_at_0630_and_recompute_at_0655() -> None:
-    """Daily cadence, recompute strictly after the sync window."""
+def test_sync_fires_every_30_minutes_and_recompute_offset_after() -> None:
+    """§11: sync every 30 minutes; recompute 25 minutes after each sync.
+
+    The 25-minute offset gives a single-athlete sync (minutes, not half an
+    hour) room to finish before the recompute reads the data, mirroring the
+    former 06:30→06:55 daily gap. Both fire every hour of every day.
+    """
     sync_cron = _entry(SYNC_ENTRY)["schedule"]
     recompute_cron = _entry(RECOMPUTE_ENTRY)["schedule"]
-    assert set(sync_cron.minute) == {30}
-    assert set(sync_cron.hour) == {6}
-    assert set(recompute_cron.minute) == {55}
-    assert set(recompute_cron.hour) == {6}
+    assert set(sync_cron.minute) == {0, 30}
+    assert set(sync_cron.hour) == set(range(24))
+    assert set(recompute_cron.minute) == {25, 55}
+    assert set(recompute_cron.hour) == set(range(24))
     # Every day of the week / month: no day-of-week or day-of-month filter.
     assert set(sync_cron.day_of_week) == set(range(7))
     assert set(recompute_cron.day_of_week) == set(range(7))
@@ -104,7 +117,7 @@ def test_morning_brief_fires_daily_at_the_configured_time() -> None:
     """SCH-5: daily, at the OWNER-CONFIGURED Europe/Madrid time (§11).
 
     The default (``Settings.morning_brief_time``, 07:30) lands strictly
-    after the 06:55 daily-load recompute so the brief reads freshly
+    after the :25 half-hour recompute (07:25) so the brief reads freshly
     recomputed numbers.
     """
     brief_cron = _entry(BRIEF_ENTRY)["schedule"]

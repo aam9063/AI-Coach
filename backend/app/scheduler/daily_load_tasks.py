@@ -23,9 +23,6 @@ morning sync just brought in.
 - **Offline tests**: inject ``session_factory`` (test-only seam; the
   scheduler never sets it) or monkeypatch the ``_run_recompute`` module
   seam — no database and no network needed.
-- **Scope note**: the richer beat jobs (morning brief, post-activity
-  review, weekly report) remain for the later ``scheduled-messages``
-  feature (§11); this module only arms the minimal approved schedule.
 """
 
 from __future__ import annotations

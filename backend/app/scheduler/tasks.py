@@ -41,11 +41,13 @@ from app.db.session import create_db_engine, make_session_factory
 from app.ingest.backfill import BackfillResult, backfill
 from app.ingest.client import IntervalsClient
 from app.ingest.sync import IntervalsClientProtocol
-from app.scheduler.celery_app import celery_app
+from app.scheduler.celery_app import SYNC_WINDOW_DAYS, celery_app
 
 # Module-level seam so tests can replace the backfill without the real
 # client/database being touched.
 _backfill = backfill
+
+__all__ = ["SYNC_WINDOW_DAYS", "run_sync", "run_sync_async", "sync_intervals"]
 
 
 def _summary(
@@ -72,14 +74,27 @@ def _summary(
     }
 
 
-async def _run_sync(
-    days: int,
-    end_date: str | None,
-    session_factory: async_sessionmaker[AsyncSession] | None,
-    client: IntervalsClientProtocol | None,
-    config: Settings,
+async def run_sync_async(
+    days: int = SYNC_WINDOW_DAYS,
+    end_date: str | None = None,
+    *,
+    session_factory: async_sessionmaker[AsyncSession] | None = None,
+    client: IntervalsClientProtocol | None = None,
+    settings: Settings | None = None,
 ) -> dict[str, Any]:
-    """Run the backfill with the injected (or built) engine/client seams."""
+    """Run the N-day sync and return the JSON-serializable summary.
+
+    The ASYNC body of the sync job — the exact function the beat entry's
+    ``sync_intervals`` task wraps via :func:`run_sync`, and the default
+    job behind the on-demand ``/sync`` command (SCH-4, §11): one job, two
+    triggers. Awaitable so callers already inside an event loop (the
+    WhatsApp pipeline) can run it without ``asyncio.run``. With no
+    injected dependencies it builds its own engine and session factory
+    (from ``Settings.database_url``) and the sync ``IntervalsClient``
+    (created and closed around the run); both seams can be injected for
+    tests, in which case nothing is constructed here.
+    """
+    config = settings or get_settings()
     if client is not None and session_factory is not None:
         result = await _backfill(
             days,
@@ -90,7 +105,7 @@ async def _run_sync(
         )
         return _summary(result, days=days, end_date=end_date)
 
-    # No injected seams: the task owns the full lifecycle — engine, session
+    # No injected seams: the job owns the full lifecycle — engine, session
     # factory, and the sync client (created and closed around the run).
     engine = create_db_engine(config.database_url)
     try:
@@ -120,10 +135,18 @@ def run_sync(
 
     Thin synchronous wrapper used by the Celery task; also the in-process
     entry point for tests (inject both ``session_factory`` and ``client``
-    to run without a database or network).
+    to run without a database or network). The awaited body is
+    :func:`run_sync_async`.
     """
-    config = settings or get_settings()
-    return asyncio.run(_run_sync(days, end_date, session_factory, client, config))
+    return asyncio.run(
+        run_sync_async(
+            days,
+            end_date,
+            session_factory=session_factory,
+            client=client,
+            settings=settings,
+        )
+    )
 
 
 @celery_app.task(name="app.scheduler.tasks.sync_intervals")  # type: ignore[untyped-decorator]
