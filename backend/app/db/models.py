@@ -916,3 +916,99 @@ class ChartRow(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utcnow
     )
+
+
+class RaceRow(Base):
+    """One registered target race (RP-10, brief §6/§7.7).
+
+    §6 ``race``: course data (elevation profile, expected temperature),
+    goal. The row is OWNER-SEEDED INPUT data the ``predict_race`` tool
+    consumes — not an engine output — so it carries no ``engine_version``;
+    ``created_at`` is the seed-time stamp (the ``_utcnow`` convention).
+
+    Columns:
+
+    - ``race_key``: NOT NULL. One of the engine's race distance keys (the
+      same vocabulary as ``app.engine.predict.DEFAULT_TRANSITIONS_S``:
+      ``"sprint"``/``"olympic"``/``"half"``/``"full"``) or a custom label
+      for an owner-specific race. The engine resolves transition DEFAULTS
+      from the known keys; a custom label falls back to the engine's
+      generic defaults.
+    - ``name``: nullable display name.
+    - ``course``: nullable JSONB — the course profile the bike prediction
+      consumes: ``{"segments": [{"distance_m": ..., "gradient": ...}],
+      "temperature_c": ..., "altitude_m": ...}``. NULL means no course
+      data was seeded: the tool then falls back to the documented standard
+      flat course for the race key (and cannot predict a custom key at
+      all). Course data originates from the owner (§6, §15).
+    - ``transitions``: nullable JSONB — past T1/T2 observations
+      (``{"past_t1_s": [...], "past_t2_s": [...]}``, seconds) or per-race
+      overrides; absent keys mean "use the engine defaults".
+    - ``goal``: nullable free text (the athlete's own target, e.g. "sub
+      2:30") — context for the conversation, never an engine input.
+    """
+
+    __tablename__ = "race"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # Engine race distance key ("sprint"/"olympic"/"half"/"full") or a
+    # custom label.
+    race_key: Mapped[str] = mapped_column(String(64))
+    name: Mapped[str | None] = mapped_column(String(255), default=None)
+    # Course profile JSONB; NULL = no course data seeded.
+    course: Mapped[dict[str, Any] | None] = mapped_column(JSONB, default=None)
+    # Past/per-race transition data JSONB; NULL = engine defaults.
+    transitions: Mapped[dict[str, Any] | None] = mapped_column(JSONB, default=None)
+    goal: Mapped[str | None] = mapped_column(Text, default=None)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
+
+
+class PredictionRow(Base):
+    """One persisted race prediction, envelope-complete (RP-10, §6/§7.7).
+
+    §6 ``prediction``: per-segment predicted times with lower/upper bounds
+    and model version. Written ONLY by the ``predict_race`` tool's race_id
+    path — a distance-only prediction has no race row to reference and is
+    returned WITHOUT persisting (documented RP-10 decision). The row keeps
+    the engine's full envelopes verbatim (§7.7: every prediction is
+    ``{point, lower, upper, method, assumptions, model_version}``, never a
+    bare number) so a stored prediction is auditable back to the model
+    that produced it.
+
+    - ``race_id``: nullable FK to :class:`RaceRow` — the prediction's race
+      when one was registered (same plain-FK convention as
+      ``evidence_chunk.source_id``).
+    - ``race_key``: NOT NULL echo of the predicted race's key (the row is
+      readable without joining ``race``; for distance-only predictions it
+      would be the distance key).
+    - ``target_date``: nullable race date (ISO) the prediction was made
+      for.
+    - ``segments``: JSONB list, one entry per segment
+      (``{"segment": name, ...envelope...}``): swim, ``bike_N`` per
+      course segment, run off the bike, ``t1``, ``t2``.
+    - ``total``: JSONB — the composite envelope.
+    - ``engine_version``: §6 (every persisted engine output carries the
+      engine version). Each envelope's ``model_version`` additionally
+      names the prediction model (``app.engine.predict``).
+    """
+
+    __tablename__ = "prediction"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    # The predicted race; NULL for distance-only predictions (never
+    # persisted by today's tool, kept nullable so the column is stable).
+    race_id: Mapped[int | None] = mapped_column(
+        ForeignKey("race.id"), index=True, default=None
+    )
+    race_key: Mapped[str] = mapped_column(String(64))
+    target_date: Mapped[date | None] = mapped_column(Date, default=None)
+    # Per-segment envelopes verbatim: [{"segment": ..., ...envelope...}].
+    segments: Mapped[list[dict[str, Any]]] = mapped_column(JSONB)
+    # The composite envelope verbatim.
+    total: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    engine_version: Mapped[str] = mapped_column(String(32))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=_utcnow
+    )
