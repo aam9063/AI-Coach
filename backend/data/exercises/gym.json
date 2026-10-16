@@ -1,0 +1,394 @@
+{
+  "issues": [
+    {
+      "line": 4,
+      "reason": "unmatched line containing digits; captured verbatim as prose",
+      "text": "10´ de calentamiento en elíptica, comba, bici, etc."
+    },
+    {
+      "line": 8,
+      "reason": "unmatched line containing digits; captured verbatim as prose",
+      "text": "CAMINATA LATERAL CON BANDA ELÁSTICA: 10 PASOS A CADA DIRECCIÓN."
+    }
+  ],
+  "kind": "gym-corpus",
+  "schema_version": 1,
+  "sections": [
+    {
+      "items": [
+        {
+          "kind": "prose",
+          "line": 4,
+          "text": "10´ de calentamiento en elíptica, comba, bici, etc."
+        },
+        {
+          "items": [
+            {
+              "kind": "exercise",
+              "line": 7,
+              "name": "CLAMSHELL GLUTEO",
+              "note": "A CADA LADO",
+              "reps": [
+                12
+              ],
+              "reps_raw": "12",
+              "rir": null,
+              "sets": 3
+            },
+            {
+              "kind": "prose",
+              "line": 8,
+              "text": "CAMINATA LATERAL CON BANDA ELÁSTICA: 10 PASOS A CADA DIRECCIÓN."
+            },
+            {
+              "kind": "exercise",
+              "line": 9,
+              "name": "ABDUCCIÓN DE CADERA CON BANDA ELÁSTICA",
+              "note": null,
+              "reps": [
+                15
+              ],
+              "reps_raw": "15",
+              "rir": null,
+              "sets": 3
+            }
+          ],
+          "kind": "activation",
+          "line": 6,
+          "name": "ACTIVACIÓN"
+        },
+        {
+          "kind": "exercise",
+          "line": 11,
+          "name": "Prensa",
+          "note": "(la primera de calentamiento)",
+          "reps": [
+            20,
+            15,
+            15,
+            10,
+            10
+          ],
+          "reps_raw": "20-15-15-10-10",
+          "rir": 5,
+          "sets": 5
+        },
+        {
+          "kind": "rest",
+          "line": 12,
+          "raw": "1´ 30´´ REC",
+          "seconds": 90
+        },
+        {
+          "kind": "exercise",
+          "line": 14,
+          "name": "Extensión de isquios",
+          "note": "( LAS DOS PRIMERAS A RITMO NORMAL, LAS DOS ÚLTIMAS BAJAS DENTO (4 SEG)",
+          "reps": [
+            12,
+            12,
+            10,
+            10
+          ],
+          "reps_raw": "12-12-10-10",
+          "rir": 5,
+          "sets": 5
+        },
+        {
+          "kind": "rest",
+          "line": 15,
+          "raw": "2´ DE REC",
+          "seconds": 120
+        },
+        {
+          "kind": "exercise",
+          "line": 17,
+          "name": "Subida al cajón",
+          "note": null,
+          "reps": [
+            15,
+            10,
+            8,
+            8
+          ],
+          "reps_raw": "15-10-8-8",
+          "rir": 4,
+          "sets": 4
+        },
+        {
+          "kind": "rest",
+          "line": 18,
+          "raw": "2´ DE REC.",
+          "seconds": 120
+        },
+        {
+          "kind": "exercise",
+          "line": 20,
+          "name": "Hip thrust",
+          "note": null,
+          "reps": [
+            8,
+            10
+          ],
+          "reps_raw": "8/10",
+          "rir": null,
+          "sets": 3
+        },
+        {
+          "kind": "exercise",
+          "line": 22,
+          "name": "Gemelo",
+          "note": null,
+          "reps": [
+            14
+          ],
+          "reps_raw": "14",
+          "rir": null,
+          "sets": 4
+        },
+        {
+          "kind": "exercise",
+          "line": 24,
+          "name": "Crunch de abdomen",
+          "note": null,
+          "reps": [
+            25,
+            30
+          ],
+          "reps_raw": "25-30",
+          "rir": null,
+          "sets": 4
+        },
+        {
+          "kind": "hold",
+          "line": 25,
+          "name": "planchas",
+          "per": null,
+          "raw": "3 planchas de 1 minuto.",
+          "reps": null,
+          "rounds": 3,
+          "seconds": 60
+        }
+      ],
+      "line": 3,
+      "name": "TREN INFERIOR"
+    },
+    {
+      "items": [
+        {
+          "kind": "prose",
+          "line": 30,
+          "text": "Puedes hacer movilidad articular de hombros."
+        },
+        {
+          "kind": "exercise",
+          "line": 32,
+          "name": "Press banca",
+          "note": null,
+          "reps": [
+            13
+          ],
+          "reps_raw": "13",
+          "rir": null,
+          "sets": 4
+        },
+        {
+          "kind": "exercise",
+          "line": 33,
+          "name": "Pres banca inclinado",
+          "note": null,
+          "reps": [
+            12,
+            10,
+            8
+          ],
+          "reps_raw": "12-10-8",
+          "rir": null,
+          "sets": 3
+        },
+        {
+          "kind": "exercise",
+          "line": 35,
+          "name": "Jalón al pecho",
+          "note": null,
+          "reps": [
+            12,
+            10,
+            8
+          ],
+          "reps_raw": "12-10-8",
+          "rir": null,
+          "sets": 4
+        },
+        {
+          "kind": "exercise",
+          "line": 36,
+          "name": "Remo con barra",
+          "note": null,
+          "reps": [
+            9
+          ],
+          "reps_raw": "9",
+          "rir": null,
+          "sets": 4
+        },
+        {
+          "kind": "exercise",
+          "line": 37,
+          "name": "Remo polea baja",
+          "note": null,
+          "reps": [
+            10,
+            10,
+            8,
+            8
+          ],
+          "reps_raw": "10-10-8-8",
+          "rir": null,
+          "sets": 4
+        },
+        {
+          "kind": "exercise",
+          "line": 39,
+          "name": "Curl de biceps",
+          "note": null,
+          "reps": [
+            10,
+            10,
+            8,
+            8
+          ],
+          "reps_raw": "10-10-8-8",
+          "rir": null,
+          "sets": 4
+        },
+        {
+          "kind": "exercise",
+          "line": 40,
+          "name": "Martillo biceps",
+          "note": null,
+          "reps": [
+            10,
+            8,
+            8,
+            8
+          ],
+          "reps_raw": "10-8-8-8",
+          "rir": null,
+          "sets": 4
+        },
+        {
+          "kind": "exercise",
+          "line": 42,
+          "name": "Extensión triceps con cuerda",
+          "note": null,
+          "reps": [
+            10,
+            12
+          ],
+          "reps_raw": "10/12",
+          "rir": null,
+          "sets": 3
+        },
+        {
+          "kind": "exercise",
+          "line": 43,
+          "name": "Press francés",
+          "note": null,
+          "reps": [
+            7
+          ],
+          "reps_raw": "7",
+          "rir": null,
+          "sets": 4
+        },
+        {
+          "kind": "exercise",
+          "line": 45,
+          "name": "crunch abdomen",
+          "note": null,
+          "reps": [
+            25
+          ],
+          "reps_raw": "25",
+          "rir": null,
+          "sets": 3
+        },
+        {
+          "kind": "hold",
+          "line": 46,
+          "name": "planchas",
+          "per": null,
+          "raw": "3 planchas de 30´´",
+          "reps": null,
+          "rounds": 3,
+          "seconds": 30
+        }
+      ],
+      "line": 29,
+      "name": "TREN SUPERIOR"
+    },
+    {
+      "items": [
+        {
+          "kind": "prose",
+          "line": 51,
+          "text": "SIN CALENTAMIENTO."
+        },
+        {
+          "kind": "hold",
+          "line": 53,
+          "name": "PLANCHA FRONTAL 2 APOYOS (codo y pie contrario)",
+          "per": "cada lado",
+          "raw": "PLANCHA FRONTAL 2 APOYOS (codo y pie contrario) 15” cada lado",
+          "reps": null,
+          "rounds": null,
+          "seconds": 15
+        },
+        {
+          "kind": "hold",
+          "line": 55,
+          "name": "PUENTE DE PIERNAS FITBALL A UNA PIERNA",
+          "per": "pierna",
+          "raw": "PUENTE DE PIERNAS FITBALL A UNA PIERNA 10 reps/pierna",
+          "reps": 10,
+          "rounds": null,
+          "seconds": null
+        },
+        {
+          "kind": "hold",
+          "line": 57,
+          "name": "APERTURAS PIERNA LATERAL TUMBADO",
+          "per": "pierna",
+          "raw": "APERTURAS PIERNA LATERAL TUMBADO 15 reps/pierna",
+          "reps": 15,
+          "rounds": null,
+          "seconds": null
+        },
+        {
+          "kind": "hold",
+          "line": 59,
+          "name": "PUENTE DE CADERA UN APOYO ARRIBA Y ABAJO",
+          "per": "pierna",
+          "raw": "PUENTE DE CADERA UN APOYO ARRIBA Y ABAJO 10reps/pierna",
+          "reps": 10,
+          "rounds": null,
+          "seconds": null
+        },
+        {
+          "kind": "hold",
+          "line": 61,
+          "name": "PLANCHA LATERAL A UNA PIERNA",
+          "per": "lado",
+          "raw": "PLANCHA LATERAL A UNA PIERNA 15”/lado",
+          "reps": null,
+          "rounds": null,
+          "seconds": 15
+        }
+      ],
+      "line": 50,
+      "name": "CORE"
+    }
+  ],
+  "title": "EJEMPLO ENTRENAMIENTO GYM PARA CICLISMO:"
+}
