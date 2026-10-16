@@ -110,6 +110,33 @@ async def test_valid_token_serves_png_bytes(
     assert response.headers["cache-control"] == "private, no-store"
 
 
+async def test_head_is_supported_for_twilio_media_validation(
+    db_session: AsyncSession, client: httpx.AsyncClient
+) -> None:
+    """Twilio validates media URLs with GET AND HEAD (error 63019 otherwise).
+
+    A HEAD request must answer 200 ``image/png`` with the true
+    ``Content-Length`` and no body — the same access contract as GET,
+    so the media fetcher's pre-flight check succeeds.
+    """
+    chart_id = await save_chart(
+        db_session,
+        kind="performance_manager",
+        png=PNG_BYTES,
+        engine_version="0.1.0",
+    )
+
+    response = await client.head(
+        f"/charts/{chart_id}", params={"token": _future_token(chart_id)}
+    )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/png"
+    assert response.headers["content-length"] == str(len(PNG_BYTES))
+    assert response.headers["cache-control"] == "private, no-store"
+    assert response.content == b""
+
+
 async def test_expired_token_is_rejected_with_403(
     db_session: AsyncSession, client: httpx.AsyncClient
 ) -> None:

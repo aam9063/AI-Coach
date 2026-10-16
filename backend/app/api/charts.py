@@ -28,7 +28,7 @@ import hmac
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.charts.storage import load_chart_png
@@ -106,8 +106,9 @@ def get_chart_settings() -> Settings:
     return get_settings()
 
 
-@router.get("/charts/{chart_id}")
+@router.api_route("/charts/{chart_id}", methods=["GET", "HEAD"])
 async def get_chart(
+    request: Request,
     chart_id: int,
     token: Annotated[str, Query(description="HMAC-signed, expiring access token")],
     settings: Annotated[Settings, Depends(get_chart_settings)],
@@ -126,6 +127,15 @@ async def get_chart(
         raise HTTPException(status_code=404, detail="chart not found")
     # §9.1: the URL is short-lived; the response must not be cached
     # publicly or long-lived by any intermediary.
+    if request.method == "HEAD":
+        # Twilio's media fetcher pre-flights media URLs with HEAD before
+        # downloading (otherwise it fails the message with error 63019,
+        # "Media failed to download"). Answer 200 image/png with the TRUE
+        # Content-Length and no body — same access contract as GET.
+        return Response(
+            media_type="image/png",
+            headers={"Cache-Control": "private, no-store", "Content-Length": str(len(png))},
+        )
     return Response(
         content=png,
         media_type="image/png",
