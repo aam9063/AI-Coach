@@ -46,7 +46,7 @@ The owner wants forecasts for sprint, olympic, 70.3 and full distance races with
 - [x] `RP-7`: RED+GREEN: T1/T2 transitions from past races or configurable defaults (§7.7).
 - [x] `RP-8`: RED+GREEN: composite triathlon total with Monte Carlo uncertainty propagation over documented input distributions; per-segment and total bounds stable under a fixed seed (§7.7).
 - [x] `RP-9`: RED+GREEN: prediction envelope contract test — every prediction (segment and total) returns exactly `{point, lower, upper, method, assumptions, model_version}` and lower ≤ point ≤ upper (§7.7, §12.8).
-- [ ] `RP-10`: Add `race` and `prediction` DB models with course data, goal, bounds and model version (§6); implement the `predict_race(race_id | distance, target_date?)` tool returning typed Pydantic output with `computed_at`, `engine_version`, coverage info (§9.3).
+- [x] `RP-10`: Add `race` and `prediction` DB models with course data, goal, bounds and model version (§6); implement the `predict_race(race_id | distance, target_date?)` tool returning typed Pydantic output with `computed_at`, `engine_version`, coverage info (§9.3).
 
 ## Log
 
@@ -66,9 +66,10 @@ Directly implied conditions:
 ## Verification evidence
 
 - RP-1..RP-9 (2026-10-16, delegated to one gentle-ai-worker, integrated by the orchestrator): test-first per task with individually observed RED steps; 62 new tests in tests/engine/test_predict.py (737 total in tests/engine green); hand-computed anchors (Riegel 5k 20:00 -> 10k = 2501.92 s; rho(25 C, 1500 m) = 0.9881 kg/m3; flat-course Cardano v = 9.0973 m/s at the analytic anchor); envelope contract walk over every producer; Monte Carlo determinism pinned by exact envelope equality under the fixed default seed. ruff + mypy clean (232 files). Physics note: the flat-course POWER equation is a depressed CUBIC in v (0.5*rho*CdA*v^3 + Crr*m*g*v = eta*P), solved exactly via Cardano in flat_course_speed_analytic — the quadratic form only arises for a prescribed drive force; documented in the module docstring per ODD precedence (the spec requires a hand-solved analytic flat example, which this satisfies).
+- RP-10 + chart-kind wiring (2026-10-16, delegated worker + orchestrator integration): RaceRow/PredictionRow models (minimal, JSONB course/transitions/segments/total); agent/race_tool.py assembly (race_id path persists a PredictionRow; distance path reads ATHLETE_* owner config, documented OWNER CHOICE defaults with per-input provenance, never persists); predict_race stub replaced (exactly-one-of race_id/distance, ISO target_date, insufficient_data naming the exact missing env var, error responses carry no prediction keys, §7.7 envelopes verbatim); plot_metric's race_prediction kind wired to the distance path + render_race_prediction_breakdown (sport carries the race distance key; date_range ignored; the now-false "arrives with Feature 8" detail removed). Orchestrator fixes: obsolete TestPredictRaceStub replaced with the new fail-safe contract; no_media_settings fail-closed test made hermetic (it silently depended on ambient env lacking CHART_* — exposed once CH-11 configured them); the four-kind registry pin updated to five. Verification: 71 agent tests + 805 charts/api/engine green, ruff + mypy clean (235 files). NOTE: tests/db migration round-trip tests are environmentally flaky on local Windows Docker (same failures reproduce on master WITHOUT this branch — verified via throwaway worktree; failures move between files and pass in isolation; DROP INDEX on an already-absent index during downgrade cycles). CI on fast Linux is the arbiter and was green for the identical harness on PR #20.
 
 ## Progress
 
-RP-1..RP-9 done. RP-10 (DB models + predict_race tool) in progress. Branch feat/race-prediction, Orca worktree feature-7-charts (isolated from the scheduled-messages session).
+COMPLETE: RP-1..RP-10 done. Branch feat/race-prediction, Orca worktree feature-7-charts.
 
-Commits: 89492a1 (docs: close charts, open race-prediction log) · (RP-1..RP-9 work unit pending this commit)
+Commits: 89492a1 (docs) · a18986a (RP-1..RP-9) · b21a23b (RP-10 + chart kind)
