@@ -213,22 +213,32 @@ def _matches_within(value: float, tolerance: float, numbers: Iterable[float]) ->
 def check_tool_selection(
     executed: Sequence[str], expected: Sequence[str]
 ) -> list[dict[str, str]]:
-    """The executed tool SET must equal the expected set (order-insensitive;
-    extra calls fail)."""
+    """Every EXPECTED tool must have been called (§13: "expected tools called",
+    target ≥ 90% -- a recall metric, not set equality).
+
+    Extra calls are deliberately NOT a selection failure. The brief measures
+    whether the expected tools were called; a reply that also consults the
+    evidence store, or reads one more metric than the case anticipated, is larger
+    and more thorough, not wrong. A hard gate on the exact set failed
+    ``plot-pm-es`` for calling ``search_evidence`` alongside ``plot_metric`` -- a
+    useless call against an empty store, but not an incorrect selection, and a
+    gate that fails correct answers teaches the owner to ignore the suite.
+
+    The extras stay visible in the case report's ``executed tools`` line, which is
+    where a cost or noise review belongs.
+    """
     executed_set, expected_set = set(executed), set(expected)
     missing = sorted(expected_set - executed_set)
-    unexpected = sorted(executed_set - expected_set)
-    if not missing and not unexpected:
+    if not missing:
         return []
-    parts: list[str] = []
-    if missing:
-        parts.append(f"missing expected tool calls {missing}")
+    unexpected = sorted(executed_set - expected_set)
+    detail = f"missing expected tool calls {missing}"
     if unexpected:
-        parts.append(f"unexpected tool calls {unexpected}")
+        detail += f" (also called unrequested {unexpected})"
     return [
         {
             "check": "tool_selection",
-            "detail": "; ".join(parts) + f" (executed={sorted(executed_set)})",
+            "detail": detail + f" (executed={sorted(executed_set)})",
         }
     ]
 

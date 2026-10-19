@@ -21,7 +21,6 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-
 from typing import Any
 
 import pytest
@@ -321,13 +320,23 @@ class TestToolSelection:
         assert "get_zones" in failures[0]["detail"]
         assert "missing" in failures[0]["detail"]
 
-    def test_an_extra_tool_call_fails_and_names_it(self) -> None:
+    def test_an_extra_tool_call_is_tolerated(self) -> None:
+        """§13 measures recall: an extra call is thorough, not wrong."""
+        assert (
+            check_tool_selection(
+                ("get_load_status", "search_evidence"), ["get_load_status"]
+            )
+            == []
+        )
+
+    def test_a_missing_tool_still_names_the_extras_it_saw(self) -> None:
+        """When something IS missing, the detail also reports the extras."""
         failures = check_tool_selection(
-            ("get_load_status", "search_evidence"), ["get_load_status"]
+            ("search_evidence",), ["get_load_status"]
         )
         assert len(failures) == 1
+        assert "get_load_status" in failures[0]["detail"]
         assert "search_evidence" in failures[0]["detail"]
-        assert "unexpected" in failures[0]["detail"]
 
 
 # ---------------------------------------------------------------------------
@@ -573,11 +582,16 @@ async def test_runner_rejects_an_unknown_fixture_name(
 
 
 @pytest.mark.anyio
-async def test_runner_tool_selection_failure_mode(
+async def test_runner_extra_tool_does_not_fail_the_case(
     eval_db: Any, eval_settings: Any, eval_session_repository: Any
 ) -> None:
-    """A model that calls a tool the case did NOT expect fails the case
-    with the unexpected tool named."""
+    """An extra tool call is NOT a selection failure (§13 measures recall).
+
+    The brief asks "expected tools called, target ≥ 90%": whether the case's
+    tools were called. A model that ALSO consults the evidence store answered
+    more thoroughly, not wrongly, so the case passes. The extra call stays
+    visible in the report's executed-tools line.
+    """
     from app.agent.fake_model import FakeModel
 
     case: GoldenCase = validate_case(
@@ -603,10 +617,38 @@ async def test_runner_tool_selection_failure_mode(
     result = await _run(
         case, eval_db, eval_settings, eval_session_repository, model=rogue
     )
+    assert result.passed
+    assert "search_evidence" in result.executed_tools
+
+
+@pytest.mark.anyio
+async def test_runner_missing_expected_tool_fails_the_case(
+    eval_db: Any, eval_settings: Any, eval_session_repository: Any
+) -> None:
+    """The metric that DOES gate: an expected tool that was never called."""
+    from app.agent.fake_model import FakeModel
+
+    case: GoldenCase = validate_case(
+        {
+            "id": "inline-missing-tool",
+            "category": "load",
+            "user_message": "\u00bfC\u00f3mo voy de forma?",
+            "db_fixture": "none",
+            "expected_tool_calls": ["get_load_status"],
+            "expected_numeric_values": [],
+            "citation_required": False,
+            "forbidden_content": [],
+        },
+        index=0,
+    )
+    rogue = FakeModel(["No tengo datos."])
+    result = await _run(
+        case, eval_db, eval_settings, eval_session_repository, model=rogue
+    )
     assert not result.passed
     detail = " ".join(f["detail"] for f in result.failures)
-    assert "search_evidence" in detail
-    assert "unexpected" in detail
+    assert "missing expected tool calls" in detail
+    assert "get_load_status" in detail
 
 
 @pytest.mark.anyio
