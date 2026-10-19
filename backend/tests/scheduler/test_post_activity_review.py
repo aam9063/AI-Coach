@@ -363,6 +363,49 @@ async def test_trigger_reviews_a_new_activity_once(
     assert (reviews[0].payload or {})["activity_id"] == 1
 
 
+async def test_a_fresh_activity_waits_for_its_load_before_burning_the_marker(
+    session_factory: async_sessionmaker[Any],
+) -> None:
+    """A just-synced activity must not be reviewed without its numbers.
+
+    The load recompute runs at :25 and :55, the review at :05 and :35, and a sync
+    at :00 or :30 -- so an activity reaches this pass about twenty minutes BEFORE
+    its ``daily_load`` row can exist. Measured 2026-10-19: that is the common
+    path, and the audit row is the once-only marker, so reviewing it anyway sent
+    "TSS: not available yet" EVERY time and burned the one review that activity
+    would ever get. Deferring (no send, NO marker) is what lets the next pass
+    review it with its numbers.
+    """
+    await seed_activity(session_factory, start_time=NOW - dt.timedelta(minutes=10))
+    # Deliberately NO seed_engine_outputs: the daily_load row does not exist yet.
+    # An inbound within 24 h opens the free-form window (§9.1); without it the
+    # send would be skipped for a totally different reason and mask the defer.
+    await seed_inbound(session_factory, NOW - dt.timedelta(hours=1))
+    twilio = FakeTwilioClient()
+
+    deferred = await run_review(session_factory, twilio)
+
+    assert deferred["sent"] == 0
+    assert twilio.messages.calls == []
+    assert await outbound_rows(session_factory) == [], "no marker may be written"
+
+    # The recompute catches up; the next pass reviews it exactly once, now with
+    # the load row, and never again.
+    await seed_engine_outputs(session_factory, date=ACTIVITY_DATE)
+
+    sent = await run_review(session_factory, twilio)
+
+    assert sent["sent"] == 1
+    assert len(twilio.messages.calls) == 1
+    rows = await outbound_rows(session_factory)
+    reviews = [
+        r for r in rows if (r.payload or {}).get("kind") == "post_activity_review"
+    ]
+    assert len(reviews) == 1
+    assert len(await run_review(session_factory, twilio)) > 0  # still one marker only
+    assert len(twilio.messages.calls) == 1
+
+
 async def test_activities_beyond_the_lookback_window_are_never_reviewed(
     session_factory: async_sessionmaker[Any],
 ) -> None:
