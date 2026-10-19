@@ -165,9 +165,13 @@ class RacePredictionCoverage(BaseModel):
     ``course_segments`` is the number of course-profile segments consumed
     (``0`` = the documented standard flat course was assumed);
     ``athlete_inputs`` maps each input name to its provenance (owner
-    configuration env var vs documented default); ``transitions`` states
-    where T1/T2 came from; ``persisted``/``prediction_id`` report whether
-    a :class:`~app.db.models.PredictionRow` was written (race_id path
+    configuration env var vs documented default); ``run_anchor`` names
+    the derived reference effort the run prediction used — 5000 m at
+    the owner-configured threshold run speed — and the env var it came
+    from (the honest limit: the anchor is a derivation, never a
+    measured race effort); ``transitions`` states where T1/T2 came
+    from; ``persisted``/``prediction_id`` report whether a
+    :class:`~app.db.models.PredictionRow` was written (race_id path
     only — the distance path never persists).
     """
 
@@ -176,6 +180,7 @@ class RacePredictionCoverage(BaseModel):
     temperature_c: float | None = None
     altitude_m: float | None = None
     athlete_inputs: dict[str, str]
+    run_anchor: str | None = None
     transitions: str
     persisted: bool
     prediction_id: int | None = None
@@ -259,6 +264,26 @@ def _insufficient_detail(missing: list[str]) -> str:
         f"{', '.join(missing)} in the owner configuration (.env — the same "
         "variables the zone tools read), then ask again. Missing inputs are "
         "never guessed (§7.7/§9.3)."
+    )
+
+
+def _run_anchor(athlete: _AthleteInputs) -> str:
+    """The run anchor effort and its origin, for the coverage (the honest
+    limit of the run prediction, RP-1/RP-2).
+
+    The anchor is a DERIVATION, never a measured race effort: the
+    threshold run speed held over :data:`REFERENCE_RUN_DISTANCE_M`
+    (``reference_time = 5000 / threshold_speed``). The provenance string
+    names the owner-configuration env var the speed came from, so the
+    athlete can always trace where the anchor was built from."""
+    speed = athlete.values["threshold_run_speed_mps"]
+    reference_time_s = REFERENCE_RUN_DISTANCE_M / speed
+    return (
+        f"derived reference effort: {REFERENCE_RUN_DISTANCE_M:g} m at the "
+        f"threshold run speed {speed} m/s = {reference_time_s:.1f} s "
+        f"({athlete.provenance['threshold_run_speed_mps']}) — the anchor "
+        "the run prediction extrapolates from (Riegel/VDOT), not a "
+        "measured race effort"
     )
 
 
@@ -560,6 +585,7 @@ async def _predict_from_race_row(
             temperature_c=temperature_c,
             altitude_m=altitude_m,
             athlete_inputs=athlete.provenance,
+            run_anchor=_run_anchor(athlete),
             transitions=transitions_note,
             persisted=True,
             prediction_id=stored.id,
@@ -639,6 +665,7 @@ def _predict_from_distance(
             temperature_c=DEFAULT_TEMPERATURE_C,
             altitude_m=DEFAULT_ALTITUDE_M,
             athlete_inputs=athlete.provenance,
+            run_anchor=_run_anchor(athlete),
             transitions=f"defaults for '{key}'",
             persisted=False,
         ),

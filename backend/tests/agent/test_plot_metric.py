@@ -2,17 +2,17 @@
 
 Contract pinned here:
 
-- **Kind registry**: exactly the four supported kinds the ODD task names
-  (``performance_manager``, ``weekly_tss``, ``time_in_zone``, ``hrv``),
-  each mapping to ONE canonical kind string and renderer, plus the stub
-  docstring's aliases (``ctl_atl`` -> ``performance_manager``,
-  ``intensity`` -> ``time_in_zone``).
+- **Kind registry**: exactly the five supported kinds the ODD tasks name
+  (``performance_manager``, ``weekly_tss``, ``time_in_zone``, ``hrv``,
+  ``race_prediction``), each mapping to ONE canonical kind string and
+  renderer, plus the stub docstring's aliases (``ctl_atl`` ->
+  ``performance_manager``, ``intensity`` -> ``time_in_zone``).
 - **date_range parsing**: trailing windows ("7d"/"30d"/"90d") ending
   today, or an explicit inclusive "YYYY-MM-DD/YYYY-MM-DD"; every invalid
   form is a CLEAR ERROR RESPONSE — never an exception into the agent loop.
 - **Unsupported kinds**: unknown names AND kinds whose renderer exists
   but whose engine data source does not yet (mean-maximal curve, run
-  pace/HR + EF trends, race prediction) return ``status="error"``
+  pace/HR + EF trends) return ``status="error"``
   naming what is missing — no chart, number or curve is ever fabricated.
 - **Fail closed without media configuration**: without
   ``chart_media_secret``/``chart_public_base_url`` the tool renders
@@ -45,6 +45,10 @@ from app.agent.chart_tool import (
     SUPPORTED_CHART_KINDS,
 )
 from app.api.charts import build_chart_media_url, sign_chart_token, verify_chart_token
+from app.charts.race_prediction import (
+    RacePredictionSample,
+    render_race_prediction_breakdown,
+)
 from app.core.settings import Settings
 from app.db.models import (
     DailyLoadRow,
@@ -658,6 +662,62 @@ class TestRacePredictionChart:
         # One sample per predicted segment (swim, bike, run, t1, t2).
         assert result["coverage"]["samples_in_chart"] > 0
 
+    async def test_chart_and_tool_agree_on_the_same_engine_output(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """ONE source of truth: the chart and ``predict_race`` must
+        consume the SAME engine output. The engine->tool leg is pinned
+        verbatim in tests/agent/test_predict_race.py
+        (``assert_prediction_verbatim``); this pins the tool->chart leg:
+        the PNG the chart tool saves is byte-identical to the pure
+        renderer fed with the tool's own segments — a second source of
+        truth could never pass this."""
+        settings = make_settings(
+            athlete_ftp_w=250.0,
+            athlete_css_speed_mps=1.8,
+            athlete_threshold_run_speed_mps=3.1,
+        )
+        tools.set_settings_override(settings)
+        captured: dict[str, bytes] = {}
+
+        async def fake_save_chart(
+            _session: Any,
+            _kind: str,
+            png: bytes,
+            _engine_version: str,
+            **_kwargs: Any,
+        ) -> int:
+            captured["png"] = png
+            return 42
+
+        monkeypatch.setattr(tools, "save_chart", fake_save_chart)
+        try:
+            tool_result = await tools.predict_race(distance="olympic")
+            chart_result = await tools.plot_metric(
+                kind="race_prediction", date_range="30d", sport="olympic"
+            )
+        finally:
+            tools.reset_settings_override()
+
+        assert tool_result["status"] == "ok", tool_result
+        assert chart_result["status"] == "ok", chart_result
+        expected_png = render_race_prediction_breakdown(
+            [
+                RacePredictionSample(
+                    label=segment["segment"],
+                    point_seconds=segment["point"],
+                    lower_seconds=segment["lower"],
+                    upper_seconds=segment["upper"],
+                )
+                for segment in tool_result["segments"]
+            ]
+        )
+        assert captured["png"] == expected_png
+        assert (
+            chart_result["coverage"]["samples_in_chart"]
+            == len(tool_result["segments"])
+        )
+
     async def test_unknown_race_distance_is_an_error_naming_the_valid_keys(
         self, media_settings: Settings
     ) -> None:
@@ -667,3 +727,16 @@ class TestRacePredictionChart:
         assert result["status"] == "error"
         assert "unknown race distance" in result["detail"].lower()
         assert result["chart_id"] is None and result["media_url"] is None
+
+    def test_docstring_matches_the_registry_race_prediction_is_supported(
+        self,
+    ) -> None:
+        """The docstring is the model-facing schema (WA-6 doctrine): it
+        must describe what the tool DOES. ``race_prediction`` is a
+        SUPPORTED kind since RP-10 wired it to the engine's distance
+        path, so the stale "arrives with Feature 8" promise must be gone
+        and the kind must be listed among the supported ones."""
+        doc = tools.plot_metric.__doc__ or ""
+        assert "arrives with Feature 8" not in doc
+        supported_section = doc.split("Returns on success")[0]
+        assert '"race_prediction"' in supported_section

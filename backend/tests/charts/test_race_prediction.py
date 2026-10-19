@@ -2,10 +2,11 @@
 
 Same contract as the other chart tests: pure renderer, committed PNG
 baseline, explicit §10 width check, loud rejection of invalid input.
-The race-prediction engine (Feature 8) is not implemented yet, so the
-canonical fixture here is computed from fixed formulas inside this file
-— it pins the contracted prediction shape ``{point, lower, upper}``
-until the engine exists. Extra pins: intervals must not be inverted,
+The canonical fixture here stays SYNTHETIC (fixed formulas inside this
+file): it pins the renderer's contracted prediction shape
+``{point, lower, upper}`` independent of the engine. The engine exists
+(app/engine/predict.py) and the engine/chart/tool agreement is proven
+end-to-end in tests/agent/test_plot_metric.py. Extra pins: intervals must not be inverted,
 times must be positive, labels must be non-empty, ordering is by
 predicted time (not input order), and the h:mm axis formatter is
 deterministic.
