@@ -67,6 +67,33 @@ def anyio_backend() -> str:
     return "asyncio"
 
 
+@pytest.fixture(autouse=True)
+def _reset_process_level_agent_state() -> Iterator[None]:
+    """No test inherits another test's process-level agent wiring.
+
+    ``handle_inbound_message`` deliberately caches the engine, the model, the
+    Twilio client and the session repository for the life of the process: a
+    Celery worker runs one turn per task, and building them per turn leaked a
+    connection pool, an HTTP client and a ``DbSessionRepository`` thread with its
+    own event loop for every WhatsApp message. The tool registry keeps a provider
+    of its own. Both are process-level state, so a test that sets them and never
+    resets them would silently leave the next test talking to a different
+    database -- the class of silent contamination that cost a whole
+    investigation on 2026-10-19. Reset BEFORE and after every test, so neither a
+    leaky setup nor a leaky teardown can survive.
+    """
+    from app.agent import pipeline, tools
+
+    def _reset() -> None:
+        pipeline.reset_process_dependencies()
+        tools.reset_session_factory_provider()
+        tools.reset_settings_override()
+
+    _reset()
+    yield
+    _reset()
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _drop_per_run_test_database() -> Iterator[None]:
     """Drop this run's own per-run test database at session end.
