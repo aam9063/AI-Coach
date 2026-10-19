@@ -1,6 +1,6 @@
 # ODD Feature: evals-and-observability
 
-Status: pending | Feature 11 of 11 (brief section 12) | Source: PROJECT_BRIEF.md
+Status: in progress (branch feat/evals-observability, from dev) | Feature 11 of 11 (brief section 12) | Source: PROJECT_BRIEF.md
 
 ## Objective
 
@@ -48,6 +48,10 @@ The brief makes evals, observability and clean architecture first-class requirem
 - [ ] `EVAL-9`: GREEN: LLM-as-judge path restricted to tone/clarity, calibrated against a small owner-labelled answer set, reporting the agreement rate (§13).
 - [ ] `EVAL-10`: GREEN: Langfuse dashboards for per-turn traces (prompt version, tool calls with inputs/outputs, tokens, cost, latency); verify prompt versions stored in repo appear in traces (§13).
 - [ ] `EVAL-11`: Document the eval suite (how to add cases, update baselines, calibrate the judge) in docs; confirm the full CI pipeline is green.
+
+## Log
+
+L1: owner chose (2026-10-16) Feature 11 as the next feature after Feature 8 merged (PR #22), worked on branch feat/evals-observability from dev in the isolated `feature-7-charts` Orca worktree. With the scheduled-messages merge (PR #23) no other session holds settings.py/main.py, so CI wiring and any Settings fields are unblocked. Existing seams to reuse: app/agent/fake_model.py (deterministic LLM adapter), pipeline's model injection parameter, agent/tracing.py Langfuse wiring (WA-11).
 
 ## Acceptance criteria
 

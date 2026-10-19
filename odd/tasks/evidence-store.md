@@ -1,6 +1,6 @@
 # ODD Feature: evidence-store
 
-Status: pending | Feature 9 of 11 (brief section 12) | Source: PROJECT_BRIEF.md
+Status: complete (merged PR #16; EV-7 dropped by owner decision, 2026-10-14) | Feature 9 of 11 (brief section 12) | Source: PROJECT_BRIEF.md
 
 ## Objective
 

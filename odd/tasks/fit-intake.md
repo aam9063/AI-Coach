@@ -1,6 +1,6 @@
 # ODD Feature: fit-intake
 
-Status: in progress | Feature 12 (owner-requested, not in PROJECT_BRIEF.md §12) | Owner idea, 2026-10-07
+Status: complete | Feature 12 (owner-requested, not in PROJECT_BRIEF.md §12) | Owner idea, 2026-10-07
 
 ## Objective
 
