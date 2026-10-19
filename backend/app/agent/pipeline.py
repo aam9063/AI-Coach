@@ -688,6 +688,45 @@ def make_twilio_client(settings: Settings) -> Any:
     return Client(settings.twilio_account_sid, settings.twilio_auth_token)
 
 
+_PROCESS_DEPS: dict[str, Any] = {}
+"""Dependencies this worker process builds once and reuses across turns.
+
+Measured 2026-10-19: ``whatsapp_tasks`` calls ``handle_inbound_message(message)``
+with no injections, so EVERY turn took the default path and built an engine with
+its own pool, an HTTP client for the model, a Twilio client and a
+``DbSessionRepository`` -- which starts a thread with its own event loop -- and
+closed none of them. That is a leak per WhatsApp message. The pool now lives as
+long as the process, which is the normal worker pattern; Celery prefork means one
+process per worker, so a plain module-level cache is enough.
+
+``reset_process_dependencies`` exists because a test must never inherit another
+test's engine; the suite resets it from an autouse fixture.
+"""
+
+
+def _process_session_factory(settings: Settings) -> SessionFactory:
+    """The session factory this process reuses for every turn."""
+    factory: SessionFactory | None = _PROCESS_DEPS.get("session_factory")
+    if factory is None:
+        factory = make_session_factory(create_db_engine(settings.database_url))
+        _PROCESS_DEPS["session_factory"] = factory
+    return factory
+
+
+def _process_dependency(name: str, build: Any) -> Any:
+    """Return a process-level dependency, building it on first use only."""
+    value = _PROCESS_DEPS.get(name)
+    if value is None:
+        value = build()
+        _PROCESS_DEPS[name] = value
+    return value
+
+
+def reset_process_dependencies() -> None:
+    """Forget the process-level defaults (tests call this between cases)."""
+    _PROCESS_DEPS.clear()
+
+
 def handle_inbound_message(
     message: dict[str, str],
     *,
@@ -713,24 +752,37 @@ def handle_inbound_message(
     # the first turn. Unconfigured settings take the clean no-op path; a
     # wiring failure only disables tracing, never the reply.
     configure_langfuse_tracing(resolved_settings)
-    resolved_sessions = session_factory if session_factory is not None else make_session_factory(
-        create_db_engine(resolved_settings.database_url)
+    resolved_sessions = (
+        session_factory
+        if session_factory is not None
+        else _process_session_factory(resolved_settings)
     )
     asyncio.run(
         process_inbound_message(
             message,
             settings=resolved_settings,
             session_factory=resolved_sessions,
-            model=model if model is not None else create_model(resolved_settings),
+            model=(
+                model
+                if model is not None
+                else _process_dependency(
+                    "model", lambda: create_model(resolved_settings)
+                )
+            ),
             twilio_client=(
                 twilio_client
                 if twilio_client is not None
-                else make_twilio_client(resolved_settings)
+                else _process_dependency(
+                    "twilio_client", lambda: make_twilio_client(resolved_settings)
+                )
             ),
             session_repository=(
                 session_repository
                 if session_repository is not None
-                else DbSessionRepository(resolved_settings.database_url)
+                else _process_dependency(
+                    "session_repository",
+                    lambda: DbSessionRepository(resolved_settings.database_url),
+                )
             ),
             # SCH-4: the /sync default job is derived here (the outermost
             # seam), like every other dependency default.
@@ -749,6 +801,7 @@ __all__ = [
     "make_twilio_client",
     "matches_sync_command",
     "process_inbound_message",
+    "reset_process_dependencies",
     "split_reply",
     "sync_confirmation",
     "tool_list",

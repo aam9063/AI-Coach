@@ -330,19 +330,30 @@ async def test_drop_test_database_drops_exactly_the_given_database() -> None:
     from tests.dbsupport import drop_test_database, ensure_database
 
     scratch = _scratch_url("tri_coach_test_20200101_123456_11223344")
-    await ensure_database(scratch)
-    engine, conn = await _maintenance_connect(scratch)
+    # Same guard as the janitor test above: without a configured, reachable
+    # database this test must follow the suite's skip/strict rule instead of
+    # failing with a raw authentication error. An AssertionError is re-raised so
+    # a real regression still fails rather than hiding behind the guard.
     try:
-        assert await _db_exists(conn, "tri_coach_test_20200101_123456_11223344") is True
-    finally:
-        await conn.close()
-        await engine.dispose()
+        await ensure_database(scratch)
+        engine, conn = await _maintenance_connect(scratch)
+        try:
+            assert await _db_exists(conn, "tri_coach_test_20200101_123456_11223344") is True
+        finally:
+            await conn.close()
+            await engine.dispose()
 
-    await drop_test_database(scratch)
+        await drop_test_database(scratch)
 
-    engine, conn = await _maintenance_connect(scratch)
-    try:
-        assert await _db_exists(conn, "tri_coach_test_20200101_123456_11223344") is False
-    finally:
-        await conn.close()
-        await engine.dispose()
+        engine, conn = await _maintenance_connect(scratch)
+        try:
+            assert await _db_exists(conn, "tri_coach_test_20200101_123456_11223344") is False
+        finally:
+            await conn.close()
+            await engine.dispose()
+    except AssertionError:
+        raise
+    except Exception:
+        from tests import conftest
+
+        conftest.unreachable_postgres()
