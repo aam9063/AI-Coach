@@ -1,6 +1,6 @@
 # ODD Feature: engine-zones
 
-Status: in progress | Feature 4 of 11 (brief section 12) | Source: PROJECT_BRIEF.md
+Status: complete | Feature 4 of 11 (brief section 12) | Source: PROJECT_BRIEF.md
 
 ## Objective
 

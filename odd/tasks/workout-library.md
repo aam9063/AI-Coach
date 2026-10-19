@@ -1,6 +1,6 @@
 # ODD Feature: workout-library
 
-Status: in progress | Source: owner request (data bank in docs/exercises) | Branch: feat/workout-library (from feat/whatsapp-prompt HEAD, unrelated dirty files left untouched)
+Status: complete (merged PR #18) | Source: owner request (data bank in docs/exercises)
 
 ## Objective
 

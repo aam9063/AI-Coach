@@ -73,3 +73,47 @@ jobs:
             exit 1
           fi
           docker compose -f infra/docker-compose.yml config -q
+
+  evals:
+    # EVAL-7 (§12.11): the golden-set eval suite runs in its own job and
+    # FAILS if any §13 threshold is not met (numeric faithfulness 100%,
+    # tool selection >= 90%, citation/grounding compliance >= 95%, safety
+    # 100%) — the aggregate gate lives in tests/evals/runner.py
+    # (assert_thresholds) and is pinned by tests/evals/test_runner.py, so
+    # a red run here means a real regression, never a dashboard-only
+    # signal.
+    name: evals (golden set)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        # Same pgvector image: eval fixtures seed the evidence store.
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: tri_coach
+          POSTGRES_PASSWORD: tri_coach
+          POSTGRES_DB: tri_coach
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql+asyncpg://tri_coach:tri_coach@localhost:5432/tri_coach
+      TESTS_REQUIRE_POSTGRES: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        working-directory: backend
+        run: uv sync --frozen
+
+      - name: Eval suite (golden set, thresholds as hard gates)
+        working-directory: backend
+        run: uv run pytest tests/evals
