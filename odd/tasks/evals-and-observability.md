@@ -37,12 +37,12 @@ The brief makes evals, observability and clean architecture first-class requirem
 
 ## Checklist
 
-- [ ] `EVAL-1`: RED: golden-set schema validation — `tests/evals/golden.yaml` parses with required fields per case (user message, fixed DB fixture, expected tool calls, expected numeric values with tolerance, citation-required flag, forbidden content) and rejects malformed cases (§13).
-- [ ] `EVAL-2`: GREEN: author ≥ 40 golden cases across the §13 categories (load/form, zones, readiness, activity analysis, predictions, evidence, out-of-scope/medical, missing-data, Spanish and English variants), with numeric expectations taken from engine outputs (§13).
-- [ ] `EVAL-3`: GREEN: build fixed DB fixtures per case category so evals run deterministically without live ingestion (§13).
-- [ ] `EVAL-4`: RED+GREEN: eval runner executing cases against the agent with a deterministic/fake LLM adapter for structural checks: numeric faithfulness within tolerance and tool selection accuracy (§13).
-- [ ] `EVAL-5`: RED+GREEN: citation-compliance check — replies flagged citation-required contain at least one valid `(Author, Year)` citation resolvable in the store (§13).
-- [ ] `EVAL-6`: RED+GREEN: safety check — every medical/injury prompt case gets a professional-referral reply with no diagnosis (§13).
+- [x] `EVAL-1`: RED: golden-set schema validation — `tests/evals/golden.yaml` parses with required fields per case (user message, fixed DB fixture, expected tool calls, expected numeric values with tolerance, citation-required flag, forbidden content) and rejects malformed cases (§13).
+- [x] `EVAL-2`: GREEN: author ≥ 40 golden cases across the §13 categories (load/form, zones, readiness, activity analysis, predictions, evidence, out-of-scope/medical, missing-data, Spanish and English variants), with numeric expectations taken from engine outputs (§13).
+- [x] `EVAL-3`: GREEN: build fixed DB fixtures per case category so evals run deterministically without live ingestion (§13).
+- [x] `EVAL-4`: RED+GREEN: eval runner executing cases against the agent with a deterministic/fake LLM adapter for structural checks: numeric faithfulness within tolerance and tool selection accuracy (§13).
+- [x] `EVAL-5`: RED+GREEN: citation-compliance check — replies flagged citation-required contain at least one valid `(Author, Year)` citation resolvable in the store (§13).
+- [x] `EVAL-6`: RED+GREEN: safety check — every medical/injury prompt case gets a professional-referral reply with no diagnosis (§13).
 - [ ] `EVAL-7`: GREEN: CI job running the eval suite with the §13 thresholds as hard gates (numeric 100%, tool selection ≥ 90%, citations ≥ 95%, safety 100%); a deliberately failing fixture is verified to fail CI, then reverted (§12.11).
 - [ ] `EVAL-8`: GREEN: p95 latency and cost-per-turn tracking with a > 20% regression failing CI, using recorded baselines (§13).
 - [ ] `EVAL-9`: GREEN: LLM-as-judge path restricted to tone/clarity, calibrated against a small owner-labelled answer set, reporting the agreement rate (§13).
@@ -67,10 +67,10 @@ Directly implied conditions (from §13):
 
 ## Verification evidence
 
-To be filled when the feature is implemented (commits, test runs, cross-checks).
+- EVAL-1..6 (2026-10-16, delegated to one gentle-ai-worker, integrated by the orchestrator): test-first with individually observed RED steps. 42 golden cases across all 9 §13 categories (12 English variants) with engine-derived numeric expectations (provenance documented in-file); 10 deterministic fixture builders; the runner drives the REAL pipeline (process_inbound_message + Strands loop + real tools) with only LLM sampling replaced (ScriptedCoachModel over FakeModel); checks: numeric faithfulness (unit/date/version exclusions), tool selection (order-insensitive, extras fail), citation compliance resolved against seeded evidence_source rows, safety via medical_backstop disclosure + forbidden-content absence. 82 eval tests green; agent/db 491 green; ruff + mypy clean (256 files). No real agent bug surfaced.
 
 ## Progress
 
-Not started.
+EVAL-1..6 done. EVAL-7..11 (CI gates, judge, Langfuse, docs) next. OPEN DECISION: citation display tension (EVAL-5 directive vs owner 2026-10-14 no-displayed-citations decision) — with a REAL model, citation_required cases would fail; owner choice pending (options: display again / grounded-without-display / citations only on explicit request).
 
-Commits: (none yet)
+Commits: (EVAL-1..6 work unit pending this commit)
