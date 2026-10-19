@@ -1369,11 +1369,14 @@ async def plot_metric(
       a sport filter narrows the chart to that sport.
     - "hrv": daily ln(rMSSD) with the readiness engine's baseline band;
       a sport filter is IGNORED (HRV is sport-agnostic).
+    - "race_prediction": predicted race segments with uncertainty bars
+      (the engine's distance path, RP-10); ``sport`` carries the RACE
+      DISTANCE KEY (sprint, olympic, half, full) and ``date_range`` is
+      IGNORED.
 
     Kinds whose renderer exists but whose engine data source does not yet
-    ("mean_maximal_curve", "run_trends"/"ef_trend"/"run_pace_hr",
-    "race_prediction") return status="error" naming what is missing —
-    race prediction arrives with Feature 8. NEVER describe or invent a
+    ("mean_maximal_curve", "run_trends"/"ef_trend"/"run_pace_hr") return
+    status="error" naming what is missing. NEVER describe or invent a
     chart yourself, and never estimate a race result: if the tool answers
     with an error or insufficient_data, tell the athlete what is missing
     and answer with the numbers from the other tools instead.

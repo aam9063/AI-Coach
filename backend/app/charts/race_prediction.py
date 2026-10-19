@@ -4,10 +4,11 @@ Pure renderer: race predictions in, PNG bytes out. No DB, no network,
 no clock inside, so identical input yields identical bytes
 (snapshot-tested in tests/charts/).
 
-The race-prediction engine (Feature 8) is not implemented yet; this
-renderer is written against the contracted output shape: each
-prediction carries a point estimate and an uncertainty interval
-``{point, lower, upper}``. There is deliberately no date axis here —
+The renderer is written against the engine's prediction shape (RP-10):
+each prediction carries a point estimate and an uncertainty interval
+``{point, lower, upper}`` — the window of the engine's
+``app.engine.predict.PredictionEnvelope`` that the chart tool passes in.
+There is deliberately no date axis here —
 the x axis is predicted time, formatted as ``h:mm`` by a fixed,
 deterministic helper.
 """
