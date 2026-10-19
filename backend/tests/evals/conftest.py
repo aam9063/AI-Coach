@@ -46,6 +46,15 @@ def make_eval_settings(**overrides: Any) -> Settings:
         "athlete_weight_kg": 70.0,
         "chart_media_secret": EVAL_CHART_SECRET,
         "chart_public_base_url": EVAL_CHART_BASE,
+        # Pin the DATABASE too. Without this the Settings default wins and the
+        # whole eval suite reads and WRITES the development database: measured
+        # 2026-10-19, `eval_settings.database_url` was
+        # `...://tri_coach:.../tri_coach`, and any path that opens its own
+        # engine from those settings (ingest, retrieval helpers) silently saw a
+        # store the suite never seeded. The module docstring below already
+        # promises the dedicated test database -- this is the line that keeps
+        # the promise.
+        "database_url": test_database_url(),
     }
     values.update(overrides)
     return Settings(_env_file=None, **values)  # type: ignore[call-arg]
