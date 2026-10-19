@@ -14,8 +14,10 @@ EXACTLY the §13 fields -- the closed set :data:`REQUIRED_FIELDS`:
 - ``expected_numeric_values``: list of ``{value, tolerance, description}``
   entries -- engine-derived numbers the reply must contain within the
   tolerance (provenance documented per case in ``golden.yaml``);
-- ``citation_required``: bool -- the reply must contain a valid
-  ``(Author, Year)`` citation resolvable against the seeded store;
+- ``citation_required``: bool -- the reply must be GROUNDED in the
+  evidence store (``search_evidence`` was called against a store with
+  resolvable sources) and must NEVER display a source citation (owner
+  decisions WA-9 2026-10-14 + evals Log L2 2026-10-16);
 - ``forbidden_content``: list of strings that must NOT appear in the
   reply (diagnosis markers on medical cases).
 

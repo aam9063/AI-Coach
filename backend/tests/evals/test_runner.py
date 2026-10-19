@@ -339,32 +339,46 @@ class StoreRow:
         self.citation = citation
 
 
-class TestCitations:
-    def test_a_resolvable_citation_passes(self) -> None:
+class TestGrounding:
+    """EVAL-5 semantics per the owner decision (Log L2, 2026-10-16):
+    grounding = search_evidence consulted against a store WITH sources,
+    and the reply NEVER displays a citation (WA-9)."""
+
+    def test_a_grounded_reply_with_store_results_passes(self) -> None:
         store = [StoreRow(["Stephen Seiler"], 2010, "(Stephen Seiler, 2010)")]
         failures = check_citations(
-            "Segun la fuente (Stephen Seiler, 2010), la distribucion polarizada...",
+            ["search_evidence"],
             store,
+            "Respondí apoyándome en la evidencia del almacén "
+            "(sin mostrar citas no solicitadas).",
         )
         assert failures == []
 
-    def test_a_reply_without_citation_fails(self) -> None:
-        store = [StoreRow(["Stephen Seiler"], 2010, "(Stephen Seiler, 2010)")]
-        failures = check_citations("La distribucion polarizada funciona.", store)
-        assert len(failures) == 1
-        assert failures[0]["check"] == "citation"
-
-    def test_a_citation_of_an_author_not_in_the_store_fails(self) -> None:
+    def test_a_reply_without_search_evidence_is_not_grounded(self) -> None:
         store = [StoreRow(["Stephen Seiler"], 2010, "(Stephen Seiler, 2010)")]
         failures = check_citations(
-            "Segun (Autor Inventado, 1999), esto funciona.", store
+            [], store, "La distribucion polarizada funciona."
         )
         assert len(failures) == 1
-        assert "Autor Inventado" in failures[0]["detail"]
+        assert failures[0]["check"] == "citation"
+        assert "search_evidence" in failures[0]["detail"]
 
-    def test_an_empty_store_cannot_satisfy_a_citation(self) -> None:
-        failures = check_citations("Segun (Stephen Seiler, 2010), esto funciona.", [])
+    def test_an_empty_store_cannot_ground_a_reply(self) -> None:
+        failures = check_citations(
+            ["search_evidence"], [], "Respondí apoyándome en la evidencia."
+        )
         assert len(failures) == 1
+        assert "empty" in failures[0]["detail"]
+
+    def test_a_displayed_citation_fails_per_the_owner_decision(self) -> None:
+        store = [StoreRow(["Stephen Seiler"], 2010, "(Stephen Seiler, 2010)")]
+        failures = check_citations(
+            ["search_evidence"],
+            store,
+            "Según (Stephen Seiler, 2010), la distribucion polarizada funciona.",
+        )
+        assert len(failures) == 1
+        assert "never displays" in failures[0]["detail"]
 
 
 # ---------------------------------------------------------------------------
