@@ -47,7 +47,9 @@ and settings seams — and changes nothing in ``app/``.
 from __future__ import annotations
 
 import json
+import math
 import re
+import statistics
 import unicodedata
 from collections.abc import AsyncIterator, Callable, Iterable, Sequence
 from dataclasses import dataclass, field
@@ -621,6 +623,14 @@ class RecordingTwilio:
 # --- The runner -------------------------------------------------------------
 
 
+# The fake model's fixed usage/metrics (app.agent.fake_model): every
+# invocation costs exactly 15 tokens and 3 ms — deterministic, so the
+# p95 latency/cost gates compare recorded baselines against EXACTLY
+# reproducible numbers (EVAL-8).
+_FAKE_TOTAL_TOKENS = 15
+_FAKE_LATENCY_MS = 3
+
+
 @dataclass
 class CaseResult:
     """One case's outcome with its structured failures."""
@@ -632,6 +642,18 @@ class CaseResult:
     executed_tools: tuple[str, ...]
     failures: list[dict[str, str]] = field(default_factory=list)
     executed_calls: list[dict[str, Any]] = field(default_factory=list)
+    model_invocations: int = 0
+
+    @property
+    def tokens_per_case(self) -> int:
+        """Total tokens this case's model invocations report (the fake
+        model's usage is fixed and deterministic: 15/invocation)."""
+        return self.model_invocations * _FAKE_TOTAL_TOKENS
+
+    @property
+    def latency_ms_per_case(self) -> int:
+        """Total model latency this case reports (fixed 3 ms/invocation)."""
+        return self.model_invocations * _FAKE_LATENCY_MS
 
     @property
     def passed(self) -> bool:
@@ -769,6 +791,7 @@ async def run_case(
         executed_tools=executed_names,
         failures=failures,
         executed_calls=calls,
+        model_invocations=len(coach.invocations),
     )
 
 
@@ -793,7 +816,55 @@ def aggregate_results(results: Sequence[CaseResult]) -> dict[str, Any]:
         "tool_selection": rate(results, "tool_selection"),
         "citation_compliance": rate(citation_cases, "citation"),
         "safety": rate(medical_cases, "safety"),
+        # EVAL-8: deterministic cost/latency metrics — the fake model
+        # reports FIXED usage/latency per invocation, so these derive
+        # from pipeline behavior alone (turn counts), never wall clock.
+        "p95_latency_ms": _p95([r.latency_ms_per_case for r in results]),
+        "tokens_per_turn": (
+            statistics.fmean(r.tokens_per_case for r in results) if total else 0.0
+        ),
     }
+
+
+def _p95(values: Sequence[int]) -> float:
+    """The nearest-rank 95th percentile of ``values`` (0.0 when empty)."""
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    index = min(len(ordered) - 1, max(0, math.ceil(0.95 * len(ordered)) - 1))
+    return float(ordered[index])
+
+
+# EVAL-8: a >20% regression in p95 latency or cost-per-turn fails CI
+# (§13) — measured against the committed baselines.json.
+REGRESSION_TOLERANCE = 1.2
+
+
+def check_cost_latency_regression(
+    aggregate: dict[str, Any], baseline: dict[str, Any]
+) -> list[dict[str, str]]:
+    """Fail when p95 latency or cost-per-turn regresses beyond 20%% over
+    the recorded baseline (§13). Both metrics are deterministic here (the
+    fake model's fixed usage/latency), so a breach is a REAL pipeline
+    behavior change (extra turns/tokens), never machine noise."""
+    failures: list[dict[str, str]] = []
+    for key in ("p95_latency_ms", "tokens_per_turn"):
+        current = float(aggregate[key])
+        recorded = float(baseline[key])
+        if current > recorded * REGRESSION_TOLERANCE:
+            failures.append(
+                {
+                    "check": "cost_latency",
+                    "detail": (
+                        f"{key} regressed beyond 20%: current {current:.1f} "
+                        f"vs baseline {recorded:.1f} — the §13 gate fails "
+                        "CI. If the extra turns/tokens are intentional, "
+                        "re-record with EVAL_WRITE_BASELINES=1 and review "
+                        "the committed baselines."
+                    ),
+                }
+            )
+    return failures
 
 
 def assert_thresholds(aggregate: dict[str, Any]) -> None:

@@ -18,6 +18,10 @@ a broken check.
 
 from __future__ import annotations
 
+import json
+import os
+from pathlib import Path
+
 from typing import Any
 
 import pytest
@@ -35,6 +39,7 @@ from tests.evals.runner import (
     aggregate_results,
     assert_thresholds,
     check_citations,
+    check_cost_latency_regression,
     check_expected_values,
     check_forbidden_content,
     check_numeric_faithfulness,
@@ -424,6 +429,49 @@ class TestThresholds:
             "safety": 1.0,
         }
 
+# ---------------------------------------------------------------------------
+# EVAL-8: cost/latency regression gate (check-level)
+# ---------------------------------------------------------------------------
+
+
+class TestCostLatencyGate:
+    def test_within_baseline_passes(self) -> None:
+        aggregate = {"p95_latency_ms": 12.0, "tokens_per_turn": 45.0}
+        baseline = {"p95_latency_ms": 12.0, "tokens_per_turn": 45.0}
+        assert check_cost_latency_regression(aggregate, baseline) == []
+
+    def test_small_drift_within_tolerance_passes(self) -> None:
+        aggregate = {"p95_latency_ms": 13.0, "tokens_per_turn": 50.0}
+        baseline = {"p95_latency_ms": 12.0, "tokens_per_turn": 45.0}
+        assert check_cost_latency_regression(aggregate, baseline) == []
+
+    def test_a_latency_regression_beyond_20_percent_fails(self) -> None:
+        aggregate = {"p95_latency_ms": 15.0, "tokens_per_turn": 45.0}
+        baseline = {"p95_latency_ms": 12.0, "tokens_per_turn": 45.0}
+        failures = check_cost_latency_regression(aggregate, baseline)
+        assert len(failures) == 1
+        assert "p95_latency_ms" in failures[0]["detail"]
+
+    def test_a_cost_regression_beyond_20_percent_fails(self) -> None:
+        aggregate = {"p95_latency_ms": 12.0, "tokens_per_turn": 55.0}
+        baseline = {"p95_latency_ms": 12.0, "tokens_per_turn": 45.0}
+        failures = check_cost_latency_regression(aggregate, baseline)
+        assert len(failures) == 1
+        assert "tokens_per_turn" in failures[0]["detail"]
+
+    def test_case_result_metrics_are_deterministic(self) -> None:
+        result = CaseResult(
+            case_id="x",
+            category="load",
+            citation_required=False,
+            reply="",
+            executed_tools=(),
+            model_invocations=3,
+        )
+        assert result.tokens_per_case == 45  # 3 x 15 tokens
+        assert result.latency_ms_per_case == 9  # 3 x 3 ms
+
+
     def test_assert_thresholds_fails_naming_the_breaches(self) -> None:
         with pytest.raises(AssertionError) as excinfo:
             assert_thresholds(
@@ -662,3 +710,32 @@ async def test_golden_set_aggregate_thresholds(
     )
     aggregate = aggregate_results(golden_results)
     assert_thresholds(aggregate)
+    # EVAL-8: p95 latency / cost-per-turn regression gate against the
+    # committed baselines.json. Deterministic by design (the fake model's
+    # fixed usage/latency), so a breach is a REAL pipeline change.
+    # Re-record on purpose with EVAL_WRITE_BASELINES=1 and review the
+    # committed baselines (same procedure as the chart snapshots).
+    baseline_path = Path(__file__).parent / "baselines.json"
+    if os.environ.get("EVAL_WRITE_BASELINES") == "1":
+        baseline_path.write_text(
+            json.dumps(
+                {
+                    "p95_latency_ms": aggregate["p95_latency_ms"],
+                    "tokens_per_turn": aggregate["tokens_per_turn"],
+                },
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        return
+    if not baseline_path.exists():
+        pytest.skip(
+            "no baselines.json: record the first baselines with "
+            "EVAL_WRITE_BASELINES=1 uv run pytest tests/evals"
+        )
+    baseline = json.loads(baseline_path.read_text(encoding="utf-8"))
+    failures = check_cost_latency_regression(aggregate, baseline)
+    assert not failures, "cost/latency regression:\n" + "\n".join(
+        f["detail"] for f in failures
+    )
