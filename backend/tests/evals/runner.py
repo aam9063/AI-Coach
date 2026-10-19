@@ -757,8 +757,15 @@ async def run_case(
     """
     twilio = twilio_client if twilio_client is not None else RecordingTwilio()
     await clear_all_rows(session_factory)
+    # COMMIT, or the fixture is a mirage. An AsyncSession does not commit when
+    # the context exits -- it closes, rolling back the open transaction -- so
+    # every seeded row was discarded and the tools, each opening their own
+    # session, saw an empty database. That single omission is why plot_metric
+    # answered insufficient_data and search_evidence reported an empty store:
+    # one root cause behind most of the red golden cases, not a dozen.
     async with session_factory() as session:
         await apply_fixture(case.db_fixture, session)
+        await session.commit()
 
     coach = model if model is not None else ScriptedCoachModel(
         [{"name": call.name, "input": call.input} for call in case.expected_tool_calls],
