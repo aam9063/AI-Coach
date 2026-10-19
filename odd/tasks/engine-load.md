@@ -1,6 +1,6 @@
 # ODD Feature: engine-load
 
-Status: in progress | Feature 3 of 11 (brief section 12) | Source: PROJECT_BRIEF.md
+Status: complete | Feature 3 of 11 (brief section 12) | Source: PROJECT_BRIEF.md
 
 ## Objective
 

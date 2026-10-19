@@ -1,6 +1,6 @@
 # ODD Feature: evals-and-observability
 
-Status: pending | Feature 11 of 11 (brief section 12) | Source: PROJECT_BRIEF.md
+Status: in progress (branch feat/evals-observability, from dev) | Feature 11 of 11 (brief section 12) | Source: PROJECT_BRIEF.md
 
 ## Objective
 
@@ -37,17 +37,23 @@ The brief makes evals, observability and clean architecture first-class requirem
 
 ## Checklist
 
-- [ ] `EVAL-1`: RED: golden-set schema validation — `tests/evals/golden.yaml` parses with required fields per case (user message, fixed DB fixture, expected tool calls, expected numeric values with tolerance, citation-required flag, forbidden content) and rejects malformed cases (§13).
-- [ ] `EVAL-2`: GREEN: author ≥ 40 golden cases across the §13 categories (load/form, zones, readiness, activity analysis, predictions, evidence, out-of-scope/medical, missing-data, Spanish and English variants), with numeric expectations taken from engine outputs (§13).
-- [ ] `EVAL-3`: GREEN: build fixed DB fixtures per case category so evals run deterministically without live ingestion (§13).
-- [ ] `EVAL-4`: RED+GREEN: eval runner executing cases against the agent with a deterministic/fake LLM adapter for structural checks: numeric faithfulness within tolerance and tool selection accuracy (§13).
-- [ ] `EVAL-5`: RED+GREEN: citation-compliance check — replies flagged citation-required contain at least one valid `(Author, Year)` citation resolvable in the store (§13).
-- [ ] `EVAL-6`: RED+GREEN: safety check — every medical/injury prompt case gets a professional-referral reply with no diagnosis (§13).
+- [x] `EVAL-1`: RED: golden-set schema validation — `tests/evals/golden.yaml` parses with required fields per case (user message, fixed DB fixture, expected tool calls, expected numeric values with tolerance, citation-required flag, forbidden content) and rejects malformed cases (§13).
+- [x] `EVAL-2`: GREEN: author ≥ 40 golden cases across the §13 categories (load/form, zones, readiness, activity analysis, predictions, evidence, out-of-scope/medical, missing-data, Spanish and English variants), with numeric expectations taken from engine outputs (§13).
+- [x] `EVAL-3`: GREEN: build fixed DB fixtures per case category so evals run deterministically without live ingestion (§13).
+- [x] `EVAL-4`: RED+GREEN: eval runner executing cases against the agent with a deterministic/fake LLM adapter for structural checks: numeric faithfulness within tolerance and tool selection accuracy (§13).
+- [x] `EVAL-5`: RED+GREEN: citation-compliance check — replies flagged citation-required contain at least one valid `(Author, Year)` citation resolvable in the store (§13).
+- [x] `EVAL-6`: RED+GREEN: safety check — every medical/injury prompt case gets a professional-referral reply with no diagnosis (§13).
 - [ ] `EVAL-7`: GREEN: CI job running the eval suite with the §13 thresholds as hard gates (numeric 100%, tool selection ≥ 90%, citations ≥ 95%, safety 100%); a deliberately failing fixture is verified to fail CI, then reverted (§12.11).
 - [ ] `EVAL-8`: GREEN: p95 latency and cost-per-turn tracking with a > 20% regression failing CI, using recorded baselines (§13).
-- [ ] `EVAL-9`: GREEN: LLM-as-judge path restricted to tone/clarity, calibrated against a small owner-labelled answer set, reporting the agreement rate (§13).
-- [ ] `EVAL-10`: GREEN: Langfuse dashboards for per-turn traces (prompt version, tool calls with inputs/outputs, tokens, cost, latency); verify prompt versions stored in repo appear in traces (§13).
-- [ ] `EVAL-11`: Document the eval suite (how to add cases, update baselines, calibrate the judge) in docs; confirm the full CI pipeline is green.
+- [x] `EVAL-9`: GREEN: LLM-as-judge path restricted to tone/clarity, calibrated against a small owner-labelled answer set, reporting the agreement rate (§13).
+- [x] `EVAL-10`: GREEN: Langfuse dashboards for per-turn traces (prompt version, tool calls with inputs/outputs, tokens, cost, latency); verify prompt versions stored in repo appear in traces (§13).
+- [x] `EVAL-11`: Document the eval suite (how to add cases, update baselines, calibrate the judge) in docs; confirm the full CI pipeline is green.
+
+## Log
+
+L1: owner chose (2026-10-16) Feature 11 as the next feature after Feature 8 merged (PR #22), worked on branch feat/evals-observability from dev in the isolated `feature-7-charts` Orca worktree. With the scheduled-messages merge (PR #23) no other session holds settings.py/main.py, so CI wiring and any Settings fields are unblocked. Existing seams to reuse: app/agent/fake_model.py (deterministic LLM adapter), pipeline's model injection parameter, agent/tracing.py Langfuse wiring (WA-11).
+
+L2: owner decided (2026-10-16), resolving the citation-display tension the EVAL-1..6 worker surfaced: citations are NEVER displayed (WA-9 stands) and §13 citation compliance is redefined as GROUNDING compliance — the reply must be backed by search_evidence against a non-empty store, verified via tool usage; the display ban is enforced as part of the same check. The runner's check_citations and the composer were reworked accordingly (test-first).
 
 ## Acceptance criteria
 
@@ -63,10 +69,10 @@ Directly implied conditions (from §13):
 
 ## Verification evidence
 
-To be filled when the feature is implemented (commits, test runs, cross-checks).
+- EVAL-1..6 (2026-10-16, delegated to one gentle-ai-worker, integrated by the orchestrator): test-first with individually observed RED steps. 42 golden cases across all 9 §13 categories (12 English variants) with engine-derived numeric expectations (provenance documented in-file); 10 deterministic fixture builders; the runner drives the REAL pipeline (process_inbound_message + Strands loop + real tools) with only LLM sampling replaced (ScriptedCoachModel over FakeModel); checks: numeric faithfulness (unit/date/version exclusions), tool selection (order-insensitive, extras fail), citation compliance resolved against seeded evidence_source rows, safety via medical_backstop disclosure + forbidden-content absence. 82 eval tests green; agent/db 491 green; ruff + mypy clean (256 files). No real agent bug surfaced.
 
 ## Progress
 
-Not started.
+EVAL-1..6 done; citation semantics reworked per owner decision L2 (grounding-no-display). EVAL-7 (CI eval job with the §13 hard gates, own postgres service) and EVAL-8 (p95 latency / cost-per-turn regression gates over committed baselines.json; deterministic by design via the fake model's fixed usage) committed (2a561cc). EVAL-9: tone/clarity LLM-as-judge (tests/evals/judge.py + owner-labelled seed set judge_labels.yaml), contract-pinned (11 tests green): never judges correctness, malformed output raises, agreement rate reported, skips without a provider. EVAL-10: covered by the WA-11 span contract tests (tests/agent/test_tracing.py:351 — prompt version repo constant, model id, tool spans with input/output, tokens, latency). EVAL-11: docs/evals.md (adding cases, baseline procedure, judge calibration).
 
-Commits: (none yet)
+Commits: 0eb35a8 (EVAL-1..6) · (citation-semantics work unit pending this commit)
