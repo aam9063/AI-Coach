@@ -357,6 +357,20 @@ class TestDistancePathHappyPath:
         assert first["total"]["lower"] == second["total"]["lower"]
         assert first["total"]["upper"] == second["total"]["upper"]
 
+    async def test_coverage_names_the_run_anchor_effort_and_its_origin(
+        self, race_settings: Settings
+    ) -> None:
+        """The tool must state WHICH anchor effort the run prediction used
+        and WHERE it came from: the documented derivation (5000 m at the
+        owner-configured threshold run speed), never an invented effort."""
+        result = await tools.predict_race(distance="olympic")
+        assert result["status"] == "ok"
+        anchor = result["coverage"]["run_anchor"]
+        assert "5000 m" in anchor
+        assert "3.33" in anchor  # the configured threshold speed
+        assert "1501.5" in anchor  # 5000 / 3.33 seconds
+        assert "ATHLETE_THRESHOLD_RUN_SPEED_MPS" in anchor
+
     async def test_unconfigured_weight_uses_the_documented_default(
         self, race_settings: Settings
     ) -> None:
@@ -452,6 +466,21 @@ class TestRaceIdPath:
             assert_envelope_shape(segment)
         assert_envelope_shape(stored.total)
         assert stored.total["method"] == result["total"]["method"]
+
+    async def test_coverage_reports_the_run_anchor_on_the_race_path(
+        self, tool_db: async_sessionmaker[Any], race_settings: Settings
+    ) -> None:
+        """The race_id path derives the SAME reference effort; its coverage
+        names it and its origin too."""
+        async with tool_db() as session:
+            race = await seed(
+                session, RaceRow(race_key="olympic", name="Anchor Race")
+            )
+        result = await tools.predict_race(race_id=race.id)
+        assert result["status"] == "ok"
+        anchor = result["coverage"]["run_anchor"]
+        assert "5000 m" in anchor
+        assert "ATHLETE_THRESHOLD_RUN_SPEED_MPS" in anchor
 
     async def test_unknown_race_id_is_an_error(
         self, tool_db: async_sessionmaker[Any]
