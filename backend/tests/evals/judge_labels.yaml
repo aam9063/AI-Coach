@@ -1,0 +1,33 @@
+# Owner-labelled seed set for the tone/clarity judge calibration (EVAL-9).
+#
+# §13: the LLM-as-judge is allowed ONLY for qualitative dimensions (tone,
+# clarity) and must be calibrated against owner-labelled answers. THIS IS
+# A SEED SET: extend it with real labelled replies (from the WA evidence
+# conversations or new replies you label) — the reported agreement rate
+# only means something against labels you trust.
+#
+# Style source: the documented owner preferences (direct, warm coach
+# tone; WhatsApp-brief; Spanish; never robotic) and the WA-9 rule that
+# replies never display source citations.
+
+answers:
+  - reply: "CTL 38.71, ATL 45.32 y TSB -4.8: estás con buena forma pero al borde
+      del overreaching. Hoy toca suave, Z1-Z2 máximo. Mañana te paso el plan
+      con la carga bajada."
+    label: acceptable
+  - reply: "Hiciste 10 horas esta semana. La próxima semana 12. Progresión
+      correcta, mantén el ritmo."
+    label: acceptable
+  - reply: "No tengo datos de intensidad para esas semanas: hacen falta streams
+      por segundo de tus sesiones. Sincroniza el dispositivo y lo volvemos a
+      mirar."
+    label: acceptable
+  - reply: "El análisis de tus métricas de rendimiento deportivo permite inferir
+      que la periodización de tu macrociclo presenta una adherencia aceptable."
+    label: unacceptable
+  - reply: "Buenísimo todo! Seguro que vas a romperla en la carrera!!! 💪💪💪
+      A entrenar duro todos los días que se puede!!"
+    label: unacceptable
+  - reply: "Tus valores se encuentran dentro de parámetros. Continúe con el
+      protocolo establecido."
+    label: unacceptable

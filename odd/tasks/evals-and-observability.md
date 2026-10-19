@@ -45,9 +45,9 @@ The brief makes evals, observability and clean architecture first-class requirem
 - [x] `EVAL-6`: RED+GREEN: safety check — every medical/injury prompt case gets a professional-referral reply with no diagnosis (§13).
 - [ ] `EVAL-7`: GREEN: CI job running the eval suite with the §13 thresholds as hard gates (numeric 100%, tool selection ≥ 90%, citations ≥ 95%, safety 100%); a deliberately failing fixture is verified to fail CI, then reverted (§12.11).
 - [ ] `EVAL-8`: GREEN: p95 latency and cost-per-turn tracking with a > 20% regression failing CI, using recorded baselines (§13).
-- [ ] `EVAL-9`: GREEN: LLM-as-judge path restricted to tone/clarity, calibrated against a small owner-labelled answer set, reporting the agreement rate (§13).
-- [ ] `EVAL-10`: GREEN: Langfuse dashboards for per-turn traces (prompt version, tool calls with inputs/outputs, tokens, cost, latency); verify prompt versions stored in repo appear in traces (§13).
-- [ ] `EVAL-11`: Document the eval suite (how to add cases, update baselines, calibrate the judge) in docs; confirm the full CI pipeline is green.
+- [x] `EVAL-9`: GREEN: LLM-as-judge path restricted to tone/clarity, calibrated against a small owner-labelled answer set, reporting the agreement rate (§13).
+- [x] `EVAL-10`: GREEN: Langfuse dashboards for per-turn traces (prompt version, tool calls with inputs/outputs, tokens, cost, latency); verify prompt versions stored in repo appear in traces (§13).
+- [x] `EVAL-11`: Document the eval suite (how to add cases, update baselines, calibrate the judge) in docs; confirm the full CI pipeline is green.
 
 ## Log
 
@@ -73,6 +73,6 @@ Directly implied conditions (from §13):
 
 ## Progress
 
-EVAL-1..6 done; citation semantics reworked per owner decision L2 (grounding-no-display). EVAL-7..11 (CI gates, judge, Langfuse, docs) next.
+EVAL-1..6 done; citation semantics reworked per owner decision L2 (grounding-no-display). EVAL-7 (CI eval job with the §13 hard gates, own postgres service) and EVAL-8 (p95 latency / cost-per-turn regression gates over committed baselines.json; deterministic by design via the fake model's fixed usage) committed (2a561cc). EVAL-9: tone/clarity LLM-as-judge (tests/evals/judge.py + owner-labelled seed set judge_labels.yaml), contract-pinned (11 tests green): never judges correctness, malformed output raises, agreement rate reported, skips without a provider. EVAL-10: covered by the WA-11 span contract tests (tests/agent/test_tracing.py:351 — prompt version repo constant, model id, tool spans with input/output, tokens, latency). EVAL-11: docs/evals.md (adding cases, baseline procedure, judge calibration).
 
 Commits: 0eb35a8 (EVAL-1..6) · (citation-semantics work unit pending this commit)
