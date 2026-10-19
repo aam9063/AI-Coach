@@ -29,9 +29,16 @@ source carries one), the day's ``daily_load`` ``combined`` row and the
 session's ``session_durability`` engine row — plus the request for the
 RPE/sensations that feeds ``log_subjective``: the review only ASKS (with
 the scales stated); the athlete's reply goes to the agent, which logs it.
-A missing engine output is stated AS missing (the recompute runs at :25
-and :55, a sync at :00 and :30 — a brand-new activity can legitimately
-precede its load row), never fabricated as zero.
+A missing engine output is stated AS missing and never fabricated as zero. The
+common case is not a missing output, though: the recompute runs at :25 and :55, a
+sync at :00 and :30, and this pass at :05 and :35, so a freshly synced activity
+routinely reaches the review BEFORE its ``daily_load`` row can exist. Reviewing
+it anyway sent "TSS: not available yet" every single time and, because the audit
+row is the once-only marker, burned the one review that activity would ever get.
+Such an activity is therefore DEFERRED -- nothing composed, NO marker written --
+and the next pass reviews it WITH its numbers. Only once the activity is older
+than ``LOAD_SETTLE_WINDOW`` does a missing output mean the engine genuinely has
+nothing, and then the honest wording is the right answer.
 
 The suggested adjustment appears ONLY when the persisted readiness
 snapshot for the activity's day says ``suggest_reduce_intensity`` with a
@@ -93,6 +100,19 @@ REVIEW_MARKER_KIND = "post_activity_review"
 # Default look-back for the pass (mirrored in Settings as
 # ``post_activity_review_lookback_hours``; the setting is authoritative).
 DEFAULT_LOOKBACK_HOURS = 48
+
+# How long an activity may wait for its ``daily_load`` row before the review
+# gives up on it and states the output as missing.
+#
+# The load recompute runs at :25 and :55 while this pass fires at :05 and :35, so
+# an activity synced at :30 reaches the review at :35 -- about twenty minutes
+# BEFORE its load can exist. Measured 2026-10-19: that is the common path, not
+# the edge case the docstring above imagined, and because the audit row is the
+# once-only marker, the athlete read "TSS: not available yet" in EVERY review and
+# that activity was never reviewed with its numbers. Two hours covers a full
+# sync-plus-recompute cycle with room to spare; past it the engine genuinely has
+# no output and the honest missing-output wording is the right answer.
+LOAD_SETTLE_WINDOW = dt.timedelta(hours=2)
 
 
 # ---------------------------------------------------------------------------
@@ -382,6 +402,27 @@ async def run_post_activity_review(
                     "reason": (
                         f"activity {activity_id} not found; nothing composed, "
                         "nothing marked"
+                    ),
+                }
+            )
+            skipped += 1
+            continue
+
+        # Defer instead of reviewing without the numbers (see
+        # LOAD_SETTLE_WINDOW): send nothing and write NO marker, so the next
+        # pass picks this activity up WITH its daily_load row. Burn the marker
+        # now and the once-only review is gone for good.
+        started_at = facts.start_time
+        if started_at.tzinfo is None:
+            started_at = started_at.replace(tzinfo=dt.UTC)
+        if facts.tss is None and moment - started_at < LOAD_SETTLE_WINDOW:
+            details.append(
+                {
+                    "activity_id": activity_id,
+                    "mode": "defer",
+                    "reason": (
+                        "daily_load row not computed yet; nothing composed, "
+                        "nothing marked, next pass retries"
                     ),
                 }
             )
