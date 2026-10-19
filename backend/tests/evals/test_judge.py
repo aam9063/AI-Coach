@@ -129,10 +129,10 @@ class TestCalibrationRunner:
 def _fake_settings(monkeypatch: pytest.MonkeyPatch) -> Any:
     from app.core.settings import Settings
 
-    return Settings(_env_file=None, llm_provider="fake", openai_api_key="")
+    return Settings(_env_file=None, llm_provider="fake", openai_api_key="")  # type: ignore[call-arg]
 
 
 def _settings_without_keys() -> Any:
     from app.core.settings import Settings
 
-    return Settings(_env_file=None, llm_provider="openai", openai_api_key="")
+    return Settings(_env_file=None, llm_provider="openai", openai_api_key="")  # type: ignore[call-arg]

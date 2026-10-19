@@ -808,7 +808,7 @@ async def run_case(
         executed_tools=executed_names,
         failures=failures,
         executed_calls=calls,
-        model_invocations=len(coach.invocations),
+        model_invocations=len(getattr(coach, "invocations", [])),
     )
 
 
