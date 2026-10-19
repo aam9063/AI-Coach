@@ -13,7 +13,8 @@ an unreachable database there means the pipeline is broken and must never
 report green while the database tests were skipped.
 """
 
-from collections.abc import AsyncIterator
+import asyncio
+from collections.abc import AsyncIterator, Iterator
 
 import pytest
 from sqlalchemy.ext.asyncio import (
@@ -25,7 +26,12 @@ from sqlalchemy.ext.asyncio import (
 from tests.dbsupport import (
     DevDatabaseRefusedError,
     create_test_engine,
+    created_test_databases,
+    database_name,
+    drop_test_database,
+    is_test_database_name,
     postgres_required,
+    test_database_url,
 )
 
 POSTGRES_HINT = (
@@ -59,6 +65,45 @@ def unreachable_postgres() -> None:
 def anyio_backend() -> str:
     """Backend for the anyio pytest plugin (async tests)."""
     return "asyncio"
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _drop_per_run_test_database() -> Iterator[None]:
+    """Drop this run's own per-run test database at session end.
+
+    ``test_database_url()`` derives a UNIQUE name per process
+    (``<db>_test_<run id>``), so two concurrent runs on one shared Postgres
+    can no longer race each other's ``drop_all``/``create_all`` and turn
+    commits (the 2026-10-19 single-victim DB-test flake). Dropping the run's
+    own database at session end keeps the server from accumulating one
+    database per run. Crash leftovers are reclaimed by
+    ``drop_stale_test_databases`` on the NEXT run's first ``ensure_database``.
+
+    Only databases this process actually ensured are dropped, so sessions
+    that never reached Postgres stay a silent no-op, and the operator
+    opt-in pass-through (``TESTS_ALLOW_DEV_DATABASE=1`` with the configured
+    database itself) is never dropped.
+    """
+    from app.core.settings import get_settings
+
+    try:
+        configured_name = database_name(get_settings().database_url)
+    except Exception:
+        configured_name = None
+    yield
+    for name in sorted(created_test_databases()):
+        if not is_test_database_name(name) or name == configured_name:
+            continue
+        try:
+            asyncio.run(
+                drop_test_database(
+                    test_database_url().rsplit("/", 1)[0] + "/" + name
+                )
+            )
+        except Exception as exc:  # best-effort: never fail the session here
+            print(
+                f"warning: could not drop per-run test database {name!r}: {exc}"
+            )
 
 
 @pytest.fixture
