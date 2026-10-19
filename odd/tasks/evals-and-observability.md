@@ -53,6 +53,8 @@ The brief makes evals, observability and clean architecture first-class requirem
 
 L1: owner chose (2026-10-16) Feature 11 as the next feature after Feature 8 merged (PR #22), worked on branch feat/evals-observability from dev in the isolated `feature-7-charts` Orca worktree. With the scheduled-messages merge (PR #23) no other session holds settings.py/main.py, so CI wiring and any Settings fields are unblocked. Existing seams to reuse: app/agent/fake_model.py (deterministic LLM adapter), pipeline's model injection parameter, agent/tracing.py Langfuse wiring (WA-11).
 
+L2: owner decided (2026-10-16), resolving the citation-display tension the EVAL-1..6 worker surfaced: citations are NEVER displayed (WA-9 stands) and §13 citation compliance is redefined as GROUNDING compliance — the reply must be backed by search_evidence against a non-empty store, verified via tool usage; the display ban is enforced as part of the same check. The runner's check_citations and the composer were reworked accordingly (test-first).
+
 ## Acceptance criteria
 
 From PROJECT_BRIEF.md §12.11:
@@ -71,6 +73,6 @@ Directly implied conditions (from §13):
 
 ## Progress
 
-EVAL-1..6 done. EVAL-7..11 (CI gates, judge, Langfuse, docs) next. OPEN DECISION: citation display tension (EVAL-5 directive vs owner 2026-10-14 no-displayed-citations decision) — with a REAL model, citation_required cases would fail; owner choice pending (options: display again / grounded-without-display / citations only on explicit request).
+EVAL-1..6 done; citation semantics reworked per owner decision L2 (grounding-no-display). EVAL-7..11 (CI gates, judge, Langfuse, docs) next.
 
-Commits: (EVAL-1..6 work unit pending this commit)
+Commits: 0eb35a8 (EVAL-1..6) · (citation-semantics work unit pending this commit)
