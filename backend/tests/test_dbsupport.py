@@ -247,10 +247,24 @@ async def _db_exists(conn: Any, name: str) -> bool:
     )
 
 
+def _configured_url() -> str:
+    """The DSN this process is actually configured with -- never a literal.
+
+    These two tests connect for real, so a hardcoded developer DSN made them
+    authenticate with a local password CI does not have
+    (``InvalidPasswordError`` for user ``tri_coach``) and CI failed on exactly
+    these two tests. The pure URL-derivation tests above keep their fixed DSN
+    on purpose: they only manipulate strings and never connect.
+    """
+    from app.core.settings import get_settings
+
+    return get_settings().database_url
+
+
 def _scratch_url(name: str) -> str:
     from tests.dbsupport import _replace_database
 
-    return _replace_database(DEV, name)
+    return _replace_database(_configured_url(), name)
 
 
 @pytest.mark.anyio
@@ -263,14 +277,19 @@ async def test_drop_stale_test_databases_removes_only_expired_run_databases() ->
 
     from tests.dbsupport import drop_stale_test_databases, ensure_database
 
-    url = derive_test_database_url(DEV)
+    url = derive_test_database_url(_configured_url())
     expired = _scratch_url("tri_coach_test_20200101_999999_aabbccdd")
     fresh = _scratch_url("tri_coach_test_20990101_999999_aabbccdd")
     unparseable = _scratch_url("tri_coach_test_old_backup")
+    # The plain ``<db>_test`` name is what the janitor must NEVER drop. It may
+    # not exist in every environment (CI creates only what a run needs), so the
+    # test materialises it first instead of assuming a developer's leftovers.
+    plain = _scratch_url("tri_coach_test")
     try:
         await ensure_database(expired)
         await ensure_database(fresh)
         await ensure_database(unparseable)
+        await ensure_database(plain)
 
         await drop_stale_test_databases(url, max_age_hours=24)
 
@@ -293,6 +312,9 @@ async def test_drop_stale_test_databases_removes_only_expired_run_databases() ->
                 text(
                     'drop database if exists "tri_coach_test_old_backup" with (force)'
                 )
+            )
+            await conn.execute(
+                text('drop database if exists "tri_coach_test" with (force)')
             )
             await conn.close()
             await engine.dispose()
