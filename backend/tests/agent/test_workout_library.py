@@ -515,6 +515,61 @@ def test_intent_notes_captured_case_insensitive_with_accents() -> None:
     assert lower.issues == ()
 
 
+# --- Resolved session totals (Repetir duration accounting) -------------------
+
+
+def test_repetir_session_reports_computed_total() -> None:
+    corpus = parse_cycling_corpus(EXCERPT_E3_REPEATS)
+
+    assert corpus.issues == ()
+    session = corpus.sessions[0]
+    # Hand-derived from the verbatim excerpt above: 30 + 20 + 10 + 15 + 10
+    # + 4 + 40 = 129 min. Both `Repetir 1 veces` markers have times == 1,
+    # the one count every consistent reading of the source's marker
+    # convention agrees on (the annotated block occurs exactly once, as
+    # written), so the honest total is the written sum: 129 * 60 = 7740 s.
+    assert session.total_duration_s == 7740
+
+
+def test_literal_duration_session_total_unchanged() -> None:
+    corpus = parse_cycling_corpus(EXCERPT_TITLE_E1)
+
+    # E1 carries no Repetir markers: its total is the literal step sum,
+    # hand-derived from the excerpt: 30 + 15 + 5 + 15 + 5 + 15 + 40
+    # = 125 min = 7500 s — exactly what the matcher summed before.
+    assert corpus.sessions[0].total_duration_s == 7500
+
+
+def test_ambiguous_repetition_count_leaves_total_unknown() -> None:
+    # SYNTHETIC: `Repetir 3 veces`. The real corpus never settles what a
+    # >=2 count means: file lines 141-185 tag each of 3 written copies
+    # `Repetir 3 veces`, while lines 719-830 tag each of 6 written copies
+    # `Repetir 1 veces` — so a >=2 tag cannot be attributed to the group or
+    # to a single copy without guessing. The honest total is None, and the
+    # parse must not raise.
+    text = (
+        "Warm up\n\n30 min @ 67 bpm\nZone 1: Recovery\nRepetir 3 veces\n\n"
+        "Active\n\n10 min @ 127 bpm\nZone 2: Aerobic\n"
+    )
+    corpus = parse_cycling_corpus(text)
+
+    assert corpus.issues == ()  # the marker itself parses; its count is 3
+    assert corpus.sessions[0].total_duration_s is None
+
+
+def test_malformed_repetir_marker_leaves_total_unknown() -> None:
+    # SYNTHETIC: a marker-shaped line with a missing count (`Repetir veces`)
+    # is not a Repetition item — it is captured verbatim as a non-intent
+    # Note and surfaced as an issue. The repetition structure is unresolved,
+    # so the total must stay None (never a guessed number), with no raise.
+    text = "Warm up\n\n30 min @ 67 bpm\nZone 1: Recovery\nRepetir veces\n"
+    corpus = parse_cycling_corpus(text)
+
+    assert len(corpus.issues) == 1
+    assert corpus.issues[0].text == "Repetir veces"
+    assert corpus.sessions[0].total_duration_s is None
+
+
 def test_mmss_duration() -> None:
     corpus = parse_cycling_corpus(EXCERPT_MMSS)
     step = corpus.sessions[0].blocks[0].items[0]

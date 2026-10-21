@@ -39,9 +39,15 @@ regression that enforces every number):
   lines and the full-name test exists).
 - 49 cadence lines: ``N-N rpm`` (41) and ``Nrpm`` (8), attached to the step
   they follow.
-- 80 ``Repetir N veces`` markers (N in 1..6). Their repeat semantics are
-  UNRESOLVED, so they are captured structurally as :class:`Repetition`
-  items IN SEQUENCE and are NEVER expanded.
+- 80 ``Repetir N veces`` markers (N in 1..6). They are captured structurally
+  as :class:`Repetition` items IN SEQUENCE and are NEVER expanded or
+  rewritten — but the session TOTALS they account for ARE resolved where the
+  source settles them: see :attr:`Session.total_duration_s`. The corpus
+  itself never settles what a count >= 2 multiplies (file lines 141-185 tag
+  each of 3 written copies ``Repetir 3 veces``; lines 719-830 tag each of 6
+  written copies ``Repetir 1 veces``), so only ``times == 1`` — the count
+  every consistent reading agrees means "this block occurs once, as
+  written" — contributes a known total; anything else stays unknown.
 - 319 role lines (``Warm up``/``Active``/``Recovery``/``Cool down``) open
   blocks; 361 steps live in those 319 blocks, i.e. 42 steps inherit the
   role of the preceding step (run-length encoding in the source).
@@ -276,7 +282,9 @@ class Note:
 
 @dataclass(frozen=True, slots=True)
 class Repetition:
-    """A ``Repetir N veces`` marker, captured structurally — never expanded."""
+    """A ``Repetir N veces`` marker, captured structurally — never expanded.
+    Its contribution to the session's total duration is resolved (only when
+    unambiguous) by :attr:`Session.total_duration_s`."""
 
     times: int
     raw: str  # verbatim line, e.g. "Repetir 3 veces"
@@ -301,6 +309,49 @@ class Session:
     description: str | None  # free-text sessions (E2/E4 style)
     blocks: tuple[Block, ...]
     line: int  # 1-based source line of the header (or first block)
+
+    @property
+    def total_duration_s(self) -> int | None:
+        """The session's total duration in seconds, or ``None`` if unknown.
+
+        Computed purely from the captured structure — never guessed, never
+        defaulted, and the parsed blocks are left untouched (markers stay
+        :class:`Repetition` items; nothing is expanded or dropped):
+
+        - a ``Repetir`` marker with ``times == 1`` contributes its block
+          exactly as written: the source's marker convention is applied
+          inconsistently (whole-group tags on written-out copies in one
+          session, per-copy tags in another, tags on single unwritten
+          copies in a third), but every internally consistent reading
+          agrees a times-1 block occurs ONCE — so the written step sum is
+          the total;
+        - any marker with ``times != 1`` leaves the total UNKNOWN: the real
+          corpus cannot settle whether the written copies are the expansion
+          or a template (3 copies tagged 3 at file lines 141-185 vs 6 copies
+          tagged 1 at lines 719-830), and inventing a multiplier is exactly
+          the unsourced claim this module forbids;
+        - a marker-shaped line the grammar could not fully parse (e.g. a
+          missing count, captured as a non-intent :class:`Note` starting
+          with ``Repetir``) also leaves the total unknown.
+
+        Sessions without unresolved ``Repetir`` content keep the literal sum
+        of their step durations — the same number consumers summed before
+        this property existed — so no downstream code needs a special case.
+        Not serialized: the canonical JSON fixtures are unchanged.
+        """
+        total = 0
+        for block in self.blocks:
+            for item in block.items:
+                if isinstance(item, Step):
+                    total += item.duration.seconds
+                elif isinstance(item, Repetition):
+                    if item.times != 1:
+                        return None
+                elif isinstance(item, Note) and item.text.startswith("Repetir"):
+                    # Marker-shaped but unparsed (e.g. missing count): the
+                    # repetition structure is unresolved, so no total.
+                    return None
+        return total
 
 
 @dataclass(frozen=True, slots=True)

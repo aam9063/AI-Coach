@@ -59,6 +59,30 @@ class TestMatchLibraryWorkout:
         )
         assert entry is None
 
+    def test_capped_endurance_session_matches_a_real_repetir_library_entry(
+        self, library: WorkoutLibrary
+    ) -> None:
+        # A capped endurance prescription (Z1/Z2, 104-minute cap) used to
+        # match NOTHING: every Z1/Z2 entry inside the cap carries `Repetir`
+        # markers whose total the adapter treated as unknown. The parser now
+        # resolves totals for markers whose count every consistent reading
+        # of the source's convention agrees on (times == 1), and the first
+        # such Z1/Z2 entry inside the cap is the session at file lines
+        # 318-351 of the cycling source: hand-derived from that text,
+        # 30 + (5+5+5+4) + (5+5+5) + 40 = 104 min = 6240 s, all-Z1/Z2/Z3.
+        entry = match_library_workout(
+            library, sport="ride", zone_keys=("Z1", "Z2"), duration_cap_s=6240.0
+        )
+        assert entry is not None
+        # The matched entry's identity comes from the library itself, never
+        # invented: its stable parse-order id, membership in the library,
+        # and the library's own name for it (unlabelled cycling sessions
+        # carry name None by the loader's documented convention).
+        assert entry.id == "cycling-session-06"
+        assert entry.name is None
+        assert entry in library.entries
+        assert library.by_id("cycling-session-06") is entry
+
     def test_duration_cap_is_inclusive(self, library: WorkoutLibrary) -> None:
         # At exactly the cap the workout still fits (E1 is 7500 s).
         entry = match_library_workout(

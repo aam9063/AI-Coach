@@ -25,12 +25,15 @@ Matching rule (spec T2, in order):
    zone-less gym sections can therefore never match, honestly.
 3. **Duration within the session's cap.** Only when the session has a cap
    (the planner fixes one for recovery days): the workout's duration must
-   fit. The workout duration is the sum of its step durations. Cycling
-   ``Repetir N veces`` markers have UNRESOLVED semantics and are never
-   expanded (a documented workout-library decision), so a session
-   containing them has no known total duration: claiming "within the cap"
-   from a lower bound would be exactly the kind of unsourced claim S2
-   forbids, so such sessions never match a capped one.
+   fit. The parser owns the accounting: :attr:`Session.total_duration_s`
+   is the written step sum when every ``Repetir N veces`` marker is one the
+   source's convention settles (``times == 1`` — the one count every
+   consistent reading agrees means "this block occurs once, as written"),
+   and ``None`` when any marker or marker-shaped line leaves the total
+   ambiguous. The honest rule is unchanged: claiming "within the cap" from
+   an UNKNOWN total would be exactly the kind of unsourced claim S2
+   forbids, so a session whose total is ``None`` never matches a capped
+   one.
 
 When several entries match, the FIRST in the library's deterministic parse
 order wins, so the same decided session always references the same
@@ -106,24 +109,21 @@ def _workout_duration_known_and_within(
 ) -> bool:
     """Whether the entry's duration is known and fits the cap (rule 3).
 
-    The sum of step durations is the workout's duration ONLY when it has
-    no unresolved ``Repetir`` markers; with repetitions the true total is
-    unknown and the workout cannot honestly fit any cap.
+    The parser owns the duration accounting:
+    :attr:`Session.total_duration_s` is the written step sum when every
+    ``Repetir`` marker is one the source's convention settles
+    (``times == 1``) and ``None`` when any marker or marker-shaped line
+    leaves the total ambiguous. The honest-None rule is preserved exactly:
+    an UNKNOWN total can never honestly fit a cap (a lower bound would be
+    an unsourced claim), so such sessions still never match a capped one.
     """
     content = entry.content
     if not isinstance(content, Session):
         return False
-    has_repetitions = any(
-        hasattr(item, "times") for block in content.blocks for item in block.items
-    )
-    if has_repetitions:
+    total_s = content.total_duration_s
+    if total_s is None:
+        # Unknown total: refuse rather than guess (honest-None rule).
         return False
-    total_s = sum(
-        item.duration.seconds
-        for block in content.blocks
-        for item in block.items
-        if hasattr(item, "duration")
-    )
     return total_s <= duration_cap_s
 
 
