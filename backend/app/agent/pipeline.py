@@ -317,6 +317,45 @@ EVIDENCE_LABEL_EN: Final[str] = (
     "library: I have no source backing it."
 )
 
+# --- Chart-claim guard (measured 2026-10-21) ------------------------------
+#
+# The athlete asked for a chart and the model made ZERO tool calls: the
+# conversation history already held its own earlier "Aquí tienes la gráfica"
+# plus the old link, so it answered from that instead of plotting again, and the
+# message announced an image that was never sent. The transport fix above
+# guarantees a real chart is delivered whenever one is plotted; this guard
+# guarantees the message never PROMISES one that is not there, in the same
+# deterministic spirit as the medical disclosure and the evidence label.
+CHART_NOUNS: Final[tuple[str, ...]] = ("grafica", "grafico", "chart")
+# How a reply PRESENTS an image. A mere mention ("si quieres te preparo una
+# gráfica") is not a claim, and an honest failure ("no pude generar la
+# gráfica") must never be flagged.
+CHART_PRESENTING_MARKERS: Final[tuple[str, ...]] = (
+    "aqui tienes",
+    "aqui esta",
+    "te muestro",
+    "te envio",
+    "te adjunto",
+    "te mando",
+    "en la imagen",
+    "here is",
+    "here's",
+    "i'm sending",
+    "i am sending",
+)
+# A chart noun must follow the presenting marker CLOSELY for the pair to count
+# as one claim ("aquí tienes el resumen" is not a chart claim).
+_CHART_CLAIM_WINDOW = 45
+_IMAGE_MARKDOWN_RE = re.compile(r"!\[[^\]]*\]\([^)]*\)")
+CHART_CLAIM_LABEL_ES: Final[str] = (
+    "\n\n\u26a0\ufe0f No pude adjuntar la gráfica en este mensaje: se genera de nuevo "
+    "en cada envío, así que pídemela otra vez y te la mando."
+)
+CHART_CLAIM_LABEL_EN: Final[str] = (
+    "\n\n\u26a0\ufe0f I could not attach the chart to this message: charts are "
+    "generated fresh for every send, so ask me again and I will send it."
+)
+
 
 def _normalise_for_match(text: str) -> str:
     """Lower-case, accent-stripped form for marker matching (NFKD).
@@ -381,7 +420,52 @@ def _apply_evidence_label(
     return reply + EVIDENCE_LABEL_EN, True
 
 
-_MARKDOWN_LINK_RE = re.compile(r"\[([^\]]+)\]\((https?://[^)\s]+)\)")
+def _claims_a_chart(reply: str) -> bool:
+    """Whether the reply PRESENTS a chart image to the athlete.
+
+    Two shapes count: raw image markdown (``![alt](url)``) and a presenting
+    phrase followed closely by a chart noun ("aquí tienes la gráfica", "here is
+    the chart"). Offering a chart, or honestly reporting that it could not be
+    generated, is not a claim.
+    """
+    if _IMAGE_MARKDOWN_RE.search(reply):
+        return True
+    normalised = _normalise_for_match(reply)
+    for marker in CHART_PRESENTING_MARKERS:
+        start = normalised.find(marker)
+        while start != -1:
+            window = normalised[
+                start + len(marker) : start + len(marker) + _CHART_CLAIM_WINDOW
+            ]
+            if any(noun in window for noun in CHART_NOUNS):
+                return True
+            start = normalised.find(marker, start + 1)
+    return False
+
+
+def _looks_spanish(text: str) -> bool:
+    """Cheap language heuristic for a system-generated label, the same
+    Spanish-first convention as the other backstops."""
+    padded = f" {_normalise_for_match(text)} "
+    return any(word in padded for word in (" el ", " la ", " los ", " de ", " y "))
+
+
+def _apply_chart_claim_guard(reply: str, has_chart: bool) -> tuple[str, bool]:
+    """APPEND the honest label when the reply presents a chart this turn did
+    not produce (or produced and failed to deliver). Returns the (possibly
+    extended) reply and whether the label was applied.
+
+    Never rewrites the model's content: same rule as the medical disclosure and
+    the evidence label.
+    """
+    if has_chart or not _claims_a_chart(reply):
+        return reply, False
+    if _looks_spanish(reply):
+        return reply + CHART_CLAIM_LABEL_ES, True
+    return reply + CHART_CLAIM_LABEL_EN, True
+
+
+_MARKDOWN_LINK_RE = re.compile(r"!?\[([^\]]+)\]\((https?://[^)\s]+)\)")
 
 
 def to_whatsapp_text(text: str) -> str:
@@ -396,8 +480,11 @@ def to_whatsapp_text(text: str) -> str:
     with more prompt prose: a rule the model may obey is not a guarantee.
 
     Bold becomes native ``*bold*``; a markdown link collapses to its label, because
-    the image itself is attached by the pipeline and the URL is redundant. A BARE url
-    (one the athlete asked for) and a lone ``*`` pass through untouched.
+    the image itself is attached by the pipeline and the URL is redundant. An IMAGE
+    link (``![alt](url)``) collapses the same way and keeps no ``!``: measured in
+    production on 2026-10-21, a reused image link reached the athlete as
+    ``!Rendimiento del Último Mes``. A BARE url (one the athlete asked for) and a lone
+    ``*`` pass through untouched.
     """
     without_links = _MARKDOWN_LINK_RE.sub(r"\1", text)
     return _MARKDOWN_BOLD_RE.sub(r"*\1*", without_links)
@@ -729,6 +816,12 @@ async def process_inbound_message(
     # Normalise BEFORE splitting: the audit row and the send must carry the same
     # bytes, and WhatsApp renders markdown bold as literal asterisks.
     chart_media_url = _chart_media_url(tool_calls, settings, datetime.now(UTC))
+    # Chart-claim guard: a reply that PRESENTS a chart this turn did not produce
+    # tells the athlete an image is coming when it is not (measured in
+    # production 2026-10-21: zero tool calls, the previous turn's chart reused).
+    reply, chart_claim_guarded = _apply_chart_claim_guard(
+        reply, chart_media_url is not None
+    )
     chunks = split_reply(
         to_whatsapp_text(reply), limit=settings.agent_whatsapp_message_char_limit
     )
@@ -785,6 +878,9 @@ async def process_inbound_message(
             if evidence_label_applied:
                 # Observable, not silent: same rule as the disclosure above.
                 payload["evidence_label_applied"] = True
+            if chart_claim_guarded:
+                # The reply promised a chart that this turn did not deliver.
+                payload["chart_claim_backstop"] = True
             session.add(
                 MessageLogRow(
                     direction="outbound",

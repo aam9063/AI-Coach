@@ -122,6 +122,19 @@ class TestLanguageMirroringAndWhatsAppFormatting:
         assert "caracter" in prompt.lower()
         assert "mensajes consecutivos" in prompt.lower()
 
+    async def test_the_chart_rule_is_stated(self) -> None:
+        """Measured in production 2026-10-21: asked for a chart, the model made
+        zero tool calls and answered from the conversation history with a chart
+        it had plotted in an EARLIER turn. The prompt had no chart rule at all."""
+        prompt = await delivered_prompt()
+
+        assert "plot_metric" in prompt
+        # Every request needs its OWN call: history is not evidence.
+        assert "este turno" in prompt.lower()
+        assert "aunque" in prompt.lower()
+        # The false presentation is named explicitly.
+        assert "nunca digas que muestras una gráfica" in prompt.lower()
+
 
 class TestInsufficientDataEndToEnd:
     @pytest.fixture

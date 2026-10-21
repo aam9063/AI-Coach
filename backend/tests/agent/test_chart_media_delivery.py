@@ -336,3 +336,117 @@ async def test_a_turn_without_a_chart_attaches_no_media(
     assert rows and all(
         (row.payload or {}).get("media_url") is None for row in rows
     )
+
+
+# --- The claim guard: never promise an image that is not attached ---------
+#
+# Measured in production on 2026-10-21 at 19:03 (21:03 local): the athlete asked
+# for a chart, the model made ZERO tool calls (the conversation history already
+# held its own earlier "Aquí tienes la gráfica" plus the old link, so it reused
+# that instead of plotting again) and the message announced an image that was
+# never sent. The transport is fixed above; this guard makes the LIE impossible:
+# if the reply presents a chart and this turn produced none, the athlete is told
+# the truth, deterministically, in the same language.
+
+
+def test_a_presented_chart_without_a_chart_is_flagged() -> None:
+    from app.agent.pipeline import _claims_a_chart
+
+    assert _claims_a_chart("Aquí tienes la gráfica de tu rendimiento del último mes:")
+    assert _claims_a_chart("Te muestro el gráfico de CTL y ATL:")
+    assert _claims_a_chart("Te envío la gráfica de tu HRV")
+    assert _claims_a_chart("Here is the chart of your last 30 days")
+    assert _claims_a_chart("Mirá:\n\n![Rendimiento del Último Mes](https://x.test/c/1)")
+
+
+def test_an_honest_or_merely_mentioning_reply_is_not_flagged() -> None:
+    from app.agent.pipeline import _claims_a_chart
+
+    # An honest failure is NOT a claim.
+    assert not _claims_a_chart(
+        "No pude generar la gráfica: falta el dato de HRV de los últimos 7 días."
+    )
+    # Offering a chart is not presenting one.
+    assert not _claims_a_chart("Si quieres, te preparo una gráfica de tu carga.")
+    # Unrelated use of a presenting phrase with no chart noun.
+    assert not _claims_a_chart("Aquí tienes el resumen de tu semana.")
+
+
+def test_the_claim_label_follows_the_reply_language() -> None:
+    from app.agent.pipeline import (
+        CHART_CLAIM_LABEL_EN,
+        CHART_CLAIM_LABEL_ES,
+        _apply_chart_claim_guard,
+    )
+
+    es, applied_es = _apply_chart_claim_guard("Aquí tienes la gráfica de tu CTL", False)
+    assert applied_es is True and es.endswith(CHART_CLAIM_LABEL_ES)
+    en, applied_en = _apply_chart_claim_guard("Here is the chart of your CTL", False)
+    assert applied_en is True and en.endswith(CHART_CLAIM_LABEL_EN)
+    # A turn that DID produce a chart keeps the model's text untouched.
+    same, applied = _apply_chart_claim_guard("Aquí tienes la gráfica de tu CTL", True)
+    assert applied is False and same == "Aquí tienes la gráfica de tu CTL"
+
+
+def test_image_markdown_leaves_no_stray_bang() -> None:
+    from app.agent.pipeline import to_whatsapp_text
+
+    assert (
+        to_whatsapp_text("![Rendimiento del Último Mes](https://x.test/c/1)")
+        == "Rendimiento del Último Mes"
+    )
+
+
+@pytest.mark.anyio
+async def test_a_turn_that_claims_a_chart_without_plotting_tells_the_truth(
+    db_engine: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.agent import pipeline
+    from app.agent.pipeline import (
+        CHART_CLAIM_LABEL_ES,
+        handle_inbound_message,
+    )
+    from app.db.models import MessageLogRow
+    from app.db.session import make_session_factory
+
+    monkeypatch.setattr(pipeline, "tool_list", lambda: [_stub_plot_metric([10])])
+    twilio = _RecordingTwilio()
+    await asyncio.to_thread(
+        handle_inbound_message,
+        {
+            "MessageSid": "SMchartclaim",
+            "From": SENDER,
+            "To": COACH,
+            "Body": "puedes darme una grafica de mi rendimiento del ultimo mes",
+        },
+        settings=_settings(),
+        # The measured failure: the model answers WITHOUT calling plot_metric.
+        model=FakeModel(
+            [
+                "Aquí tienes la gráfica de tu rendimiento del último mes:\n\n"
+                "![Rendimiento del Último Mes](https://x.test/c/1)\n\n"
+                "En ella puedes ver cómo han variado tu CTL, ATL y TSB."
+            ]
+        ),
+        twilio_client=twilio,
+    )
+
+    assert twilio.calls, "nothing was sent"
+    sent = "".join(str(call.get("body", "")) for call in twilio.calls)
+    assert all(call.get("media_url") is None for call in twilio.calls), (
+        "no chart was plotted, so no media may be attached"
+    )
+    assert sent.rstrip().endswith(CHART_CLAIM_LABEL_ES.strip()), (
+        f"the athlete must be told the chart is not attached, got {sent!r}"
+    )
+    assert "![" not in sent, f"raw markdown image syntax reached the athlete: {sent!r}"
+    factory = make_session_factory(db_engine)
+    async with factory() as session:
+        rows = (
+            await session.execute(
+                select(MessageLogRow).where(MessageLogRow.direction == "outbound")
+            )
+        ).scalars().all()
+    assert any(
+        (row.payload or {}).get("chart_claim_backstop") is True for row in rows
+    ), "the backstop must be visible in the audit trail"

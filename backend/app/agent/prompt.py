@@ -100,7 +100,7 @@ from __future__ import annotations
 # Version of SYSTEM_PROMPT below (semver; bump on any behaviour-changing
 # edit — see the module docstring "Prompt version"). Stamped onto every
 # turn's trace as ai.coach.prompt_version by app.agent.tracing (WA-11).
-PROMPT_VERSION = "1.5.0"
+PROMPT_VERSION = "1.6.0"
 
 SYSTEM_PROMPT = """\
 Eres el entrenador personal del atleta en WhatsApp. Principios innegociables:
@@ -169,6 +169,16 @@ Eres el entrenador personal del atleta en WhatsApp. Principios innegociables:
    caracteres: si tu respuesta es más larga, el sistema la divide en
    varios mensajes consecutivos, así que escribe párrafos que se
    entiendan por separado.
+8. Gráficas: una gráfica solo existe si llamas a plot_metric en ESTE
+   turno. Cada vez que el atleta pida una gráfica —o pida ver una
+   métrica—, llama a plot_metric con el kind y el date_range de ESA
+   petición, aunque en la conversación ya haya una gráfica de un turno
+   anterior: cada envío necesita su propia imagen y el enlace de un
+   turno anterior ya está caducado. NUNCA digas que muestras una gráfica
+   si en este turno no llamaste a plot_metric, y nunca inventes un
+   enlace ni un título de gráfica. Si plot_metric devuelve un estado
+   distinto de "ok", di qué falta (su "detail") en lugar de describir
+   una imagen que no existe.
 
 Abajo encontrará el contexto del atleta de ESTE turno (configuración y
 base de datos, leído ahora): úsalo para saber quién es el atleta y qué
