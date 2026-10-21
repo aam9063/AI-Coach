@@ -165,7 +165,13 @@ class TestUsagePersistenceAndBudget:
         assert payload["usage"] == {
             "inputTokens": 10, "outputTokens": 5, "totalTokens": 15,
         }
-        assert payload["latency_ms"] == 3
+        # The latency is MEASURED by the turn itself (time.perf_counter), not read
+        # from the SDK's accumulated_metrics: in production that metric carried no
+        # latencyMs at all and the audit row recorded 0 (2026-10-21). The fake's
+        # scripted value is therefore no longer what gets persisted, and asserting
+        # it would pin the very dependency that proved unreliable.
+        assert isinstance(payload["latency_ms"], int)
+        assert payload["latency_ms"] > 0
         # The conversation key: the sender the reply went to.
         assert payload["to"] == FROM
 

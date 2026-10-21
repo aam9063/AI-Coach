@@ -105,10 +105,18 @@ def make_message(**overrides: str) -> dict[str, str]:
 
 
 def make_settings(**overrides: Any) -> Settings:
+    # embedding_provider="fake" explicitly: the Settings default is "openai",
+    # which would make every turn's evidence-injection backstop construct a
+    # real OpenAI embedder with no key (OpenAIError) and only survive via
+    # build_evidence_injection's fail-open catch — a credential traceback in
+    # the logs of a TRACING test that never intends to touch embeddings.
+    # The deterministic fake is the offline provider every automated test
+    # uses (app.evidence.embeddings: no test may open a network connection).
     return Settings(
         _env_file=None,  # type: ignore[call-arg]
         llm_provider="fake",
         openai_api_key="",
+        embedding_provider="fake",
         twilio_account_sid="",
         twilio_auth_token="",
         **overrides,
@@ -255,7 +263,16 @@ class TestUnconfiguredIsACleanNoOp:
         assert len(rows) == 1
         assert rows[0].payload is not None
         assert rows[0].payload["usage"] == dict(USAGE)
-        assert rows[0].payload["latency_ms"] == LATENCY_MS
+        # The latency is MEASURED by the turn itself (time.perf_counter), not
+        # read from the fake model's scripted metric (bc62f50): in production
+        # the SDK metric carried no latencyMs and the audit row recorded 0.
+        # Asserting the scripted 3 ms pinned wall-clock time, which is never
+        # exactly 3 ms — on this machine each fresh DB connection to
+        # ``localhost`` costs ~2 s (asyncpg tries ::1 before 127.0.0.1), so
+        # the persisted value is seconds. Same change as
+        # test_pipeline_guardrails.py: a positive int is the intent.
+        assert isinstance(rows[0].payload["latency_ms"], int)
+        assert rows[0].payload["latency_ms"] > 0
 
 
 class TestKeysWithoutHostIsNotConfigured:
