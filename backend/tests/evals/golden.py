@@ -76,6 +76,7 @@ _TOOL_NAMES: Final[frozenset[str]] = frozenset(
         "predict_race",
         "plot_metric",
         "log_subjective",
+        "plan_workout",  # workout-planner T3: model-facing planner tool (T5 golden cases)
         "propose_threshold_update",
         "search_evidence",
     }

@@ -771,6 +771,35 @@ def _numeric_zone_targets(
     ]
 
 
+def _sport_mix(sport_types: list[str]) -> dict[str, int]:
+    """Count activities per REAL sport over the accounting window.
+
+    Case- and alias-insensitive, and restricted to the engine's vocabulary: an
+    unknown type must never invent a sport to balance against.
+    """
+    counts: dict[str, int] = {}
+    for raw in sport_types:
+        key = _SPORT_ALIASES.get(raw.strip().lower(), raw.strip().lower())
+        if key in ENGINE_KNOWN_SPORTS:
+            counts[key] = counts.get(key, 0) + 1
+    return counts
+
+
+_SPORT_ALIASES: dict[str, str] = {
+    # Sports the engine knows that are, for TRAINING-PURPOSE accounting, the same
+    # sport. Measured in production on 2026-10-21: the 7-day mix came back as
+    # {"ride": 1, "virtualride": 2}, so the imbalance rule saw TWO sports where
+    # the athlete had trained one, and "the other sport" could offer an indoor
+    # ride as the alternative to an outdoor ride. Normalised here, at the
+    # accounting boundary, because the engine's own vocabulary must keep the
+    # spelling its data source uses.
+    "virtualride": "ride",
+    "ebikeride": "ride",
+    "virtualrun": "run",
+    "treadmillrun": "run",
+}
+
+
 @tool
 async def plan_workout(sport: str | None = None, day: str | None = None) -> dict[str, Any]:
     """Today's (or one day's) training session, DECIDED by the deterministic
@@ -878,11 +907,7 @@ async def plan_workout(sport: str | None = None, day: str | None = None) -> dict
     # The 7-day sport mix: only engine-known sports count (the engine
     # itself rejects unknown types at load time), normalised the same
     # case-insensitive way the engine matches its vocabulary.
-    sport_counts: dict[str, int] = {}
-    for activity in activities:
-        key = activity.type.strip().lower()
-        if key in ENGINE_KNOWN_SPORTS:
-            sport_counts[key] = sport_counts.get(key, 0) + 1
+    sport_counts = _sport_mix([activity.type for activity in activities])
     total_activities = sum(sport_counts.values())
     sport_share: float | None = (
         max(sport_counts.values()) / total_activities if total_activities else None

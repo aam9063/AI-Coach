@@ -36,6 +36,15 @@
 #   tests/agent/test_plot_metric.py::make_weekly_intensity.
 # - subjective case: the tool echoes the recorded rpe 6 / fatigue 4.
 # - propose case: the tool echoes the proposed 220.0 W.
+# - planner cases: the plan_workout tool (workout-planner T5) quoting the
+#   pure engine app.engine.planner: the recovery cap is
+#   RECOVERY_MAX_DURATION_S = 3600 s (the tool's real duration_s); the
+#   overreached TSB quoted as -21.3 by the engine reason is
+#   app.engine.pmc.compute_pmc over the planner_rest fixture's spiked series
+#   (fixed pattern +150 TSS on 2026-09-06 and 2026-09-07; engine value
+#   -21.3093...); the Z3 run HR bounds 152.1 / 160.55 bpm are
+#   app.engine.zones.hr_zones("run", 169.0) over the eval settings' LTHR
+#   (anchor: tests/engine/test_zones_*.py).
 #
 # Tolerances cover the reply's 2-decimal rounding of the quoted values.
 - id: load-status-es
@@ -534,3 +543,105 @@
     - {value: 220.0, tolerance: 0.11, description: "propose_threshold_update echoes the proposed FTP"}
   citation_required: false
   forbidden_content: []
+
+# --- Workout planner (workout-planner T5) -----------------------------------
+#
+# One case per decision-table row of app/engine/planner.py, so the §13 gates
+# cover the planner exactly like every other tool. The composer branch for
+# plan_workout (tests/evals/runner.py) quotes the engine's reason, kind,
+# sport, zones and duration VERBATIM from the tool output, so each branch is
+# gated by its expected engine numbers plus forbidden_content markers that
+# would be an INVENTION in that branch — a tool that picked the wrong row
+# makes the composer quote the wrong session and fails the gate. Every case
+# scripts day=2026-09-07 (the fixture anchor date) because plan_workout with
+# day=None resolves to the REAL current date, which would be
+# non-deterministic against the fixed fixtures.
+
+- id: planner-recovery-en
+  # Row 1: readiness.suggest_reduce_intensity is true -> recovery, Z1-Z2,
+  # duration capped at 60 min. The 3600 s cap is asserted against the value
+  # the tool REALLY returns (session.duration_s, quoted by the composer), not
+  # the number we wish it returned. A tool that wrongly answered rest or
+  # quality would drop the cap from the reply and fail the expected value.
+  category: readiness
+  user_message: "What can I train today? I feel heavy."
+  db_fixture: planner_recovery
+  expected_tool_calls:
+    - name: plan_workout
+      input: {day: "2026-09-07"}
+  expected_numeric_values:
+    - {value: 3600.0, tolerance: 0.5, description: "engine planner RECOVERY_MAX_DURATION_S: the recovery cap plan_workout returns"}
+  citation_required: false
+  forbidden_content: ["descanso"]
+
+- id: planner-rest-en
+  # Row 2: TSB strictly below the very-negative threshold (-10.0, reused from
+  # readiness) -> rest or mobility. A rest prescription expresses NO
+  # intensity and NO workload, so the forbidden markers below are exactly
+  # what would be an invention in this branch: any zone key or any duration
+  # (the 3600 s cap included) must not reach the athlete.
+  category: load
+  user_message: "Should I train today or take it easy?"
+  db_fixture: planner_rest
+  expected_tool_calls:
+    - name: plan_workout
+      input: {day: "2026-09-07"}
+  expected_numeric_values:
+    - {value: -21.31, tolerance: 0.11, description: "engine pmc combined TSB 2026-09-07 over the spiked planner_rest series (compute_pmc); the engine reason quotes it as -21.3"}
+  citation_required: false
+  forbidden_content: ["z1", "z2", "z3", "3600", "60", "recovery", "recuperación"]
+
+- id: planner-quality-en
+  # Row 3: TSB neutral/positive AND readiness ok -> quality in Z3. No sport
+  # is named and there is no activity mix, so the Z3 KEY appears in the tool
+  # output with honestly unnumbered bounds (null min/max — no zone model
+  # exists without a session sport, and inventing bounds is forbidden). The
+  # forbidden markers are the OTHER two branches: a reply saying rest or
+  # recovery (or carrying Z1/Z2 or the cap) means the tool picked the wrong
+  # row.
+  category: readiness
+  user_message: "What kind of session can I do today?"
+  db_fixture: planner_quality
+  expected_tool_calls:
+    - name: plan_workout
+      input: {day: "2026-09-07"}
+  expected_numeric_values:
+    - {value: -4.87, tolerance: 0.11, description: "engine pmc combined TSB 2026-09-07 in the load_window fixture; the engine reason quotes it as -4.9"}
+  citation_required: false
+  forbidden_content: ["descanso", "rest or mobility", "recovery", "z1", "z2", "3600"]
+
+- id: planner-sport-mix-en
+  # Row 4: a 7-day mix dominated by one sport (5 Ride + 1 Run in the plan
+  # day's window -> ride share 5/6 = 0.83 > 0.70) with NO sport named in the
+  # request -> the OTHER sport is preferred. The expectation is what the tool
+  # actually decides: session sport "run" (the least-share sport of the
+  # window), quality in Z3 with numeric bounds from the eval settings' LTHR.
+  # Forbidding the dominant sport token "ride" fails any wrong pick, because
+  # the composer quotes the decided sport verbatim.
+  category: activity_analysis
+  user_message: "What should I train? Just pick a session for me."
+  db_fixture: planner_sport_mix
+  expected_tool_calls:
+    - name: plan_workout
+      input: {day: "2026-09-07"}
+  expected_numeric_values:
+    - {value: 152.1, tolerance: 0.11, description: "engine hr_zones('run', 169.0): Z3 min bpm for the decided run session"}
+    - {value: 160.55, tolerance: 0.11, description: "engine hr_zones('run', 169.0): Z3 max bpm for the decided run session"}
+    - {value: -4.87, tolerance: 0.11, description: "engine pmc combined TSB 2026-09-07 in the load_window fixture"}
+  citation_required: false
+  forbidden_content: ["ride", "bici"]
+
+- id: planner-missing-readiness-en
+  # Row 5 (insufficient data, evaluated FIRST): the load_window fixture has
+  # the day's combined load but NO readiness snapshot, so no session may be
+  # planned (S5): the reply must name what is missing and must NOT invent a
+  # session — hence any zone key or duration is forbidden here.
+  category: missing_data
+  user_message: "Can you plan a session for me?"
+  db_fixture: load_window
+  expected_tool_calls:
+    - name: plan_workout
+      input: {day: "2026-09-07"}
+  expected_numeric_values: []
+  citation_required: false
+  forbidden_content: ["z1", "z2", "z3", "3600", "60"]
