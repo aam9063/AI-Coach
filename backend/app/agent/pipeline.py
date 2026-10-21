@@ -80,6 +80,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from collections.abc import Awaitable, Callable
 from typing import Any
 from uuid import uuid4
@@ -265,6 +266,25 @@ async def _handle_sync_command(
         message.get("MessageSid", ""),
         trace_id,
     )
+
+
+_MARKDOWN_BOLD_RE = re.compile(r"\*\*(.+?)\*\*", re.DOTALL)
+
+
+def to_whatsapp_bold(text: str) -> str:
+    """Convert markdown bold to WhatsApp's native bold before sending.
+
+    Measured in production on 2026-10-21: a real answer came back as
+    ``1. **CTL (Condición Física)**: 8.2 puntos`` even though the prompt asks for
+    WhatsApp formatting, so the athlete read the asterisks instead of emphasis.
+    Normalising here, at the send boundary, is deterministic -- the same reason the
+    medical disclosure and the evidence injection are enforced in code instead of
+    with more prompt prose: a rule the model may obey is not a guarantee.
+
+    Single asterisks and lone ``*`` (a multiplication sign, a bullet) pass through
+    untouched; only paired double asterisks are markup.
+    """
+    return _MARKDOWN_BOLD_RE.sub(r"*\1*", text)
 
 
 def split_reply(text: str, limit: int = WHATSAPP_MESSAGE_CHAR_LIMIT) -> list[str]:
@@ -531,7 +551,11 @@ async def process_inbound_message(
     generated_summaries = list(memory.generated_summaries)
     for generated in generated_summaries:
         budget.add_usage(generated["usage"])
-    chunks = split_reply(reply, limit=settings.agent_whatsapp_message_char_limit)
+    # Normalise BEFORE splitting: the audit row and the send must carry the same
+    # bytes, and WhatsApp renders markdown bold as literal asterisks.
+    chunks = split_reply(
+        to_whatsapp_bold(reply), limit=settings.agent_whatsapp_message_char_limit
+    )
     total_chunks = len(chunks)
     async with session_factory() as session:
         for call in tool_calls:
@@ -774,5 +798,6 @@ __all__ = [
     "process_inbound_message",
     "split_reply",
     "sync_confirmation",
+    "to_whatsapp_bold",
     "tool_list",
 ]
