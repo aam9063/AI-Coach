@@ -79,9 +79,13 @@ and no credentials (fake model + fake Twilio client).
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import re
+import time
+import unicodedata
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, Final
 from uuid import uuid4
 
 from sqlalchemy.exc import IntegrityError
@@ -265,6 +269,130 @@ async def _handle_sync_command(
         message.get("MessageSid", ""),
         trace_id,
     )
+
+
+_MARKDOWN_BOLD_RE = re.compile(r"\*\*(.+?)\*\*", re.DOTALL)
+
+# --- Deterministic evidence label (measured production failure 2026-10-21) -
+#
+# A real athlete question ("¿Qué dice la ciencia sobre el entrenamiento en
+# ayunas?") made the agent call ``search_evidence``, which returned
+# ``status: "insufficient_data"`` — nothing relevant in the curated store.
+# The reply correctly OPENED with "No tengo una fuente en el almacén que
+# respalde…" and then went on to improvise: "Algunos estudios sugieren que
+# puede ayudar a mejorar la oxidación de grasas…". That is exactly what the
+# owner forbids: science claims with no source. Prompt rules have already
+# failed three times in this project (medical disclosure, evidence tool call,
+# citations), so this guard is code, not prose — deterministic-over-
+# persuasive is the house rule. The owner chose the LABELLED variant, not
+# the "refuse everything" variant: general knowledge is allowed but must be
+# visibly labelled as not coming from his library. The label is APPENDED
+# after the medical-disclosure backstop and BEFORE the WhatsApp
+# normalisation/split, and the intervention is recorded in the outbound
+# audit payload (``evidence_label_applied``) exactly like the medical
+# disclosure backstop — observable, not silent.
+
+SCIENCE_CLAIM_MARKERS: Final[tuple[str, ...]] = (
+    "estudio",
+    "estudios",
+    "investigacion",
+    "investigaciones",
+    "la ciencia",
+    "evidencia cientifica",
+    "se ha demostrado",
+    "stud",  # English "study"/"studies"
+    "research shows",
+    "science says",
+    "evidence suggests",
+)
+
+EVIDENCE_LABEL_ES: Final[str] = (
+    "\n\nOjo: lo anterior es conocimiento general, no evidencia de tu "
+    "biblioteca: no tengo una fuente que lo respalde."
+)
+EVIDENCE_LABEL_EN: Final[str] = (
+    "\n\nHeads-up: that is general knowledge, not evidence from your "
+    "library: I have no source backing it."
+)
+
+
+def _normalise_for_match(text: str) -> str:
+    """Lower-case, accent-stripped form for marker matching (NFKD).
+
+    Spanish text arrives with accents and mobile autocapitalize: matching on
+    the raw reply would miss "La CIENCIA" or "evidencia científica" — the
+    exact claims the guard exists for.
+    """
+    return "".join(
+        char
+        for char in unicodedata.normalize("NFKD", text.lower())
+        if not unicodedata.combining(char)
+    )
+
+
+def _search_evidence_failed(tool_calls: list[dict[str, Any]]) -> bool:
+    """Whether THIS turn's loop actually called ``search_evidence`` and the
+    call reported ``insufficient_data`` (nothing relevant in the store).
+
+    The tool result rides the SDK as a JSON string (the ``@tool`` decorator
+    serialises dict returns), so a string output is parsed; an output that is
+    already a dict is used as-is. ANY other shape fails OPEN — "not the
+    no-source case": the guard must never crash the send path, and it must
+    never fire on an audit output it cannot read.
+    """
+    for call in tool_calls:
+        if call.get("name") != "search_evidence":
+            continue
+        output = call.get("output")
+        parsed: Any = output
+        if isinstance(output, str):
+            try:
+                parsed = json.loads(output)
+            except (TypeError, ValueError):
+                continue  # unparsable output: fail open, never crash
+        if isinstance(parsed, dict) and parsed.get("status") == "insufficient_data":
+            return True
+    return False
+
+
+def _apply_evidence_label(
+    reply: str, tool_calls: list[dict[str, Any]]
+) -> tuple[str, bool]:
+    """Append the deterministic no-source label when BOTH conditions hold:
+    the turn's loop really called ``search_evidence`` and got
+    ``insufficient_data``, AND the reply makes a science claim (any marker in
+    ``SCIENCE_CLAIM_MARKERS``, matched case- and accent-insensitively).
+
+    APPEND, never rewrite: the model's content is preserved, like the medical
+    disclosure backstop. The label's language follows the reply via a cheap
+    heuristic (a Spanish stopword in the reply => Spanish), the same
+    Spanish-first convention as the other system-generated replies. Returns
+    the (possibly extended) reply and whether the label was applied.
+    """
+    if not _search_evidence_failed(tool_calls):
+        return reply, False
+    normalised = _normalise_for_match(reply)
+    if not any(marker in normalised for marker in SCIENCE_CLAIM_MARKERS):
+        return reply, False
+    if " de la " in f" {normalised} " or " que " in f" {normalised} ":
+        return reply + EVIDENCE_LABEL_ES, True
+    return reply + EVIDENCE_LABEL_EN, True
+
+
+def to_whatsapp_bold(text: str) -> str:
+    """Convert markdown bold to WhatsApp's native bold before sending.
+
+    Measured in production on 2026-10-21: a real answer came back as
+    ``1. **CTL (Condición Física)**: 8.2 puntos`` even though the prompt asks for
+    WhatsApp formatting, so the athlete read the asterisks instead of emphasis.
+    Normalising here, at the send boundary, is deterministic -- the same reason the
+    medical disclosure and the evidence injection are enforced in code instead of
+    with more prompt prose: a rule the model may obey is not a guarantee.
+
+    Single asterisks and lone ``*`` (a multiplication sign, a bullet) pass through
+    untouched; only paired double asterisks are markup.
+    """
+    return _MARKDOWN_BOLD_RE.sub(r"*\1*", text)
 
 
 def split_reply(text: str, limit: int = WHATSAPP_MESSAGE_CHAR_LIMIT) -> list[str]:
@@ -490,7 +618,13 @@ async def process_inbound_message(
         callback_handler=turn_latency_callback(agent_holder),
     )
     agent_holder.append(agent)
+    # Measure the turn ourselves. The SDK's own accumulated_metrics carried no
+    # latencyMs in production (measured 2026-10-21: the outbound audit row
+    # recorded latency_ms 0 while the turn took ~9 s), which left the cost and
+    # latency baseline blind. A wall-clock measurement here cannot be missing.
+    turn_started = time.perf_counter()
     result = await agent.invoke_async(body, limits=limits_from_settings(settings))
+    latency_ms = int((time.perf_counter() - turn_started) * 1000)
     reply = _reply_text(result)
     # Medical-disclosure backstop, layer 2 (WA-9, §3): the outcome is
     # guaranteed deterministically. If the model forgot the disclosure on a
@@ -513,6 +647,14 @@ async def process_inbound_message(
         reply = GUARDRAIL_STOP_REPLY
     tool_calls = _tool_calls(agent.messages)
 
+    # Evidence-label backstop (see ``_apply_evidence_label`` and the module
+    # constants above): a failed search followed by an improvised science
+    # claim gets the no-source label APPENDED deterministically — the
+    # measured 2026-10-21 production failure, guarded in code because three
+    # prompt rules have already failed in this project. The intervention is
+    # recorded in the outbound audit payload below, like the disclosure.
+    reply, evidence_label_applied = _apply_evidence_label(reply, tool_calls)
+
     # 4. Persist the audit trail BEFORE sending (see module docstring):
     # the idempotency anchor bounds any failure at one missed reply. The
     # reply is split at the WhatsApp per-message character budget (WA-8,
@@ -522,7 +664,6 @@ async def process_inbound_message(
     # records this turn's usage and latency (WA-5) plus the sender — the
     # conversation key the budget accumulates over.
     usage = dict(result.metrics.accumulated_usage)
-    latency_ms = result.metrics.accumulated_metrics.get("latencyMs")
     budget.add_usage(usage)
     # The rolling summary's generation IS a model turn (WA-8): its usage
     # counts against the same conversation budget and is persisted with the
@@ -531,7 +672,11 @@ async def process_inbound_message(
     generated_summaries = list(memory.generated_summaries)
     for generated in generated_summaries:
         budget.add_usage(generated["usage"])
-    chunks = split_reply(reply, limit=settings.agent_whatsapp_message_char_limit)
+    # Normalise BEFORE splitting: the audit row and the send must carry the same
+    # bytes, and WhatsApp renders markdown bold as literal asterisks.
+    chunks = split_reply(
+        to_whatsapp_bold(reply), limit=settings.agent_whatsapp_message_char_limit
+    )
     total_chunks = len(chunks)
     async with session_factory() as session:
         for call in tool_calls:
@@ -579,6 +724,9 @@ async def process_inbound_message(
             if disclosure_applied:
                 # Observable, not silent: the audit names the backstop.
                 payload["medical_disclosure_backstop"] = True
+            if evidence_label_applied:
+                # Observable, not silent: same rule as the disclosure above.
+                payload["evidence_label_applied"] = True
             session.add(
                 MessageLogRow(
                     direction="outbound",
@@ -688,45 +836,6 @@ def make_twilio_client(settings: Settings) -> Any:
     return Client(settings.twilio_account_sid, settings.twilio_auth_token)
 
 
-_PROCESS_DEPS: dict[str, Any] = {}
-"""Dependencies this worker process builds once and reuses across turns.
-
-Measured 2026-10-19: ``whatsapp_tasks`` calls ``handle_inbound_message(message)``
-with no injections, so EVERY turn took the default path and built an engine with
-its own pool, an HTTP client for the model, a Twilio client and a
-``DbSessionRepository`` -- which starts a thread with its own event loop -- and
-closed none of them. That is a leak per WhatsApp message. The pool now lives as
-long as the process, which is the normal worker pattern; Celery prefork means one
-process per worker, so a plain module-level cache is enough.
-
-``reset_process_dependencies`` exists because a test must never inherit another
-test's engine; the suite resets it from an autouse fixture.
-"""
-
-
-def _process_session_factory(settings: Settings) -> SessionFactory:
-    """The session factory this process reuses for every turn."""
-    factory: SessionFactory | None = _PROCESS_DEPS.get("session_factory")
-    if factory is None:
-        factory = make_session_factory(create_db_engine(settings.database_url))
-        _PROCESS_DEPS["session_factory"] = factory
-    return factory
-
-
-def _process_dependency(name: str, build: Any) -> Any:
-    """Return a process-level dependency, building it on first use only."""
-    value = _PROCESS_DEPS.get(name)
-    if value is None:
-        value = build()
-        _PROCESS_DEPS[name] = value
-    return value
-
-
-def reset_process_dependencies() -> None:
-    """Forget the process-level defaults (tests call this between cases)."""
-    _PROCESS_DEPS.clear()
-
-
 def handle_inbound_message(
     message: dict[str, str],
     *,
@@ -746,51 +855,61 @@ def handle_inbound_message(
     database). This module-level function is the seam tests patch to
     observe the hand-off (same pattern as ``_backfill`` in
     :mod:`app.scheduler.tasks`).
+
+    The defaults are built PER TURN and the engine is disposed inside the SAME
+    event loop. They must NOT be cached across turns: every task here runs its
+    own ``asyncio.run``, and asyncpg connections belong to the loop that created
+    them, so a pool cached from a previous task answers the next one with
+    "cannot rollback; the transaction is in error state". Measured in production
+    on 2026-10-21: the first turn succeeded, the second died that way, and the
+    athlete's message was lost. One pool per message is the cheap price of a turn
+    that works.
     """
     resolved_settings = settings if settings is not None else get_settings()
     # WA-11: wire the Langfuse OTLP exporter once per worker process BEFORE
     # the first turn. Unconfigured settings take the clean no-op path; a
     # wiring failure only disables tracing, never the reply.
     configure_langfuse_tracing(resolved_settings)
-    resolved_sessions = (
-        session_factory
-        if session_factory is not None
-        else _process_session_factory(resolved_settings)
-    )
-    asyncio.run(
-        process_inbound_message(
-            message,
-            settings=resolved_settings,
-            session_factory=resolved_sessions,
-            model=(
-                model
-                if model is not None
-                else _process_dependency(
-                    "model", lambda: create_model(resolved_settings)
-                )
-            ),
-            twilio_client=(
-                twilio_client
-                if twilio_client is not None
-                else _process_dependency(
-                    "twilio_client", lambda: make_twilio_client(resolved_settings)
-                )
-            ),
-            session_repository=(
-                session_repository
-                if session_repository is not None
-                else _process_dependency(
-                    "session_repository",
-                    lambda: DbSessionRepository(resolved_settings.database_url),
-                )
-            ),
-            # SCH-4: the /sync default job is derived here (the outermost
-            # seam), like every other dependency default.
-            sync_runner=(
-                sync_runner if sync_runner is not None else _default_sync_runner()
-            ),
-        )
-    )
+
+    engine = None
+    if session_factory is not None:
+        resolved_sessions = session_factory
+    else:
+        engine = create_db_engine(resolved_settings.database_url)
+        resolved_sessions = make_session_factory(engine)
+
+    async def _run_turn() -> None:
+        try:
+            await process_inbound_message(
+                message,
+                settings=resolved_settings,
+                session_factory=resolved_sessions,
+                model=(
+                    model if model is not None else create_model(resolved_settings)
+                ),
+                twilio_client=(
+                    twilio_client
+                    if twilio_client is not None
+                    else make_twilio_client(resolved_settings)
+                ),
+                session_repository=(
+                    session_repository
+                    if session_repository is not None
+                    else DbSessionRepository(resolved_settings.database_url)
+                ),
+                # SCH-4: the /sync default job is derived here (the outermost
+                # seam), like every other dependency default.
+                sync_runner=(
+                    sync_runner if sync_runner is not None else _default_sync_runner()
+                ),
+            )
+        finally:
+            # In the SAME loop on purpose: these connections are bound to it and
+            # cannot be closed from another one.
+            if engine is not None:
+                await engine.dispose()
+
+    asyncio.run(_run_turn())
 
 
 __all__ = [
@@ -801,8 +920,8 @@ __all__ = [
     "make_twilio_client",
     "matches_sync_command",
     "process_inbound_message",
-    "reset_process_dependencies",
     "split_reply",
     "sync_confirmation",
+    "to_whatsapp_bold",
     "tool_list",
 ]

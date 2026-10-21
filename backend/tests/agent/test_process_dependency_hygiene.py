@@ -1,58 +1,98 @@
-"""Process-level agent wiring must not leak between turns or between tests.
+"""Two consecutive turns in one worker process must BOTH work.
 
-Measured 2026-10-19: ``whatsapp_tasks`` calls ``handle_inbound_message(message)``
-with no injections, so every WhatsApp turn took the default path and built an
-engine with its own pool, an HTTP client for the model, a Twilio client and a
-``DbSessionRepository`` -- which starts a thread with its own event loop -- and
-closed none of them. That is a leak per message, so the dependencies are now
-built once per process.
+Regression for a defect measured in production on 2026-10-21. Caching the engine
+per worker process made the first WhatsApp turn succeed and the second die with
+``cannot rollback; the transaction is in error state``, losing the athlete's
+message. Each Celery task runs its own ``asyncio.run``, and asyncpg connections
+belong to the loop that created them, so a pool cached from the previous task is
+unusable by the next one.
 
-That fix moves the risk rather than removing it: process-level state can leak
-between tests, which is the same class of silent contamination as the shared test
-database that cost a whole investigation the same day. These tests pin both
-halves -- the cache really reuses, and the autouse fixture really clears it.
+Each turn here runs through ``asyncio.to_thread``: the sync seam calls
+``asyncio.run`` itself, so it needs a thread of its own, which is also exactly how
+the Celery worker invokes it. Only the model and the Twilio client are injected,
+so the DEFAULT engine path runs as production runs it.
 
-The two guard tests are named ``a_`` and ``b_`` on purpose: pytest runs them in
-definition order, so the leaky one runs FIRST and the clean-state assertion runs
-next. Delete the autouse fixture and the second test fails, which is the whole
-point of having it.
+Only the tool registry stays process-level, and an autouse fixture in
+``tests/conftest.py`` resets it so a leaking test cannot reach the next one.
 """
 
 from __future__ import annotations
 
-from app.agent import pipeline, tools
-from app.core.settings import get_settings
+import asyncio
+from typing import Any
+
+import pytest
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import async_sessionmaker
+
+from app.agent.fake_model import FakeModel
+from app.agent.pipeline import handle_inbound_message
+from app.core.settings import Settings
+from app.db.models import MessageLogRow
+from tests.dbsupport import test_database_url as dedicated_test_database_url
+
+SENDER = "whatsapp:+10000000001"
+COACH = "whatsapp:+10000000000"
 
 
-def test_a_a_leaky_test_leaves_process_state_behind() -> None:
-    """Populate the process-level state on purpose, for the guard below."""
-    tools.set_session_factory_provider(lambda: None)  # type: ignore[arg-type,return-value]
-    pipeline._process_session_factory(get_settings())
-    assert tools._provider is not None
-    assert pipeline._PROCESS_DEPS
+class _RecordingTwilio:
+    """The minimum Twilio surface the pipeline touches, recording sends."""
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+        self.messages = self
+        self.bodies: list[str] = []
+
+    def create(self, **kwargs: Any) -> Any:
+        self.calls.append(kwargs)
+        self.bodies.append(str(kwargs.get("body", "")))
+
+        class _Message:
+            sid = "SMoutbound"
+
+        return _Message()
 
 
-def test_b_the_next_test_starts_from_a_clean_process() -> None:
-    """What the previous test set is gone: the autouse fixture cleared it.
-
-    This is the real guard. If the reset fixture disappears, the state from
-    ``test_a`` survives and this test fails -- the contamination cannot hide.
-    """
-    assert pipeline._PROCESS_DEPS == {}
-    assert tools._provider is None
-    assert tools._settings_override is None
-
-
-def test_c_the_session_factory_is_built_once_per_process() -> None:
-    """Two turns must reuse one pool, not create one per WhatsApp message."""
-    settings = get_settings()
-    first = pipeline._process_session_factory(settings)
-    second = pipeline._process_session_factory(settings)
-    assert first is second
+def _settings() -> Settings:
+    return Settings(  # type: ignore[call-arg]
+        _env_file=None,
+        database_url=dedicated_test_database_url(),
+        llm_provider="fake",
+        openai_api_key="",
+        twilio_account_sid="ACtest",
+        twilio_auth_token="test-token",
+        twilio_whatsapp_from=COACH,
+        twilio_whatsapp_allowlist=SENDER.removeprefix("whatsapp:"),
+    )
 
 
-def test_d_reset_process_dependencies_forgets_everything() -> None:
-    pipeline._process_session_factory(get_settings())
-    assert pipeline._PROCESS_DEPS
-    pipeline.reset_process_dependencies()
-    assert pipeline._PROCESS_DEPS == {}
+@pytest.mark.anyio
+async def test_two_consecutive_turns_in_one_process_both_persist(
+    db_engine: Any,
+) -> None:
+    settings = _settings()
+
+    for index in (1, 2):
+        await asyncio.to_thread(
+            handle_inbound_message,
+            {
+                "MessageSid": f"SMtwoTurns{index}",
+                "From": SENDER,
+                "To": COACH,
+                "Body": "hola",
+            },
+            settings=settings,
+            model=FakeModel(["respuesta"]),
+            twilio_client=_RecordingTwilio(),
+        )
+
+    factory = async_sessionmaker(db_engine, expire_on_commit=False)
+    async with factory() as session:
+        rows = (await session.execute(select(MessageLogRow))).scalars().all()
+    sids = {row.message_sid for row in rows if row.direction == "inbound"}
+
+    assert "SMtwoTurns1" in sids, "the first turn did not persist"
+    assert "SMtwoTurns2" in sids, (
+        "the second turn in the same process did not persist -- a per-process "
+        "pool is bound to a dead event loop"
+    )

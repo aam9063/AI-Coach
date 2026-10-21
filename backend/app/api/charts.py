@@ -106,7 +106,13 @@ def get_chart_settings() -> Settings:
     return get_settings()
 
 
-@router.api_route("/charts/{chart_id}", methods=["GET", "HEAD"])
+# Two decorators, not one api_route with two methods: FastAPI derives the
+# operationId from the function name plus the path, so registering one function
+# for GET and HEAD produced TWO operations sharing one id -- an ambiguous
+# published contract that made generated clients collide. HEAD is implied by GET
+# for this resource, so it stays served but out of the schema.
+@router.get("/charts/{chart_id}", operation_id="get_chart_media")
+@router.head("/charts/{chart_id}", include_in_schema=False)
 async def get_chart(
     request: Request,
     chart_id: int,
