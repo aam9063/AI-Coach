@@ -82,5 +82,7 @@ class TestRegistryIsTheCompleteBriefSet:
             "get_activity_analysis", "get_intensity_distribution",
             "predict_race", "plot_metric", "search_evidence",
             "log_subjective", "propose_threshold_update",
+            "plan_workout",
         }
-        assert len(listed) == 10
+        # Eleven: the brief's ten plus the workout planner (Feature 12).
+        assert len(listed) == 11
