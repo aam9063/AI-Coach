@@ -127,7 +127,11 @@ async def _outbound_payloads(db_engine: Any) -> list[dict[str, Any]]:
             .scalars()
             .all()
         )
-    return [row.payload for row in rows]
+    # Filter the None payloads: only outbound rows carry one, and mypy reads the
+    # column as optional. Returning the raw attribute list made the comprehension
+    # List[dict | None] against the declared List[dict] -- caught by CI's
+    # `mypy app tests`, which is why the local `mypy app` was not enough.
+    return [row.payload for row in rows if row.payload is not None]
 
 
 async def _run_turn(
