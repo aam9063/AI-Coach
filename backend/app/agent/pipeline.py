@@ -81,6 +81,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 from uuid import uuid4
@@ -510,7 +511,13 @@ async def process_inbound_message(
         callback_handler=turn_latency_callback(agent_holder),
     )
     agent_holder.append(agent)
+    # Measure the turn ourselves. The SDK's own accumulated_metrics carried no
+    # latencyMs in production (measured 2026-10-21: the outbound audit row
+    # recorded latency_ms 0 while the turn took ~9 s), which left the cost and
+    # latency baseline blind. A wall-clock measurement here cannot be missing.
+    turn_started = time.perf_counter()
     result = await agent.invoke_async(body, limits=limits_from_settings(settings))
+    latency_ms = int((time.perf_counter() - turn_started) * 1000)
     reply = _reply_text(result)
     # Medical-disclosure backstop, layer 2 (WA-9, §3): the outcome is
     # guaranteed deterministically. If the model forgot the disclosure on a
@@ -542,7 +549,6 @@ async def process_inbound_message(
     # records this turn's usage and latency (WA-5) plus the sender — the
     # conversation key the budget accumulates over.
     usage = dict(result.metrics.accumulated_usage)
-    latency_ms = result.metrics.accumulated_metrics.get("latencyMs")
     budget.add_usage(usage)
     # The rolling summary's generation IS a model turn (WA-8): its usage
     # counts against the same conversation budget and is persisted with the
