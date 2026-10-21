@@ -74,6 +74,8 @@ from app.agent.chart_tool import (
     assemble_chart_samples,
 )
 from app.agent.race_tool import RACE_DISTANCE_KEYS, RacePredictionResult
+from app.agent.workout_library import load_workout_library
+from app.agent.workout_library_adapter import match_library_workout
 from app.api.charts import build_chart_media_url
 from app.charts.storage import save_chart
 from app.core.settings import Settings, get_settings
@@ -89,7 +91,13 @@ from app.db.models import (
 from app.db.repository import insert_threshold_proposal, upsert_subjective_log
 from app.db.session import create_db_engine, make_session_factory
 from app.db.zones_config import parse_swim_boundaries
-from app.engine.load import KNOWN_SPORTS
+from app.engine.load import (
+    _CYCLING_SPORTS,
+    _RUNNING_SPORTS,
+    _SWIMMING_SPORTS,
+    KNOWN_SPORTS,
+)
+from app.engine.planner import SPORT_SHARE_THRESHOLD, plan_session
 from app.engine.zones import hr_zones, power_zones, swim_zones
 from app.evidence.embeddings import create_embedding
 from app.evidence.retrieval import retrieve_chunks
@@ -673,6 +681,316 @@ async def get_readiness(date: str | None = None) -> dict[str, Any]:
         "engine_version": snapshot.engine_version,
         "computed_at": snapshot.computed_at.isoformat(),
     }
+
+
+# ---------------------------------------------------------------------------
+# plan_workout (workout-planner T3, specs S4/S5) — the engine decides, the
+# LLM explains. The decision itself lives in app.engine.planner (T1); the
+# numeric zone values come from the SAME zone builders get_zones uses, and
+# concrete content comes from the curated library through the T2 adapter.
+# ---------------------------------------------------------------------------
+
+
+def _zone_model_for_sport(sport: str | None) -> str | None:
+    """The zone model whose table expresses the session's zone keys.
+
+    ``_SPORT_ZONE_MODELS`` maps the canonical keys ``get_zones`` serves;
+    the planner's session sport can be ANY engine sport, so the family
+    variants ("virtualride", "trailrun", ...) resolve to their family's
+    model through the engine's own family sets — imported, never copied,
+    so the mapping cannot drift from the engine's vocabulary. Sports with
+    no zone model (walking, strength) return ``None``: their zone keys
+    stay unnumbered rather than being expressed in a foreign unit.
+    """
+    if sport is None:
+        return None
+    model = _SPORT_ZONE_MODELS.get(sport)
+    if model is not None:
+        return model
+    if sport in _CYCLING_SPORTS:
+        return "bike_power"
+    if sport in _RUNNING_SPORTS:
+        return "run_hr"
+    if sport in _SWIMMING_SPORTS:
+        return "swim_pace"
+    return None
+
+
+def _threshold_for_model(
+    profile: AthleteProfileRow | None, settings: Settings, model: str | None
+) -> float | None:
+    """The threshold the model's zone table is built from, resolved with the
+    EXACT precedence ``get_zones`` uses: the athlete_profile row is the
+    value of record; owner configuration is the fallback for metrics the
+    profile does not store (LTHR) or when no profile exists. ``None`` when
+    unconfigured — never a substitute value."""
+    if model is None:
+        return None
+    if model == "bike_power":
+        if profile is not None and profile.ftp_watts is not None:
+            return profile.ftp_watts
+        return settings.athlete_ftp_w
+    if model == "run_hr":
+        return settings.athlete_lthr_bpm
+    if model == "swim_pace":
+        if profile is not None and profile.css_mps is not None:
+            return profile.css_mps
+        return settings.athlete_css_speed_mps
+    return None
+
+
+def _numeric_zone_targets(
+    model: str,
+    threshold: float,
+    zone_keys: tuple[str, ...],
+    settings: Settings,
+) -> list[dict[str, Any]]:
+    """Numeric min/max targets for the planner's zone KEYS, built by the
+    SAME pure zone functions the ``get_zones`` tool calls (never a second
+    implementation of the zone maths). Keys absent from the built table
+    are silently impossible by construction: the planner only emits
+    Z1-Z3, which every table contains."""
+    if model == "bike_power":
+        table = {z.key: (z.min_watts, z.max_watts) for z in power_zones(threshold)}
+    elif model == "run_hr":
+        table = {z.key: (z.min_bpm, z.max_bpm) for z in hr_zones("run", threshold)}
+    else:
+        table = {
+            z.key: (z.min_pace_sec_per_100m, z.max_pace_sec_per_100m)
+            for z in swim_zones(
+                threshold,
+                boundary_pcts_css=parse_swim_boundaries(
+                    settings.engine_swim_zone_boundary_pcts
+                ),
+            )
+        }
+    return [
+        {"key": key, "min_value": table[key][0], "max_value": table[key][1]}
+        for key in zone_keys
+        if key in table
+    ]
+
+
+@tool
+async def plan_workout(sport: str | None = None, day: str | None = None) -> dict[str, Any]:
+    """Today's (or one day's) training session, DECIDED by the deterministic
+    engine from the athlete's readiness, load, thresholds and recent sport
+    mix — you EXPLAIN the decision, you never make or change it.
+
+    The returned session (sport, type, zone targets, duration, kind) and
+    the ``reason`` are the engine's output. You MUST NOT alter the session:
+    do not change, soften or extend the zones, duration or session type,
+    do not add exercises or sessions, and do not invent any number. Quote
+    the ``reason`` verbatim when you explain why. When a
+    ``library_workout`` is returned, it is a REAL reference workout from
+    the owner's curated library (id + name) — you may describe what it is,
+    and you must never invent exercises or numbers for it. If the result
+    is ``status="insufficient_data"``, there is NO session today: tell the
+    athlete exactly what ``missing`` names (what to connect or wait for)
+    instead of improvising a plan. If the result is ``status="error"``, fix
+    the arguments — an unknown sport is never missing data.
+
+    Returns on success (status "ok"): ``session`` — ``sport`` (the sport
+    you asked for, or the concrete other sport the engine's balance rule
+    chose), ``session_type`` (human label), ``zones`` (each with ``key``
+    and the numeric ``min_value``/``max_value`` built from the athlete's
+    thresholds), ``duration_s`` (seconds, when the engine capped it) and
+    ``kind`` ("recovery" | "rest" | "quality"); ``reason`` — the engine's
+    factual sentence with its numbers, verbatim; the optional
+    ``library_workout`` (``id`` + ``name``) when a curated workout matches;
+    ``coverage`` (which persisted inputs backed the decision);
+    ``engine_version`` and ``computed_at``.
+
+    On ``status="insufficient_data"``: ``missing`` — what to connect or
+    wait for (readiness snapshot, today's TSB, or the FTP/LTHR anchors),
+    and ``detail`` naming the same gaps; no session fields at all. An
+    unknown ``sport`` or an unparseable ``day`` returns ``status="error"``
+    naming the accepted values.
+
+    Args:
+        sport: Optional sport the athlete asked for (an engine sport name
+            such as "ride", "run", "swim"); omit to let the engine's
+            balance rule pick from the last 7 days of activity.
+        day: The day to plan (ISO "YYYY-MM-DD"); defaults to today in the
+            owner's timezone.
+    """
+    settings = _settings()
+    if day is None:
+        plan_day = _today_local(settings)
+    else:
+        try:
+            plan_day = dt.date.fromisoformat(day)
+        except ValueError:
+            return {
+                "status": "error",
+                "detail": "day must be ISO 'YYYY-MM-DD'.",
+                "engine_version": settings.engine_version,
+                "computed_at": _now(settings).isoformat(),
+            }
+    sport_input = (sport or "").strip().lower()
+    if sport_input and sport_input not in ENGINE_KNOWN_SPORTS:
+        return _unknown_sport_error(settings, sport or sport_input)
+
+    # --- persisted inputs, all through the one session seam (§9.3) --------
+    window_start = plan_day - timedelta(days=6)
+    window_end_exclusive = dt.datetime.combine(
+        plan_day + timedelta(days=1), dt.time.min, tzinfo=UTC
+    )
+    async with tool_session() as session:
+        snapshot = (
+            await session.execute(
+                select(ReadinessSnapshotRow).where(
+                    ReadinessSnapshotRow.athlete_id == 1,
+                    ReadinessSnapshotRow.date == plan_day,
+                )
+            )
+        ).scalar_one_or_none()
+        load_row = (
+            await session.execute(
+                select(DailyLoadRow).where(
+                    DailyLoadRow.athlete_id == 1,
+                    DailyLoadRow.date == plan_day,
+                    DailyLoadRow.sport == "combined",
+                )
+            )
+        ).scalar_one_or_none()
+        profile = (
+            await session.execute(
+                select(AthleteProfileRow).where(AthleteProfileRow.athlete_id == 1)
+            )
+        ).scalar_one_or_none()
+        activities = (
+            (
+                await session.execute(
+                    select(ActivityRow).where(
+                        ActivityRow.start_time
+                        >= dt.datetime.combine(
+                            window_start, dt.time.min, tzinfo=UTC
+                        ),
+                        ActivityRow.start_time < window_end_exclusive,
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+
+    # The 7-day sport mix: only engine-known sports count (the engine
+    # itself rejects unknown types at load time), normalised the same
+    # case-insensitive way the engine matches its vocabulary.
+    sport_counts: dict[str, int] = {}
+    for activity in activities:
+        key = activity.type.strip().lower()
+        if key in ENGINE_KNOWN_SPORTS:
+            sport_counts[key] = sport_counts.get(key, 0) + 1
+    total_activities = sum(sport_counts.values())
+    sport_share: float | None = (
+        max(sport_counts.values()) / total_activities if total_activities else None
+    )
+
+    # Thresholds: resolved with get_zones' precedence (profile row first,
+    # owner configuration as fallback). The planner gates zone-bearing
+    # sessions on BOTH anchors being known (FTP and LTHR).
+    ftp_value = (
+        profile.ftp_watts
+        if profile is not None and profile.ftp_watts is not None
+        else settings.athlete_ftp_w
+    )
+    lthr_value = settings.athlete_lthr_bpm
+    thresholds_configured = ftp_value is not None and lthr_value is not None
+
+    # THE decision (T1's pure module): the tool never decides anything.
+    plan = plan_session(
+        readiness_suggests_reduce_intensity=None
+        if snapshot is None
+        else snapshot.suggest_reduce_intensity,
+        tsb=None if load_row is None else load_row.tsb,
+        thresholds_configured=thresholds_configured,
+        sport_share=sport_share,
+        requested_sport=sport_input or None,
+    )
+
+    engine_version, computed_at = _provenance(
+        snapshot if snapshot is not None else load_row, settings
+    )
+    coverage: dict[str, Any] = {
+        "readiness_snapshot": snapshot is not None,
+        "daily_load_combined": load_row is not None,
+        "activities_last_7_days": total_activities,
+        "sport_counts": sport_counts,
+    }
+
+    if plan.status == "insufficient_data":
+        # S5: an explicit result naming what to connect or wait for — the
+        # planner's ``missing`` list and its reason, nothing fabricated.
+        return {
+            "status": "insufficient_data",
+            "missing": list(plan.missing),
+            "detail": plan.reason,
+            "coverage": coverage,
+            "engine_version": engine_version,
+            "computed_at": computed_at,
+        }
+
+    # Concrete sport (the piece T1 deliberately left to the caller): the
+    # athlete's request wins; otherwise, when the planner's row-4 fired,
+    # the OTHER sport is the least-share sport of the window. The same
+    # SPORT_SHARE_THRESHOLD constant and the same strict comparison the
+    # planner used, so the two cannot disagree about whether it fired.
+    if plan.sport is not None:
+        session_sport: str | None = plan.sport
+    elif sport_share is not None and sport_share > SPORT_SHARE_THRESHOLD:
+        session_sport = min(sport_counts.items(), key=lambda kv: (kv[1], kv[0]))[0]
+    else:
+        session_sport = None
+
+    # Numeric zone targets: the SAME builders get_zones calls, over the
+    # resolved threshold. When no zone model or threshold exists for the
+    # session's sport, the keys stay unnumbered — a null bound is honest,
+    # an invented number is not (S2).
+    zones_out: list[dict[str, Any]] = []
+    if plan.zones is not None:
+        model = _zone_model_for_sport(session_sport)
+        threshold = _threshold_for_model(profile, settings, model)
+        if model is not None and threshold is not None:
+            zones_out = _numeric_zone_targets(model, threshold, plan.zones, settings)
+        else:
+            zones_out = [
+                {"key": key, "min_value": None, "max_value": None}
+                for key in plan.zones
+            ]
+
+    # Concrete content (S6): a REAL curated workout the session may
+    # reference, or nothing — never an invented one.
+    library_out: dict[str, str | None] | None = None
+    if plan.zones is not None:
+        entry = match_library_workout(
+            load_workout_library(),
+            sport=session_sport,
+            zone_keys=plan.zones,
+            duration_cap_s=plan.duration_s,
+        )
+        if entry is not None:
+            library_out = {"id": entry.id, "name": entry.name}
+
+    session_out: dict[str, Any] = {
+        "sport": session_sport,
+        "session_type": plan.session_type,
+        "zones": zones_out,
+        "duration_s": plan.duration_s,
+        "kind": plan.kind,
+    }
+    result: dict[str, Any] = {
+        "status": "ok",
+        "session": session_out,
+        "reason": plan.reason,
+        "coverage": coverage,
+        "engine_version": engine_version,
+        "computed_at": computed_at,
+    }
+    if library_out is not None:
+        result["library_workout"] = library_out
+    return result
 
 
 @tool
@@ -1646,12 +1964,15 @@ def tool_list() -> list[Any]:
     the full per-segment and total prediction envelopes with bounds and
     assumptions, computed by the deterministic engine. Each tool joined
     this list with its checklist item — never silently, never from a
-    loader.
+    loader. ``plan_workout`` is the workout-planner implementation (T3):
+    it returns the engine's decided session and references curated
+    library content — the model explains it, never alters it.
     """
     return [
         get_load_status,
         get_zones,
         get_readiness,
+        plan_workout,
         get_activity_analysis,
         get_intensity_distribution,
         predict_race,
