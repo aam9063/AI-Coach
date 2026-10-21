@@ -168,16 +168,16 @@ class TestToolList:
     def test_explicit_list_contains_exactly_the_engine_tools(self) -> None:
         listed = tools.tool_list()
         names = {t.__name__ if hasattr(t, "__name__") else t.tool_spec["name"] for t in listed}
-        # WA-6 complete: the registry is the FULL ten-tool set the brief
-        # names (§9.3) — the two delegated stubs (predict_race, plot_metric)
-        # are registered with an honest not-implemented error contract.
+        # WA-6 complete: the registry is the brief's ten-tool set (§9.3) plus
+        # the workout planner (Feature 12, beyond the brief).
         assert names == {
             "get_load_status", "get_zones", "get_readiness",
             "get_activity_analysis", "get_intensity_distribution",
             "predict_race", "plot_metric", "search_evidence",
             "log_subjective", "propose_threshold_update",
+            "plan_workout",
         }
-        assert len(listed) == 10
+        assert len(listed) == 11
 
     def test_no_directory_loader_and_no_vended_tools(self) -> None:
         listed_names = {
