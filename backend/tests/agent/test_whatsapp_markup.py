@@ -109,22 +109,6 @@ def test_a_bare_url_survives() -> None:
     assert to_whatsapp_text(text) == text
 
 
-def test_chart_media_url_reads_the_tool_output() -> None:
-    from app.agent.pipeline import _chart_media_url
-
-    calls = [
-        {"name": "get_load_status", "output": '{"status": "ok"}'},
-        {
-            "name": "plot_metric",
-            "output": '{"status": "ok", "media_url": "https://example.test/charts/10?token=abc"}',
-        },
-    ]
-    assert _chart_media_url(calls) == "https://example.test/charts/10?token=abc"
-
-
-def test_chart_media_url_is_none_without_a_chart() -> None:
-    from app.agent.pipeline import _chart_media_url
-
-    assert _chart_media_url([]) is None
-    assert _chart_media_url([{"name": "plot_metric", "output": '{"status": "error"}'}]) is None
-    assert _chart_media_url([{"name": "plot_metric", "output": "not json"}]) is None
+# The chart-media seam (which chart this turn produced, and how its URL is
+# signed at the send boundary) is pinned in tests/agent/test_chart_media_delivery.py:
+# the URL is RE-SIGNED there, never copied from the tool output.

@@ -85,6 +85,7 @@ import re
 import time
 import unicodedata
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 from typing import Any, Final
 from uuid import uuid4
 
@@ -116,6 +117,7 @@ from app.agent.tracing import (
     turn_latency_callback,
     turn_trace_attributes,
 )
+from app.api.charts import build_chart_media_url
 from app.core.settings import Settings, get_settings
 from app.db.models import AgentConversationSummaryRow, MessageLogRow
 from app.db.session import create_db_engine, make_session_factory
@@ -401,14 +403,27 @@ def to_whatsapp_text(text: str) -> str:
     return _MARKDOWN_BOLD_RE.sub(r"*\1*", without_links)
 
 
-def _chart_media_url(tool_calls: list[dict[str, Any]]) -> str | None:
-    """The chart image this turn produced, if any.
+def _chart_media_url(
+    tool_calls: list[dict[str, Any]], settings: Settings, now: datetime
+) -> str | None:
+    """The chart image this turn produced, re-signed at the send boundary.
 
-    Measured in production on 2026-10-21: the athlete asked for a chart and received a
-    text message with a markdown link, because the pipeline only ever sent ``body``.
-    ``plot_metric`` already returns a PUBLIC, expiring ``media_url`` documented as the
-    URL Twilio fetches; this is the seam that finally uses it.
+    Measured in production on 2026-10-21 in two steps. First the athlete asked for a
+    chart and received a text message with a markdown link, because the pipeline only
+    ever sent ``body``; then the image arrived with an ALREADY EXPIRED token, because
+    the URL was read from ``plot_metric``'s recorded output instead of being signed
+    for this send.
+
+    So the ``chart_id`` is what this turn's tool result contributes; the URL is built
+    HERE, with a fresh clock, from the settings and the clock of the send itself. A
+    token can never be stale, whatever the message history holds and however long the
+    turn took, and no older token is ever reused.
+
+    The LAST confirmed chart of the turn wins: it is the one the athlete's final reply
+    narrates. No chart in this turn (or no usable ``chart_id``) attaches nothing — an
+    image is never invented from a bare URL.
     """
+    chart_id: int | None = None
     for call in tool_calls:
         if call.get("name") != "plot_metric":
             continue
@@ -418,11 +433,14 @@ def _chart_media_url(tool_calls: list[dict[str, Any]]) -> str | None:
                 output = json.loads(output)
             except ValueError:
                 continue
-        if isinstance(output, dict) and output.get("status") == "ok":
-            url = output.get("media_url")
-            if isinstance(url, str) and url:
-                return url
-    return None
+        if not isinstance(output, dict) or output.get("status") != "ok":
+            continue
+        candidate = output.get("chart_id")
+        if isinstance(candidate, int):
+            chart_id = candidate
+    if chart_id is None:
+        return None
+    return build_chart_media_url(chart_id, settings, now)
 
 
 def split_reply(text: str, limit: int = WHATSAPP_MESSAGE_CHAR_LIMIT) -> list[str]:
@@ -648,6 +666,12 @@ async def process_inbound_message(
         callback_handler=turn_latency_callback(agent_holder),
     )
     agent_holder.append(agent)
+    # This turn's own messages start HERE. ``Agent.__init__`` restores the
+    # conversation from the session store (WA-8), so everything already in
+    # ``agent.messages`` belongs to PREVIOUS turns: reading it as if it were this
+    # turn's output re-sent an older chart's expired URL and re-audited old tool
+    # calls (measured in production 2026-10-21).
+    messages_before_turn = len(agent.messages)
     # Measure the turn ourselves. The SDK's own accumulated_metrics carried no
     # latencyMs in production (measured 2026-10-21: the outbound audit row
     # recorded latency_ms 0 while the turn took ~9 s), which left the cost and
@@ -675,7 +699,7 @@ async def process_inbound_message(
             result.stop_reason,
         )
         reply = GUARDRAIL_STOP_REPLY
-    tool_calls = _tool_calls(agent.messages)
+    tool_calls = _tool_calls(agent.messages, start=messages_before_turn)
 
     # Evidence-label backstop (see ``_apply_evidence_label`` and the module
     # constants above): a failed search followed by an improvised science
@@ -704,7 +728,7 @@ async def process_inbound_message(
         budget.add_usage(generated["usage"])
     # Normalise BEFORE splitting: the audit row and the send must carry the same
     # bytes, and WhatsApp renders markdown bold as literal asterisks.
-    chart_media_url = _chart_media_url(tool_calls)
+    chart_media_url = _chart_media_url(tool_calls, settings, datetime.now(UTC))
     chunks = split_reply(
         to_whatsapp_text(reply), limit=settings.agent_whatsapp_message_char_limit
     )
@@ -774,8 +798,11 @@ async def process_inbound_message(
 
     # 5. Send every chunk through the Twilio REST client (reversed
     # addressing: the inbound From is the outbound To), in order — each
-    # chunk is a real WhatsApp message within the per-message budget.
-    for chunk in chunks:
+    # chunk is a real WhatsApp message within the per-message budget. The
+    # chart rides the FIRST message, so ``part`` must come from THIS loop:
+    # reading it from the audit loop above meant a split reply never carried
+    # the image (measured 2026-10-21: the reply's own text split it in two).
+    for part, chunk in enumerate(chunks, start=1):
         twilio_client.messages.create(
             to=message["From"],
             from_=message["To"],
@@ -834,19 +861,30 @@ def _reply_text(result: Any) -> str:
     return "".join(block["text"] for block in content if "text" in block)
 
 
-def _tool_calls(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _tool_calls(
+    messages: list[dict[str, Any]], start: int = 0
+) -> list[dict[str, Any]]:
     """Extract executed tool calls (name, input, output, status) from the
     loop's message history — SDK-generated messages, our audit projection.
+
+    ``start`` is the boundary of THIS turn: with conversation memory enabled
+    (WA-8) ``agent.messages`` is restored from the session store before the turn
+    runs, so scanning the whole list re-reads PREVIOUS turns. Measured in
+    production on 2026-10-21: a plain question after a chart turn re-sent that
+    older chart's expired media URL, and every turn re-audited the previous
+    turn's tool calls. The caller passes the number of messages that existed
+    before the turn began.
     """
+    turn_messages = messages[start:]
     results_by_id: dict[str, dict[str, Any]] = {}
-    for message in messages:
+    for message in turn_messages:
         for block in message.get("content", []):
             if "toolResult" in block:
                 tool_result = block["toolResult"]
                 results_by_id[tool_result["toolUseId"]] = tool_result
 
     calls: list[dict[str, Any]] = []
-    for message in messages:
+    for message in turn_messages:
         if message.get("role") != "assistant":
             continue
         for block in message.get("content", []):
