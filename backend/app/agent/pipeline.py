@@ -79,11 +79,13 @@ and no credentials (fake model + fake Twilio client).
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import time
+import unicodedata
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, Final
 from uuid import uuid4
 
 from sqlalchemy.exc import IntegrityError
@@ -270,6 +272,111 @@ async def _handle_sync_command(
 
 
 _MARKDOWN_BOLD_RE = re.compile(r"\*\*(.+?)\*\*", re.DOTALL)
+
+# --- Deterministic evidence label (measured production failure 2026-10-21) -
+#
+# A real athlete question ("¿Qué dice la ciencia sobre el entrenamiento en
+# ayunas?") made the agent call ``search_evidence``, which returned
+# ``status: "insufficient_data"`` — nothing relevant in the curated store.
+# The reply correctly OPENED with "No tengo una fuente en el almacén que
+# respalde…" and then went on to improvise: "Algunos estudios sugieren que
+# puede ayudar a mejorar la oxidación de grasas…". That is exactly what the
+# owner forbids: science claims with no source. Prompt rules have already
+# failed three times in this project (medical disclosure, evidence tool call,
+# citations), so this guard is code, not prose — deterministic-over-
+# persuasive is the house rule. The owner chose the LABELLED variant, not
+# the "refuse everything" variant: general knowledge is allowed but must be
+# visibly labelled as not coming from his library. The label is APPENDED
+# after the medical-disclosure backstop and BEFORE the WhatsApp
+# normalisation/split, and the intervention is recorded in the outbound
+# audit payload (``evidence_label_applied``) exactly like the medical
+# disclosure backstop — observable, not silent.
+
+SCIENCE_CLAIM_MARKERS: Final[tuple[str, ...]] = (
+    "estudio",
+    "estudios",
+    "investigacion",
+    "investigaciones",
+    "la ciencia",
+    "evidencia cientifica",
+    "se ha demostrado",
+    "stud",  # English "study"/"studies"
+    "research shows",
+    "science says",
+    "evidence suggests",
+)
+
+EVIDENCE_LABEL_ES: Final[str] = (
+    "\n\nOjo: lo anterior es conocimiento general, no evidencia de tu "
+    "biblioteca: no tengo una fuente que lo respalde."
+)
+EVIDENCE_LABEL_EN: Final[str] = (
+    "\n\nHeads-up: that is general knowledge, not evidence from your "
+    "library: I have no source backing it."
+)
+
+
+def _normalise_for_match(text: str) -> str:
+    """Lower-case, accent-stripped form for marker matching (NFKD).
+
+    Spanish text arrives with accents and mobile autocapitalize: matching on
+    the raw reply would miss "La CIENCIA" or "evidencia científica" — the
+    exact claims the guard exists for.
+    """
+    return "".join(
+        char
+        for char in unicodedata.normalize("NFKD", text.lower())
+        if not unicodedata.combining(char)
+    )
+
+
+def _search_evidence_failed(tool_calls: list[dict[str, Any]]) -> bool:
+    """Whether THIS turn's loop actually called ``search_evidence`` and the
+    call reported ``insufficient_data`` (nothing relevant in the store).
+
+    The tool result rides the SDK as a JSON string (the ``@tool`` decorator
+    serialises dict returns), so a string output is parsed; an output that is
+    already a dict is used as-is. ANY other shape fails OPEN — "not the
+    no-source case": the guard must never crash the send path, and it must
+    never fire on an audit output it cannot read.
+    """
+    for call in tool_calls:
+        if call.get("name") != "search_evidence":
+            continue
+        output = call.get("output")
+        parsed: Any = output
+        if isinstance(output, str):
+            try:
+                parsed = json.loads(output)
+            except (TypeError, ValueError):
+                continue  # unparsable output: fail open, never crash
+        if isinstance(parsed, dict) and parsed.get("status") == "insufficient_data":
+            return True
+    return False
+
+
+def _apply_evidence_label(
+    reply: str, tool_calls: list[dict[str, Any]]
+) -> tuple[str, bool]:
+    """Append the deterministic no-source label when BOTH conditions hold:
+    the turn's loop really called ``search_evidence`` and got
+    ``insufficient_data``, AND the reply makes a science claim (any marker in
+    ``SCIENCE_CLAIM_MARKERS``, matched case- and accent-insensitively).
+
+    APPEND, never rewrite: the model's content is preserved, like the medical
+    disclosure backstop. The label's language follows the reply via a cheap
+    heuristic (a Spanish stopword in the reply => Spanish), the same
+    Spanish-first convention as the other system-generated replies. Returns
+    the (possibly extended) reply and whether the label was applied.
+    """
+    if not _search_evidence_failed(tool_calls):
+        return reply, False
+    normalised = _normalise_for_match(reply)
+    if not any(marker in normalised for marker in SCIENCE_CLAIM_MARKERS):
+        return reply, False
+    if " de la " in f" {normalised} " or " que " in f" {normalised} ":
+        return reply + EVIDENCE_LABEL_ES, True
+    return reply + EVIDENCE_LABEL_EN, True
 
 
 def to_whatsapp_bold(text: str) -> str:
@@ -540,6 +647,14 @@ async def process_inbound_message(
         reply = GUARDRAIL_STOP_REPLY
     tool_calls = _tool_calls(agent.messages)
 
+    # Evidence-label backstop (see ``_apply_evidence_label`` and the module
+    # constants above): a failed search followed by an improvised science
+    # claim gets the no-source label APPENDED deterministically — the
+    # measured 2026-10-21 production failure, guarded in code because three
+    # prompt rules have already failed in this project. The intervention is
+    # recorded in the outbound audit payload below, like the disclosure.
+    reply, evidence_label_applied = _apply_evidence_label(reply, tool_calls)
+
     # 4. Persist the audit trail BEFORE sending (see module docstring):
     # the idempotency anchor bounds any failure at one missed reply. The
     # reply is split at the WhatsApp per-message character budget (WA-8,
@@ -609,6 +724,9 @@ async def process_inbound_message(
             if disclosure_applied:
                 # Observable, not silent: the audit names the backstop.
                 payload["medical_disclosure_backstop"] = True
+            if evidence_label_applied:
+                # Observable, not silent: same rule as the disclosure above.
+                payload["evidence_label_applied"] = True
             session.add(
                 MessageLogRow(
                     direction="outbound",
