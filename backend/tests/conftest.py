@@ -82,10 +82,14 @@ def _reset_process_level_agent_state() -> Iterator[None]:
     investigation on 2026-10-19. Reset BEFORE and after every test, so neither a
     leaky setup nor a leaky teardown can survive.
     """
-    from app.agent import pipeline, tools
+    from app.agent import tools
 
     def _reset() -> None:
-        pipeline.reset_process_dependencies()
+        # ONLY the tool registry is process-level state. The pipeline's
+        # dependencies are deliberately per turn: caching them across turns broke
+        # the SECOND WhatsApp message in production (2026-10-21), because each
+        # task runs its own asyncio.run and asyncpg connections belong to the
+        # loop that created them.
         tools.reset_session_factory_provider()
         tools.reset_settings_override()
 
