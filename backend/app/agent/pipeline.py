@@ -379,20 +379,50 @@ def _apply_evidence_label(
     return reply + EVIDENCE_LABEL_EN, True
 
 
-def to_whatsapp_bold(text: str) -> str:
-    """Convert markdown bold to WhatsApp's native bold before sending.
+_MARKDOWN_LINK_RE = re.compile(r"\[([^\]]+)\]\((https?://[^)\s]+)\)")
+
+
+def to_whatsapp_text(text: str) -> str:
+    """Normalise model markup into what WhatsApp actually renders.
 
     Measured in production on 2026-10-21: a real answer came back as
     ``1. **CTL (Condición Física)**: 8.2 puntos`` even though the prompt asks for
-    WhatsApp formatting, so the athlete read the asterisks instead of emphasis.
+    WhatsApp formatting, and a chart reply arrived as
+    ``[Rendimiento del Último Mes](https://...)``. WhatsApp renders neither syntax.
     Normalising here, at the send boundary, is deterministic -- the same reason the
     medical disclosure and the evidence injection are enforced in code instead of
     with more prompt prose: a rule the model may obey is not a guarantee.
 
-    Single asterisks and lone ``*`` (a multiplication sign, a bullet) pass through
-    untouched; only paired double asterisks are markup.
+    Bold becomes native ``*bold*``; a markdown link collapses to its label, because
+    the image itself is attached by the pipeline and the URL is redundant. A BARE url
+    (one the athlete asked for) and a lone ``*`` pass through untouched.
     """
-    return _MARKDOWN_BOLD_RE.sub(r"*\1*", text)
+    without_links = _MARKDOWN_LINK_RE.sub(r"\1", text)
+    return _MARKDOWN_BOLD_RE.sub(r"*\1*", without_links)
+
+
+def _chart_media_url(tool_calls: list[dict[str, Any]]) -> str | None:
+    """The chart image this turn produced, if any.
+
+    Measured in production on 2026-10-21: the athlete asked for a chart and received a
+    text message with a markdown link, because the pipeline only ever sent ``body``.
+    ``plot_metric`` already returns a PUBLIC, expiring ``media_url`` documented as the
+    URL Twilio fetches; this is the seam that finally uses it.
+    """
+    for call in tool_calls:
+        if call.get("name") != "plot_metric":
+            continue
+        output = call.get("output")
+        if isinstance(output, str):
+            try:
+                output = json.loads(output)
+            except ValueError:
+                continue
+        if isinstance(output, dict) and output.get("status") == "ok":
+            url = output.get("media_url")
+            if isinstance(url, str) and url:
+                return url
+    return None
 
 
 def split_reply(text: str, limit: int = WHATSAPP_MESSAGE_CHAR_LIMIT) -> list[str]:
@@ -674,8 +704,9 @@ async def process_inbound_message(
         budget.add_usage(generated["usage"])
     # Normalise BEFORE splitting: the audit row and the send must carry the same
     # bytes, and WhatsApp renders markdown bold as literal asterisks.
+    chart_media_url = _chart_media_url(tool_calls)
     chunks = split_reply(
-        to_whatsapp_bold(reply), limit=settings.agent_whatsapp_message_char_limit
+        to_whatsapp_text(reply), limit=settings.agent_whatsapp_message_char_limit
     )
     total_chunks = len(chunks)
     async with session_factory() as session:
@@ -720,6 +751,9 @@ async def process_inbound_message(
                 "latency_ms": latency_ms,
                 "part": part,
                 "total": total_chunks,
+                # Audit what was ACTUALLY delivered: the first chunk carries the
+                # chart as real media, so the row must say so.
+                "media_url": chart_media_url if part == 1 else None,
             }
             if disclosure_applied:
                 # Observable, not silent: the audit names the backstop.
@@ -742,7 +776,16 @@ async def process_inbound_message(
     # addressing: the inbound From is the outbound To), in order — each
     # chunk is a real WhatsApp message within the per-message budget.
     for chunk in chunks:
-        twilio_client.messages.create(to=message["From"], from_=message["To"], body=chunk)
+        twilio_client.messages.create(
+            to=message["From"],
+            from_=message["To"],
+            body=chunk,
+            **(
+                {"media_url": [chart_media_url]}
+                if chart_media_url is not None and part == 1
+                else {}
+            ),
+        )
     logger.info(
         "WhatsApp reply sent for message %s (trace %s): %d message(s)",
         message_sid,
@@ -922,6 +965,6 @@ __all__ = [
     "process_inbound_message",
     "split_reply",
     "sync_confirmation",
-    "to_whatsapp_bold",
+    "to_whatsapp_text",
     "tool_list",
 ]

@@ -19,7 +19,7 @@ from typing import Any
 import pytest
 
 from app.agent.fake_model import FakeModel
-from app.agent.pipeline import handle_inbound_message, to_whatsapp_bold
+from app.agent.pipeline import handle_inbound_message, to_whatsapp_text
 
 SENDER = "whatsapp:+10000000001"
 COACH = "whatsapp:+10000000000"
@@ -42,21 +42,21 @@ class _RecordingTwilio:
 
 
 def test_markdown_bold_becomes_whatsapp_bold() -> None:
-    assert to_whatsapp_bold("**CTL**: 8.2 puntos") == "*CTL*: 8.2 puntos"
+    assert to_whatsapp_text("**CTL**: 8.2 puntos") == "*CTL*: 8.2 puntos"
 
 
 def test_conversion_is_idempotent_and_leaves_native_bold_alone() -> None:
     native = "Tu *CTL* es 8.2 y tu TSB es -12.2"
-    assert to_whatsapp_bold(native) == native
-    once = to_whatsapp_bold("**a** y **b**")
+    assert to_whatsapp_text(native) == native
+    once = to_whatsapp_text("**a** y **b**")
     assert once == "*a* y *b*"
-    assert to_whatsapp_bold(once) == once
+    assert to_whatsapp_text(once) == once
 
 
 def test_plain_text_and_single_asterisks_pass_through() -> None:
-    assert to_whatsapp_bold("sin formato") == "sin formato"
-    assert to_whatsapp_bold("2 * 3 = 6") == "2 * 3 = 6"
-    assert to_whatsapp_bold("") == ""
+    assert to_whatsapp_text("sin formato") == "sin formato"
+    assert to_whatsapp_text("2 * 3 = 6") == "2 * 3 = 6"
+    assert to_whatsapp_text("") == ""
 
 
 @pytest.mark.anyio
@@ -93,3 +93,38 @@ async def test_the_sent_message_carries_no_markdown_bold(db_engine: Any) -> None
     sent = "".join(twilio.bodies)
     assert "**" not in sent, f"markdown bold reached the athlete: {sent!r}"
     assert "*CTL*" in sent and "*ATL*" in sent
+
+
+def test_a_markdown_link_collapses_to_its_label() -> None:
+    """Measured in production 2026-10-21: a chart arrived as
+    "[Rendimiento del Último Mes](https://...)" -- WhatsApp renders neither syntax,
+    and the image is now attached by the pipeline, so the URL is redundant."""
+    text = "Aquí tienes: [Rendimiento del Último Mes](https://example.test/charts/10?token=abc)"
+    assert to_whatsapp_text(text) == "Aquí tienes: Rendimiento del Último Mes"
+
+
+def test_a_bare_url_survives() -> None:
+    """A URL the athlete asked for must not be stripped: only markdown links are."""
+    text = "Está en https://example.test/charts/10?token=abc"
+    assert to_whatsapp_text(text) == text
+
+
+def test_chart_media_url_reads_the_tool_output() -> None:
+    from app.agent.pipeline import _chart_media_url
+
+    calls = [
+        {"name": "get_load_status", "output": '{"status": "ok"}'},
+        {
+            "name": "plot_metric",
+            "output": '{"status": "ok", "media_url": "https://example.test/charts/10?token=abc"}',
+        },
+    ]
+    assert _chart_media_url(calls) == "https://example.test/charts/10?token=abc"
+
+
+def test_chart_media_url_is_none_without_a_chart() -> None:
+    from app.agent.pipeline import _chart_media_url
+
+    assert _chart_media_url([]) is None
+    assert _chart_media_url([{"name": "plot_metric", "output": '{"status": "error"}'}]) is None
+    assert _chart_media_url([{"name": "plot_metric", "output": "not json"}]) is None
