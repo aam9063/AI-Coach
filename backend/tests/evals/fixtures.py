@@ -453,6 +453,119 @@ async def seed_evidence_library(session: AsyncSession) -> None:
     await session.commit()
 
 
+# --- Workout planner composites (workout-planner T5 golden cases) ----------
+#
+# ``plan_workout`` reads THREE persisted inputs per call (the day's readiness
+# snapshot, the day's combined daily_load row and the last-7-days activity
+# mix) and resolves zone thresholds itself, so each planner case needs a
+# composite builder. They REUSE the existing seed functions wherever the
+# existing fixture already holds the right rows and add only the minimum
+# extra data; every number is engine-computed, never invented.
+
+_PLANNER_PLAN_DAY: Final[dt.date] = dt.date(2026, 9, 7)
+"""The planner cases' plan day: the fixture anchor date. Every planner case
+scripts ``day=2026-09-07`` explicitly because ``plan_workout`` with
+``day=None`` resolves to the REAL current date, which would be
+non-deterministic against the fixed fixtures."""
+
+_OVERREACH_SPIKES: Final[dict[dt.date, float]] = {
+    dt.date(2026, 9, 6): 150.0,
+    dt.date(2026, 9, 7): 150.0,
+}
+"""Extra TSS on top of the fixed weekly pattern that pushes the engine's TSB
+for the plan day into the overreached band (decision-table row 2):
+:func:`compute_pmc` over the spiked series gives TSB -21.3093... on
+2026-09-07 — the value the planner-rest golden case cites as provenance."""
+
+
+async def seed_planner_recovery(session: AsyncSession) -> None:
+    """Decision-table row 1 (readiness suggests reduce intensity):
+    ``load_window`` plus the warning readiness snapshot
+    (``suggest_reduce_intensity=True``) on the plan day. Nothing else: the
+    case names no sport and seeds no activity mix, so the row-4 refinement
+    cannot fire."""
+    await seed_load_window(session)
+    await seed_readiness_warning(session)
+
+
+def _overreached_series() -> dict[dt.date, float]:
+    """The fixture's fixed TSS series plus :data:`_OVERREACH_SPIKES`."""
+    series = _fixed_tss_series()
+    for day, extra in _OVERREACH_SPIKES.items():
+        series[day] = series[day] + extra
+    return series
+
+
+async def seed_planner_rest(session: AsyncSession) -> None:
+    """Decision-table row 2 (TSB strictly below the very-negative threshold,
+    the band reused from readiness): the ok readiness snapshot plus
+    engine-computed combined daily_load rows over the spiked series. Only the
+    combined rows are seeded — ``plan_workout`` reads exactly that row (and
+    the readiness snapshot), so per-sport rows would be unused fixture data.
+    The base ``load_window`` TSB (-4.87) is NOT in the overreached band, which
+    is why this fixture exists at all."""
+    await seed_readiness_ok(session)
+    for pmc_day in compute_pmc(_overreached_series()).days:
+        session.add(
+            _daily_load_row(
+                pmc_day.date,
+                "combined",
+                pmc_day.tss,
+                pmc_day.ctl,
+                pmc_day.atl,
+                pmc_day.tsb,
+            )
+        )
+    await session.commit()
+
+
+async def seed_planner_quality(session: AsyncSession) -> None:
+    """Decision-table row 3 (TSB neutral/positive AND readiness ok):
+    ``load_window`` plus the ok readiness snapshot. The case names no sport
+    and seeds no activity mix, so the session carries the Z3 KEY with
+    honestly unnumbered bounds (the tool attaches no numeric zone values
+    without a zone model for the session's sport) — an unnumbered key is
+    honest, an invented number is not."""
+    await seed_load_window(session)
+    await seed_readiness_ok(session)
+
+
+async def seed_planner_sport_mix(session: AsyncSession) -> None:
+    """Decision-table row 4 (sport imbalance): ``load_window``, the ok
+    readiness snapshot, and a 7-day mix of 5 Ride + 1 Run inside the plan
+    day's window (2026-09-01..09-06, all before 2026-09-08 exclusive): ride
+    share 5/6 = 0.83 > 0.70, so with NO sport named in the request the tool
+    must decide the least-share sport ("run")."""
+    await seed_load_window(session)
+    await seed_readiness_ok(session)
+    for index in range(5):
+        session.add(
+            ActivityRow(
+                id=601 + index,
+                source="intervals",
+                source_id=f"i60{index}",
+                type="Ride",
+                name=f"Rodillo {index + 1}",
+                start_time=dt.datetime(2026, 9, 1 + index, 8, 0, tzinfo=UTC),
+                duration_s=3600,
+                distance_m=30000.0,
+            )
+        )
+    session.add(
+        ActivityRow(
+            id=606,
+            source="intervals",
+            source_id="i606",
+            type="Run",
+            name="Carrera continua",
+            start_time=dt.datetime(2026, 9, 6, 9, 0, tzinfo=UTC),
+            duration_s=3600,
+            distance_m=10000.0,
+        )
+    )
+    await session.commit()
+
+
 # --- The registry -----------------------------------------------------------
 
 Builder = Callable[[AsyncSession], Awaitable[None]]
@@ -468,6 +581,10 @@ FIXTURE_REGISTRY: Final[dict[str, Builder]] = {
     "activity_two": seed_activity_two,
     "intensity_weeks": seed_intensity_weeks,
     "evidence_library": seed_evidence_library,
+    "planner_recovery": seed_planner_recovery,
+    "planner_rest": seed_planner_rest,
+    "planner_quality": seed_planner_quality,
+    "planner_sport_mix": seed_planner_sport_mix,
 }
 
 

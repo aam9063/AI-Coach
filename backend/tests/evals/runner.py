@@ -514,6 +514,41 @@ def _headline(call: dict[str, Any]) -> str:
                 if recorded.get(field) is not None
             ]
             return "Anotado: " + (" y ".join(parts) + "." if parts else "anotado.")
+        if name == "plan_workout":
+            # plan_workout ok (workout-planner T5, S4): the engine decides,
+            # the composer quotes — kind, reason, zone keys/bounds, duration
+            # and the decided sport come VERBATIM from the tool output, so
+            # every number in the sentence is an engine output the §13
+            # numeric-faithfulness gate can check. An unnumbered zone key
+            # (no zone model for the session's sport) is quoted as a bare
+            # key: a null bound is honest, an invented number is not.
+            session_out = output.get("session") or {}
+            kind = session_out.get("kind")
+            reason = str(output.get("reason", ""))
+            if kind == "rest":
+                return f"El motor prescribe descanso: {reason}"
+            zone_bits: list[str] = []
+            for zone in session_out.get("zones") or []:
+                key = str(zone.get("key"))
+                if zone.get("min_value") is None:
+                    zone_bits.append(key)
+                else:
+                    zone_bits.append(
+                        f"{key} de {_fmt(zone['min_value'])} a "
+                        f"{_fmt(zone['max_value'])}"
+                    )
+            duration = session_out.get("duration_s")
+            sport = session_out.get("sport")
+            return (
+                f"El motor ha decidido la sesión de tipo {kind}: {reason} "
+                f"Zonas: {', '.join(zone_bits)}."
+                + (
+                    f" Duración tope: {_fmt(duration)} segundos."
+                    if duration
+                    else ""
+                )
+                + (f" Sesión de {sport}." if sport else "")
+            )
         if name == "propose_threshold_update":
             proposal = output["proposal"]
             return (
@@ -521,6 +556,15 @@ def _headline(call: dict[str, Any]) -> str:
                 f"{proposal['unit']} como pendiente de tu revisión; no he "
                 "cambiado ningún umbral."
             )
+    if name == "plan_workout":
+        # plan_workout without a decided session (workout-planner T5, S5):
+        # the honest reply names exactly what the engine's ``missing`` list
+        # names — no session, no invented numbers. An ``error`` status is an
+        # argument problem, quoted as the tool stated it.
+        missing = list(output.get("missing") or [])
+        if missing:
+            return f"No hay sesión para hoy: falta {'; '.join(missing)}."
+        return f"No he podido decidir una sesión: {output.get('detail', '')}"
     if name in _NO_DATA:
         return _NO_DATA[name]
     return _FALLBACK_REPLY
